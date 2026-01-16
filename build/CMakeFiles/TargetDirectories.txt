@@ -1,0 +1,3 @@
+C:/funsim/build/CMakeFiles/funsim.dir
+C:/funsim/build/CMakeFiles/ALL_BUILD.dir
+C:/funsim/build/CMakeFiles/ZERO_CHECK.dir
