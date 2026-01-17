@@ -1,10 +1,13 @@
 #include "app.h"
+#include "util.h"
 
 #include <SDL.h>
 
 int main(int argc, char** argv) {
   (void)argc;
   (void)argv;
+
+  InstallCrashHandlers();
 
   App app;
   if (!app.Init()) {

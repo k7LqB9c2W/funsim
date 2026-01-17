@@ -19,6 +19,9 @@
     <ClCompile Include="C:\funsim\src\render.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\funsim\src\settlements.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\funsim\src\ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

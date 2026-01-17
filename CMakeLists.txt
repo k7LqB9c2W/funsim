@@ -44,6 +44,7 @@ add_executable(funsim
   src/humans.cpp
   src/tools.cpp
   src/render.cpp
+  src/settlements.cpp
   src/ui.cpp
   src/util.cpp
   ${IMGUI_SOURCES}

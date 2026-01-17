@@ -45,6 +45,10 @@ void DrawUI(UIState& state, const SimStats& stats) {
   if (ImGui::RadioButton("5x", state.speedIndex == 1)) state.speedIndex = 1;
   ImGui::SameLine();
   if (ImGui::RadioButton("20x", state.speedIndex == 2)) state.speedIndex = 2;
+  ImGui::SameLine();
+  if (ImGui::RadioButton("200x", state.speedIndex == 3)) state.speedIndex = 3;
+  ImGui::SameLine();
+  if (ImGui::RadioButton("2000x", state.speedIndex == 4)) state.speedIndex = 4;
 
   ImGui::Separator();
   ImGui::Text("Stats");
@@ -54,6 +58,7 @@ void DrawUI(UIState& state, const SimStats& stats) {
   ImGui::Text("Deaths Today: %d", stats.deathsToday);
   ImGui::Text("Total Food: %d", stats.totalFood);
   ImGui::Text("Total Trees: %d", stats.totalTrees);
+  ImGui::Text("Settlements: %d", stats.totalSettlements);
 
   ImGui::Separator();
   ImGui::Text("Left click: apply tool");

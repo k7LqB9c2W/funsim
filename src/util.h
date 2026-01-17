@@ -15,3 +15,11 @@ class Random {
  private:
   std::mt19937 rng_;
 };
+
+void InstallCrashHandlers();
+void CrashContextSetStage(const char* stage);
+void CrashContextSetWorld(int width, int height);
+void CrashContextSetDay(int dayCount);
+void CrashContextSetPopulation(int population);
+void CrashContextSetHuman(int id, int x, int y);
+void CrashContextSetNote(const char* note);
