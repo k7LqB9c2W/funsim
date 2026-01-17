@@ -4,8 +4,6 @@
 #include <vector>
 
 namespace {
-constexpr int kMaxTrees = 20;
-constexpr int kMaxFood = 50;
 constexpr int kFireDuration = 4;
 }  // namespace
 
@@ -17,17 +15,6 @@ bool World::InBounds(int x, int y) const {
 
 Tile& World::At(int x, int y) { return tiles_[y * width_ + x]; }
 const Tile& World::At(int x, int y) const { return tiles_[y * width_ + x]; }
-
-bool World::HasAdjacentFreshWater(int x, int y) const {
-  const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-  for (const auto& d : dirs) {
-    int nx = x + d[0];
-    int ny = y + d[1];
-    if (!InBounds(nx, ny)) continue;
-    if (At(nx, ny).type == TileType::FreshWater) return true;
-  }
-  return false;
-}
 
 void World::UpdateDaily(Random& rng) {
   std::vector<int> ignitions;
@@ -71,19 +58,7 @@ void World::UpdateDaily(Random& rng) {
         }
         continue;
       }
-
-      if (tile.trees < kMaxTrees && rng.Chance(0.01f)) {
-        tile.trees++;
-      }
-
-      if (tile.food < kMaxFood) {
-        float chance = 0.02f;
-        if (tile.trees > 0) chance += 0.03f;
-        if (HasAdjacentFreshWater(x, y)) chance += 0.05f;
-        if (rng.Chance(chance)) {
-          tile.food++;
-        }
-      }
+      // No automatic tree/food growth; player actions only.
     }
   }
 

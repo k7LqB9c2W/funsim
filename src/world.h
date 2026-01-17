@@ -34,11 +34,9 @@ class World {
   void EraseAt(int x, int y);
 
   int TotalTrees() const;
-  int TotalFood() const;
+ int TotalFood() const;
 
  private:
-  bool HasAdjacentFreshWater(int x, int y) const;
-
   int width_ = 0;
   int height_ = 0;
   std::vector<Tile> tiles_;

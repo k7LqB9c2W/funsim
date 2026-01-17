@@ -1,0 +1,14 @@
+C:\funsim\src\main.cpp;C:\funsim\build\funsim.dir\Debug\main.obj
+C:\funsim\src\app.cpp;C:\funsim\build\funsim.dir\Debug\app.obj
+C:\funsim\src\world.cpp;C:\funsim\build\funsim.dir\Debug\world.obj
+C:\funsim\src\humans.cpp;C:\funsim\build\funsim.dir\Debug\humans.obj
+C:\funsim\src\tools.cpp;C:\funsim\build\funsim.dir\Debug\tools.obj
+C:\funsim\src\render.cpp;C:\funsim\build\funsim.dir\Debug\render.obj
+C:\funsim\src\ui.cpp;C:\funsim\build\funsim.dir\Debug\ui.obj
+C:\funsim\src\util.cpp;C:\funsim\build\funsim.dir\Debug\util.obj
+C:\funsim\third_party\imgui\imgui.cpp;C:\funsim\build\funsim.dir\Debug\imgui.obj
+C:\funsim\third_party\imgui\imgui_draw.cpp;C:\funsim\build\funsim.dir\Debug\imgui_draw.obj
+C:\funsim\third_party\imgui\imgui_tables.cpp;C:\funsim\build\funsim.dir\Debug\imgui_tables.obj
+C:\funsim\third_party\imgui\imgui_widgets.cpp;C:\funsim\build\funsim.dir\Debug\imgui_widgets.obj
+C:\funsim\third_party\imgui\backends\imgui_impl_sdl2.cpp;C:\funsim\build\funsim.dir\Debug\imgui_impl_sdl2.obj
+C:\funsim\third_party\imgui\backends\imgui_impl_sdlrenderer2.cpp;C:\funsim\build\funsim.dir\Debug\imgui_impl_sdlrenderer2.obj
