@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
 
@@ -84,7 +85,9 @@ bool App::Init() {
     io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 18.0f);
   }
 
-  if (!rendererAssets_.Load(renderer_, "assets/sprites/humans.png")) {
+  if (!rendererAssets_.Load(renderer_, "assets/sprites/humans.png", "assets/sprites/tiles.png",
+                            "assets/sprites/terrain_tiles.png",
+                            "assets/sprites/object_tiles.png")) {
     return false;
   }
 
@@ -94,8 +97,7 @@ bool App::Init() {
   camera_.zoom = 1.0f;
   camera_.x = (world_.width() * kTileSize - winW) * 0.5f;
   camera_.y = (world_.height() * kTileSize - winH) * 0.5f;
-  if (camera_.x < 0.0f) camera_.x = 0.0f;
-  if (camera_.y < 0.0f) camera_.y = 0.0f;
+  ClampCamera();
 
   RefreshTotals();
   return true;
@@ -139,10 +141,16 @@ void App::HandleEvents() {
       int mouseX = 0;
       int mouseY = 0;
       SDL_GetMouseState(&mouseX, &mouseY);
-      float zoomFactor = (event.wheel.y > 0) ? 1.1f : 1.0f / 1.1f;
+      int zoomStep = static_cast<int>(std::floor(camera_.zoom + 0.5f));
+      if (event.wheel.y > 0) {
+        zoomStep = std::min(4, zoomStep + 1);
+      } else if (event.wheel.y < 0) {
+        zoomStep = std::max(1, zoomStep - 1);
+      }
+      float newZoom = static_cast<float>(zoomStep);
       float worldX = mouseX / camera_.zoom + camera_.x;
       float worldY = mouseY / camera_.zoom + camera_.y;
-      camera_.zoom = Clamp(camera_.zoom * zoomFactor, 0.5f, 4.0f);
+      camera_.zoom = newZoom;
       camera_.x = worldX - mouseX / camera_.zoom;
       camera_.y = worldY - mouseY / camera_.zoom;
       ClampCamera();
@@ -335,6 +343,11 @@ void App::ClampCamera() {
   float maxX = std::max(0.0f, worldW - viewW);
   float maxY = std::max(0.0f, worldH - viewH);
 
+  camera_.x = Clamp(camera_.x, 0.0f, maxX);
+  camera_.y = Clamp(camera_.y, 0.0f, maxY);
+
+  camera_.x = std::floor(camera_.x + 0.5f);
+  camera_.y = std::floor(camera_.y + 0.5f);
   camera_.x = Clamp(camera_.x, 0.0f, maxX);
   camera_.y = Clamp(camera_.y, 0.0f, maxY);
 }
