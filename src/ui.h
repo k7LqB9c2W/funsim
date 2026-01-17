@@ -9,6 +9,7 @@ struct SimStats {
   int deathsToday = 0;
   int totalFood = 0;
   int totalTrees = 0;
+  int totalSettlements = 0;
 };
 
 struct UIState {

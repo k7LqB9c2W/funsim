@@ -4,6 +4,7 @@ C:\funsim\src\world.cpp;C:\funsim\build\funsim.dir\Release\world.obj
 C:\funsim\src\humans.cpp;C:\funsim\build\funsim.dir\Release\humans.obj
 C:\funsim\src\tools.cpp;C:\funsim\build\funsim.dir\Release\tools.obj
 C:\funsim\src\render.cpp;C:\funsim\build\funsim.dir\Release\render.obj
+C:\funsim\src\settlements.cpp;C:\funsim\build\funsim.dir\Release\settlements.obj
 C:\funsim\src\ui.cpp;C:\funsim\build\funsim.dir\Release\ui.obj
 C:\funsim\src\util.cpp;C:\funsim\build\funsim.dir\Release\util.obj
 C:\funsim\third_party\imgui\imgui.cpp;C:\funsim\build\funsim.dir\Release\imgui.obj

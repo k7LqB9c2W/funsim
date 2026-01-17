@@ -398,6 +398,7 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, const World& world) {
 }
 
 void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
+  (void)world;
   if (chunks_.empty()) {
     BuildChunks(renderer, worldWidth_, worldHeight_);
   }
@@ -508,7 +509,9 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
 }
 
 void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
-                      const Camera& camera, int windowWidth, int windowHeight) {
+                      const Camera& camera, int windowWidth, int windowHeight,
+                      const std::vector<VillageMarker>& villageMarkers, int hoverTileX,
+                      int hoverTileY, bool hoverValid, int brushSize) {
   const float tileSize = static_cast<float>(kTilePx);
   const float invZoom = 1.0f / camera.zoom;
 
@@ -620,5 +623,40 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
 
     SDL_FRect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
     SDL_RenderCopyF(renderer, humansTexture_, &humanSrc, &dst);
+  }
+
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  for (const auto& marker : villageMarkers) {
+    if (marker.ttlDays <= 0) continue;
+    if (marker.x < minX || marker.x > maxX || marker.y < minY || marker.y > maxY) continue;
+    float t = static_cast<float>(marker.ttlDays) / 25.0f;
+    int alpha = static_cast<int>(50.0f + t * 205.0f);
+    if (alpha > 255) alpha = 255;
+    SDL_SetRenderDrawColor(renderer, 255, 40, 40, static_cast<Uint8>(alpha));
+
+    const float markerSize = 6.0f;
+    float worldX = marker.x * tileSize + tileSize * 0.5f - markerSize * 0.5f;
+    float worldY = marker.y * tileSize + tileSize * 0.5f - markerSize * 0.5f;
+    SDL_FRect dst = MakeDstRect(worldX, worldY, markerSize, markerSize, camera);
+    SDL_RenderFillRectF(renderer, &dst);
+  }
+
+  if (hoverValid) {
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 255, 60, 60, 220);
+    const float dotSize = 4.0f;
+    float dotX = hoverTileX * tileSize + tileSize * 0.5f - dotSize * 0.5f;
+    float dotY = hoverTileY * tileSize + tileSize * 0.5f - dotSize * 0.5f;
+    SDL_FRect dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
+    SDL_RenderFillRectF(renderer, &dotDst);
+
+    int radius = brushSize / 2;
+    float brushX = static_cast<float>(hoverTileX - radius) * tileSize;
+    float brushY = static_cast<float>(hoverTileY - radius) * tileSize;
+    float brushW = static_cast<float>(brushSize) * tileSize;
+    float brushH = static_cast<float>(brushSize) * tileSize;
+    SDL_FRect brushDst = MakeDstRect(brushX, brushY, brushW, brushH, camera);
+    SDL_SetRenderDrawColor(renderer, 255, 90, 90, 140);
+    SDL_RenderDrawRectF(renderer, &brushDst);
   }
 }

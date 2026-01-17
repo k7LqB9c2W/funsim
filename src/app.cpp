@@ -21,7 +21,9 @@ float Clamp(float value, float min_value, float max_value) {
 }
 }  // namespace
 
-App::App() : world_(kDefaultWidth, kDefaultHeight) {}
+App::App() : world_(kDefaultWidth, kDefaultHeight) {
+  tickSeconds_ = daySeconds_ / static_cast<double>(ticksPerDay_);
+}
 
 App::~App() {
   rendererAssets_.Shutdown();
@@ -44,6 +46,8 @@ App::~App() {
 }
 
 bool App::Init() {
+  CrashContextSetStage("App::Init");
+  CrashContextSetWorld(world_.width(), world_.height());
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
@@ -100,6 +104,7 @@ bool App::Init() {
   ClampCamera();
 
   RefreshTotals();
+  CrashContextSetStage("App::Init done");
   return true;
 }
 
@@ -175,6 +180,7 @@ void App::Update(float dt) {
     int mouseX = 0;
     int mouseY = 0;
     Uint32 buttons = SDL_GetMouseState(&mouseX, &mouseY);
+    hoverValid_ = ScreenToTile(mouseX, mouseY, hoverTileX_, hoverTileY_);
     bool leftDown = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
     bool rightDown = (buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
     if (leftDown || rightDown) {
@@ -184,25 +190,54 @@ void App::Update(float dt) {
         ApplyToolAt(tileX, tileY, rightDown);
       }
     }
+  } else {
+    hoverValid_ = false;
   }
 
   humans_.UpdateAnimation(dt);
+
+  const bool wantsMacro = (ui_.speedIndex == 4);
+  if (wantsMacro && !macroActive_) {
+    EnterMacroMode();
+  } else if (!wantsMacro && macroActive_) {
+    ExitMacroMode();
+  }
 
   if (!ui_.paused) {
     double speed = 1.0;
     if (ui_.speedIndex == 1) speed = 5.0;
     if (ui_.speedIndex == 2) speed = 20.0;
+    if (ui_.speedIndex == 3) speed = 200.0;
+    if (ui_.speedIndex == 4) speed = 2000.0;
     accumulator_ += static_cast<double>(dt) * speed;
-    int steps = 0;
-    while (accumulator_ >= daySeconds_ && steps < 10) {
-      StepDay();
-      accumulator_ -= daySeconds_;
-      steps++;
+    if (wantsMacro) {
+      int daysToAdvance = static_cast<int>(accumulator_ / daySeconds_);
+      if (daysToAdvance > 0) {
+        if (daysToAdvance > maxMacroDaysPerFrame_) daysToAdvance = maxMacroDaysPerFrame_;
+        accumulator_ -= static_cast<double>(daysToAdvance) * daySeconds_;
+        AdvanceMacro(daysToAdvance);
+      }
+    } else {
+      int steps = 0;
+      while (accumulator_ >= tickSeconds_ && steps < maxTickStepsPerFrame_) {
+        StepTick(static_cast<float>(tickSeconds_));
+        accumulator_ -= tickSeconds_;
+        tickCount_++;
+        if ((tickCount_ % ticksPerDay_) == 0) {
+          StepDayCoarse();
+        }
+        steps++;
+      }
     }
   }
 
   if (ui_.stepDay) {
-    StepDay();
+    if (wantsMacro) {
+      AdvanceMacro(1);
+    } else {
+      tickCount_ += ticksPerDay_;
+      StepDayCoarse();
+    }
   }
 
   if (worldDirty_) {
@@ -219,7 +254,8 @@ void App::RenderFrame() {
   SDL_SetRenderDrawColor(renderer_, 8, 12, 22, 255);
   SDL_RenderClear(renderer_);
 
-  rendererAssets_.Render(renderer_, world_, humans_, camera_, winW, winH);
+  rendererAssets_.Render(renderer_, world_, humans_, camera_, winW, winH, villageMarkers_,
+                         hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize);
 
   ImGui::Render();
   ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer_);
@@ -227,14 +263,75 @@ void App::RenderFrame() {
   SDL_RenderPresent(renderer_);
 }
 
-void App::StepDay() {
+void App::StepTick(float tickSeconds) {
+  CrashContextSetStage("StepTick:Humans");
+  humans_.UpdateTick(world_, settlements_, rng_, tickCount_, tickSeconds, ticksPerDay_);
+}
+
+void App::StepDayCoarse() {
   stats_.dayCount++;
+  CrashContextSetDay(stats_.dayCount);
+  CrashContextSetStage("StepDay:World");
   world_.UpdateDaily(rng_);
-  humans_.UpdateDaily(world_, rng_, stats_.birthsToday, stats_.deathsToday);
+  CrashContextSetStage("StepDay:Settlements");
+  settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, villageMarkers_);
+  CrashContextSetStage("StepDay:Humans");
+  humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, stats_.birthsToday,
+                            stats_.deathsToday);
+  for (auto& marker : villageMarkers_) {
+    if (marker.ttlDays > 0) {
+      marker.ttlDays--;
+    }
+  }
+  villageMarkers_.erase(
+      std::remove_if(villageMarkers_.begin(), villageMarkers_.end(),
+                     [](const VillageMarker& marker) { return marker.ttlDays <= 0; }),
+      villageMarkers_.end());
+  RefreshTotals();
+  CrashContextSetStage("StepDay:Done");
+}
+
+void App::AdvanceMacro(int days) {
+  if (days <= 0) return;
+  stats_.birthsToday = 0;
+  stats_.deathsToday = 0;
+  for (int i = 0; i < days; ++i) {
+    stats_.dayCount++;
+    CrashContextSetDay(stats_.dayCount);
+    if ((stats_.dayCount % 7) == 0) {
+      world_.UpdateDaily(rng_);
+    }
+    humans_.AdvanceMacro(world_, settlements_, rng_, 1, stats_.birthsToday, stats_.deathsToday);
+    settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_);
+  }
+  for (auto& marker : villageMarkers_) {
+    if (marker.ttlDays > 0) {
+      marker.ttlDays = std::max(0, marker.ttlDays - days);
+    }
+  }
+  villageMarkers_.erase(
+      std::remove_if(villageMarkers_.begin(), villageMarkers_.end(),
+                     [](const VillageMarker& marker) { return marker.ttlDays <= 0; }),
+      villageMarkers_.end());
+  RefreshTotals();
+}
+
+void App::EnterMacroMode() {
+  if (macroActive_) return;
+  macroActive_ = true;
+  humans_.EnterMacro(settlements_);
+  RefreshTotals();
+}
+
+void App::ExitMacroMode() {
+  if (!macroActive_) return;
+  macroActive_ = false;
+  humans_.ExitMacro(settlements_, rng_);
   RefreshTotals();
 }
 
 void App::ApplyToolAt(int tileX, int tileY, bool erase) {
+  CrashContextSetNote("ApplyToolAt");
   int radius = ui_.brushSize / 2;
   bool modified = false;
   bool spawned = false;
@@ -279,13 +376,15 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
           break;
         case ToolType::SpawnMale:
           if (tile.type != TileType::Ocean) {
-            humans_.Spawn(x, y, false);
+            humans_.Spawn(x, y, false, rng_);
+            CrashContextSetNote("ApplyToolAt: SpawnMale");
             spawned = true;
           }
           break;
         case ToolType::SpawnFemale:
           if (tile.type != TileType::Ocean) {
-            humans_.Spawn(x, y, true);
+            humans_.Spawn(x, y, true, rng_);
+            CrashContextSetNote("ApplyToolAt: SpawnFemale");
             spawned = true;
           }
           break;
@@ -315,11 +414,12 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
   }
 
   if (spawned) {
-    stats_.totalPop = humans_.CountAlive();
+    stats_.totalPop = macroActive_ ? humans_.MacroPopulation(settlements_) : humans_.CountAlive();
   }
   if (modified) {
     worldDirty_ = true;
   }
+  CrashContextSetNote("");
 }
 
 bool App::ScreenToTile(int screenX, int screenY, int& tileX, int& tileY) const {
@@ -355,5 +455,7 @@ void App::ClampCamera() {
 void App::RefreshTotals() {
   stats_.totalFood = world_.TotalFood();
   stats_.totalTrees = world_.TotalTrees();
-  stats_.totalPop = humans_.CountAlive();
+  stats_.totalPop = macroActive_ ? humans_.MacroPopulation(settlements_) : humans_.CountAlive();
+  stats_.totalSettlements = settlements_.Count();
+  CrashContextSetPopulation(stats_.totalPop);
 }

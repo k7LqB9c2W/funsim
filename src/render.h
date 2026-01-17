@@ -15,6 +15,12 @@ struct Camera {
   float zoom = 1.0f;
 };
 
+struct VillageMarker {
+  int x = 0;
+  int y = 0;
+  int ttlDays = 0;
+};
+
 class Renderer {
  public:
   Renderer() = default;
@@ -23,7 +29,9 @@ class Renderer {
             const std::string& objectsPath);
   void Shutdown();
   void Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
-              const Camera& camera, int windowWidth, int windowHeight);
+              const Camera& camera, int windowWidth, int windowHeight,
+              const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
+              bool hoverValid, int brushSize);
 
  private:
   void DestroyTerrainCache();
