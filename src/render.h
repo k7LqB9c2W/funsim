@@ -26,7 +26,7 @@ class Renderer {
   Renderer() = default;
   bool Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
             const std::string& tilesPath, const std::string& terrainOverlayPath,
-            const std::string& objectsPath);
+            const std::string& objectsPath, const std::string& buildingsPath);
   void Shutdown();
   void Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
               const Camera& camera, int windowWidth, int windowHeight,
@@ -52,6 +52,7 @@ class Renderer {
   SDL_Texture* tilesTexture_ = nullptr;
   SDL_Texture* terrainOverlayTexture_ = nullptr;
   SDL_Texture* objectsTexture_ = nullptr;
+  SDL_Texture* buildingsTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
   SDL_Texture* fireTexture_ = nullptr;
   int spriteWidth_ = 32;

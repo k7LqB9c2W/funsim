@@ -9,7 +9,16 @@ class HumanManager;
 class Random;
 class World;
 
-enum class TaskType : uint8_t { CollectFood, HaulToStockpile, PatrolEdge };
+enum class TaskType : uint8_t {
+  CollectFood,
+  CollectWood,
+  HarvestFarm,
+  PlantFarm,
+  BuildStructure,
+  HaulToStockpile,
+  HaulWoodToStockpile,
+  PatrolEdge
+};
 
 struct Task {
   TaskType type{};
@@ -17,9 +26,19 @@ struct Task {
   int y = 0;
   int amount = 0;
   int settlementId = -1;
+  BuildingType buildType = BuildingType::None;
 };
 
 struct Settlement {
+  static constexpr int kTaskCap = 2048;
+  static constexpr int kHouseCapacity = 4;
+  static constexpr int kTownHallCapacity = 8;
+  static constexpr int kHouseWoodCost = 10;
+  static constexpr int kFarmWoodCost = 6;
+  static constexpr int kTownHallWoodCost = 18;
+  static constexpr int kFarmYield = 6;
+  static constexpr int kFarmReadyStage = 3;
+
   int id = 0;
   int centerX = 0;
   int centerY = 0;
@@ -28,16 +47,21 @@ struct Settlement {
   int stockWood = 0;
   int population = 0;
   int gatherers = 0;
+  int farmers = 0;
   int builders = 0;
   int guards = 0;
   int idle = 0;
   int ageDays = 0;
+  int houses = 0;
+  int farms = 0;
+  int townHalls = 0;
+  int housingCap = 0;
 
   int macroPopM[6] = {};
   int macroPopF[6] = {};
   float macroBirthAccum = 0.0f;
+  float macroFarmFoodAccum = 0.0f;
 
-  static constexpr int kTaskCap = 2048;
   Task tasks[kTaskCap];
   int taskHead = 0;
   int taskTail = 0;
@@ -69,6 +93,7 @@ struct Settlement {
       macroPopF[i] = 0;
     }
     macroBirthAccum = 0.0f;
+    macroFarmFoodAccum = 0.0f;
     taskHead = 0;
     taskTail = 0;
   }
@@ -87,6 +112,7 @@ class SettlementManager {
   void UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount,
                    std::vector<VillageMarker>& markers);
   void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers);
+  void RefreshBuildingStats(const World& world) { RecomputeSettlementBuildings(world); }
 
   int Count() const { return static_cast<int>(settlements_.size()); }
   const std::vector<Settlement>& Settlements() const { return settlements_; }
@@ -105,6 +131,7 @@ class SettlementManager {
                               std::vector<VillageMarker>& markers);
   void RecomputeZoneOwners(const World& world);
   void AssignHumansToSettlements(HumanManager& humans);
+  void RecomputeSettlementBuildings(const World& world);
   void RecomputeSettlementPopAndRoles(World& world, Random& rng, int dayCount,
                                       HumanManager& humans);
   void GenerateTasks(World& world, Random& rng);

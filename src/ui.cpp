@@ -56,9 +56,17 @@ void DrawUI(UIState& state, const SimStats& stats) {
   ImGui::Text("Population: %d", stats.totalPop);
   ImGui::Text("Births Today: %d", stats.birthsToday);
   ImGui::Text("Deaths Today: %d", stats.deathsToday);
+  ImGui::Text("Total Births: %d", stats.totalBirths);
+  ImGui::Text("Total Deaths: %d", stats.totalDeaths);
   ImGui::Text("Total Food: %d", stats.totalFood);
   ImGui::Text("Total Trees: %d", stats.totalTrees);
   ImGui::Text("Settlements: %d", stats.totalSettlements);
+  ImGui::Text("Stock Food: %d", stats.totalStockFood);
+  ImGui::Text("Stock Wood: %d", stats.totalStockWood);
+  ImGui::Text("Houses: %d", stats.totalHouses);
+  ImGui::Text("Farms: %d", stats.totalFarms);
+  ImGui::Text("Town Halls: %d", stats.totalTownHalls);
+  ImGui::Text("Housing Cap: %d", stats.totalHousingCap);
 
   ImGui::Separator();
   ImGui::Text("Left click: apply tool");

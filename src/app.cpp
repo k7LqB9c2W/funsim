@@ -91,7 +91,8 @@ bool App::Init() {
 
   if (!rendererAssets_.Load(renderer_, "assets/sprites/humans.png", "assets/sprites/tiles.png",
                             "assets/sprites/terrain_tiles.png",
-                            "assets/sprites/object_tiles.png")) {
+                            "assets/sprites/object_tiles.png",
+                            "assets/sprites/buildings_tiles.png")) {
     return false;
   }
 
@@ -278,6 +279,8 @@ void App::StepDayCoarse() {
   CrashContextSetStage("StepDay:Humans");
   humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, stats_.birthsToday,
                             stats_.deathsToday);
+  stats_.totalBirths += stats_.birthsToday;
+  stats_.totalDeaths += stats_.deathsToday;
   for (auto& marker : villageMarkers_) {
     if (marker.ttlDays > 0) {
       marker.ttlDays--;
@@ -304,6 +307,8 @@ void App::AdvanceMacro(int days) {
     humans_.AdvanceMacro(world_, settlements_, rng_, 1, stats_.birthsToday, stats_.deathsToday);
     settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_);
   }
+  stats_.totalBirths += stats_.birthsToday;
+  stats_.totalDeaths += stats_.deathsToday;
   for (auto& marker : villageMarkers_) {
     if (marker.ttlDays > 0) {
       marker.ttlDays = std::max(0, marker.ttlDays - days);
@@ -360,6 +365,9 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
           tile.food = 0;
           tile.burning = false;
           tile.burnDaysRemaining = 0;
+          tile.building = BuildingType::None;
+          tile.farmStage = 0;
+          tile.buildingOwnerId = -1;
           modified = true;
           break;
         case ToolType::AddTrees:
@@ -401,6 +409,9 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
           tile.food = 0;
           tile.burning = false;
           tile.burnDaysRemaining = 0;
+          tile.building = BuildingType::None;
+          tile.farmStage = 0;
+          tile.buildingOwnerId = -1;
           modified = true;
           break;
         case ToolType::GiftFood:
@@ -457,5 +468,19 @@ void App::RefreshTotals() {
   stats_.totalTrees = world_.TotalTrees();
   stats_.totalPop = macroActive_ ? humans_.MacroPopulation(settlements_) : humans_.CountAlive();
   stats_.totalSettlements = settlements_.Count();
+  stats_.totalStockFood = 0;
+  stats_.totalStockWood = 0;
+  stats_.totalHouses = 0;
+  stats_.totalFarms = 0;
+  stats_.totalTownHalls = 0;
+  stats_.totalHousingCap = 0;
+  for (const auto& settlement : settlements_.Settlements()) {
+    stats_.totalStockFood += settlement.stockFood;
+    stats_.totalStockWood += settlement.stockWood;
+    stats_.totalHouses += settlement.houses;
+    stats_.totalFarms += settlement.farms;
+    stats_.totalTownHalls += settlement.townHalls;
+    stats_.totalHousingCap += settlement.housingCap;
+  }
   CrashContextSetPopulation(stats_.totalPop);
 }
