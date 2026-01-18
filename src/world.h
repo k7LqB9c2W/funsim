@@ -13,12 +13,22 @@ enum class TileType {
   FreshWater,
 };
 
+enum class BuildingType : uint8_t {
+  None,
+  House,
+  TownHall,
+  Farm,
+};
+
 struct Tile {
   TileType type = TileType::Ocean;
   int trees = 0;
   int food = 0;
   bool burning = false;
   int burnDaysRemaining = 0;
+  BuildingType building = BuildingType::None;
+  uint8_t farmStage = 0;
+  int buildingOwnerId = -1;
 };
 
 class World {

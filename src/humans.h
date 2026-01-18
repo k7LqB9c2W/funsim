@@ -10,7 +10,7 @@ class SettlementManager;
 enum class TaskType : uint8_t;
 
 enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
-enum class Role : uint8_t { Idle, Gatherer, Builder, Guard };
+enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard };
 
 struct Human {
   int id = 0;
@@ -54,8 +54,10 @@ struct Human {
   int taskY = 0;
   int taskAmount = 0;
   int taskSettlementId = -1;
+  BuildingType taskBuildType = BuildingType::None;
   bool carrying = false;
   int carryFood = 0;
+  int carryWood = 0;
 };
 
 class HumanManager {

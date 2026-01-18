@@ -204,7 +204,7 @@ SDL_Texture* CreateFireTexture(SDL_Renderer* renderer) {
 
 bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
                     const std::string& tilesPath, const std::string& terrainOverlayPath,
-                    const std::string& objectsPath) {
+                    const std::string& objectsPath, const std::string& buildingsPath) {
   Shutdown();
 
   auto loadTexture = [&](const std::string& path, SDL_Texture*& texture, const char* label) {
@@ -232,11 +232,16 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     Shutdown();
     return false;
   }
+  if (!loadTexture(buildingsPath, buildingsTexture_, "buildings")) {
+    Shutdown();
+    return false;
+  }
 
   SDL_SetTextureBlendMode(humansTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(tilesTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(terrainOverlayTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(objectsTexture_, SDL_BLENDMODE_BLEND);
+  SDL_SetTextureBlendMode(buildingsTexture_, SDL_BLENDMODE_BLEND);
 
   shadowTexture_ = CreateShadowTexture(renderer);
   if (!shadowTexture_) {
@@ -265,6 +270,15 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
   validateAtlas(tilesTexture_, kTilesAtlasCols * kTilePx, kTilesAtlasRows * kTilePx, "tiles");
   validateAtlas(terrainOverlayTexture_, kFoamCols * kTilePx, kFoamRows * kTilePx, "terrain overlays");
   validateAtlas(objectsTexture_, kObjectCols * kTilePx, kObjectRows * kTilePx, "objects");
+  {
+    int texW = 0;
+    int texH = 0;
+    if (SDL_QueryTexture(buildingsTexture_, nullptr, nullptr, &texW, &texH) == 0) {
+      if (texW % kTilePx != 0 || texH % kTilePx != 0) {
+        SDL_Log("buildings atlas size %dx%d is not divisible by tile size %d", texW, texH, kTilePx);
+      }
+    }
+  }
 
   int texW = 0;
   int texH = 0;
@@ -306,6 +320,10 @@ void Renderer::Shutdown() {
   if (objectsTexture_) {
     SDL_DestroyTexture(objectsTexture_);
     objectsTexture_ = nullptr;
+  }
+  if (buildingsTexture_) {
+    SDL_DestroyTexture(buildingsTexture_);
+    buildingsTexture_ = nullptr;
   }
   if (shadowTexture_) {
     SDL_DestroyTexture(shadowTexture_);
@@ -537,6 +555,39 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
     float height = static_cast<float>(chunk.tilesHigh) * tileSize;
     SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
     SDL_RenderCopyF(renderer, chunk.texture, nullptr, &dst);
+  }
+
+  if (buildingsTexture_) {
+    SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
+    for (int y = minY; y <= maxY; ++y) {
+      for (int x = minX; x <= maxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        if (tile.building == BuildingType::None) continue;
+
+        int row = 0;
+        switch (tile.building) {
+          case BuildingType::House:
+            row = 0;
+            break;
+          case BuildingType::TownHall:
+            row = 1;
+            break;
+          case BuildingType::Farm:
+            row = 2;
+            break;
+          default:
+            row = 0;
+            break;
+        }
+        buildingSrc.x = 0;
+        buildingSrc.y = row * kTilePx;
+
+        const float worldX = static_cast<float>(x) * tileSize;
+        const float worldY = static_cast<float>(y) * tileSize;
+        SDL_FRect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
+        SDL_RenderCopyF(renderer, buildingsTexture_, &buildingSrc, &dst);
+      }
+    }
   }
 
   SDL_Rect shadowSrc = ShadowSrc();

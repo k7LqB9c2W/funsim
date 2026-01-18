@@ -7,6 +7,8 @@
 
 namespace {
 constexpr int kFireDuration = 4;
+constexpr float kFarmGrowBaseChance = 0.25f;
+constexpr float kFarmGrowWaterBonus = 0.45f;
 }  // namespace
 
 World::World(int width, int height)
@@ -44,10 +46,18 @@ void World::UpdateDaily(Random& rng) {
         tile.food = 0;
         tile.burning = false;
         tile.burnDaysRemaining = 0;
+        tile.building = BuildingType::None;
+        tile.farmStage = 0;
+        tile.buildingOwnerId = -1;
         continue;
       }
 
       if (tile.burning) {
+        if (tile.building != BuildingType::None) {
+          tile.building = BuildingType::None;
+          tile.farmStage = 0;
+          tile.buildingOwnerId = -1;
+        }
         if (tile.trees > 0) {
           tile.trees = std::max(0, tile.trees - 2);
         }
@@ -73,7 +83,31 @@ void World::UpdateDaily(Random& rng) {
         }
         continue;
       }
-      // No automatic tree/food growth; player actions only.
+      if (tile.building == BuildingType::Farm && tile.farmStage > 0 &&
+          tile.farmStage < Settlement::kFarmReadyStage) {
+        int waterAdj = 0;
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& d : dirs) {
+          int nx = x + d[0];
+          int ny = y + d[1];
+          if (!InBounds(nx, ny)) continue;
+          if (At(nx, ny).type == TileType::FreshWater) {
+            waterAdj++;
+          }
+        }
+        float waterFactor = static_cast<float>(waterAdj) / 4.0f;
+        float chance = kFarmGrowBaseChance + waterFactor * kFarmGrowWaterBonus;
+        if (chance > 0.95f) chance = 0.95f;
+        if (rng.Chance(chance)) {
+          tile.farmStage++;
+          if (tile.farmStage > Settlement::kFarmReadyStage) {
+            tile.farmStage = Settlement::kFarmReadyStage;
+          }
+        }
+      }
+      if (tile.building != BuildingType::Farm && tile.farmStage != 0) {
+        tile.farmStage = 0;
+      }
     }
   }
 
@@ -100,6 +134,9 @@ void World::EraseAt(int x, int y) {
   tile.food = 0;
   tile.burning = false;
   tile.burnDaysRemaining = 0;
+  tile.building = BuildingType::None;
+  tile.farmStage = 0;
+  tile.buildingOwnerId = -1;
 }
 
 int World::TotalTrees() const {
@@ -160,6 +197,10 @@ void World::RecomputeScentFields() {
       uint16_t food = 0;
       if (tile.type == TileType::Land && !tile.burning) {
         int value = tile.food * 120 + tile.trees * 8;
+        if (tile.building == BuildingType::Farm &&
+            tile.farmStage >= Settlement::kFarmReadyStage) {
+          value += 600;
+        }
         if (value > 60000) value = 60000;
         if (value < 0) value = 0;
         food = static_cast<uint16_t>(value);
