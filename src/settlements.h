@@ -36,7 +36,7 @@ struct Settlement {
   static constexpr int kHouseWoodCost = 10;
   static constexpr int kFarmWoodCost = 6;
   static constexpr int kTownHallWoodCost = 18;
-  static constexpr int kFarmYield = 6;
+  static constexpr int kFarmYield = 8;
   static constexpr int kFarmReadyStage = 3;
 
   int id = 0;
@@ -56,11 +56,15 @@ struct Settlement {
   int farms = 0;
   int townHalls = 0;
   int housingCap = 0;
+  int waterTargetX = 0;
+  int waterTargetY = 0;
+  bool hasWaterTarget = false;
 
   int macroPopM[6] = {};
   int macroPopF[6] = {};
   float macroBirthAccum = 0.0f;
   float macroFarmFoodAccum = 0.0f;
+  float macroFoodNeedAccum = 0.0f;
 
   Task tasks[kTaskCap];
   int taskHead = 0;
@@ -94,6 +98,7 @@ struct Settlement {
     }
     macroBirthAccum = 0.0f;
     macroFarmFoodAccum = 0.0f;
+    macroFoodNeedAccum = 0.0f;
     taskHead = 0;
     taskTail = 0;
   }
@@ -132,6 +137,7 @@ class SettlementManager {
   void RecomputeZoneOwners(const World& world);
   void AssignHumansToSettlements(HumanManager& humans);
   void RecomputeSettlementBuildings(const World& world);
+  void ComputeSettlementWaterTargets(const World& world);
   void RecomputeSettlementPopAndRoles(World& world, Random& rng, int dayCount,
                                       HumanManager& humans);
   void GenerateTasks(World& world, Random& rng);

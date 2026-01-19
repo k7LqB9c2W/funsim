@@ -11,6 +11,21 @@ enum class TaskType : uint8_t;
 
 enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard };
+enum class DeathReason : uint8_t { Starvation, Dehydration };
+
+struct DeathRecord {
+  int day = 0;
+  int humanId = 0;
+  DeathReason reason = DeathReason::Starvation;
+};
+
+struct DeathSummary {
+  int starvation = 0;
+  int dehydration = 0;
+  int macroNatural = 0;
+  int macroStarvation = 0;
+  int macroFire = 0;
+};
 
 struct Human {
   int id = 0;
@@ -23,6 +38,7 @@ struct Human {
   int gestationDays = 0;
   int daysWithoutFood = 0;
   int daysWithoutWater = 0;
+  uint8_t foodCooldownDays = 0;
   float animTimer = 0.0f;
   int animFrame = 0;
   bool moving = false;
@@ -79,6 +95,8 @@ class HumanManager {
   int CountAlive() const;
   const std::vector<Human>& Humans() const { return humans_; }
   std::vector<Human>& HumansMutable() { return humans_; }
+  const std::vector<DeathRecord>& DeathLog() const { return deathLog_; }
+  const DeathSummary& GetDeathSummary() const { return deathSummary_; }
 
  private:
   Human CreateHuman(int x, int y, bool female, Random& rng, int ageDays);
@@ -89,6 +107,7 @@ class HumanManager {
   void UpdateMoveStep(Human& human, World& world, SettlementManager& settlements, Random& rng,
                       int tickCount, int ticksPerDay);
   void RebuildIdMap();
+  void RecordDeath(int humanId, int day, DeathReason reason);
 
   int nextId_ = 1;
   std::vector<Human> humans_;
@@ -97,6 +116,8 @@ class HumanManager {
   std::vector<int> adultMaleSampleId_;
   std::vector<int> humanIdToIndex_;
   std::vector<Human> newborns_;
+  std::vector<DeathRecord> deathLog_;
+  DeathSummary deathSummary_;
   int thinkCursor_ = 0;
   bool macroActive_ = false;
   int macroFallbackM_[6] = {};
@@ -106,3 +127,5 @@ class HumanManager {
   int macroFallbackY_ = 0;
   bool macroHasFallback_ = false;
 };
+
+const char* DeathReasonName(DeathReason reason);

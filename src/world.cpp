@@ -7,8 +7,8 @@
 
 namespace {
 constexpr int kFireDuration = 4;
-constexpr float kFarmGrowBaseChance = 0.25f;
-constexpr float kFarmGrowWaterBonus = 0.45f;
+constexpr float kFarmGrowBaseChance = 0.35f;
+constexpr float kFarmGrowWaterBonus = 0.55f;
 }  // namespace
 
 World::World(int width, int height)
