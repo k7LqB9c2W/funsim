@@ -18,6 +18,7 @@ constexpr float kMatePerMaleChance = 0.02f;
 constexpr float kMateMaxChance = 0.25f;
 constexpr float kStepsPerDay = 8.0f;
 constexpr int kBlockedReplanTicks = 8;
+constexpr int kFoodIntervalDays = 3;
 constexpr int kFoodGraceDays = 21;
 constexpr int kFoodMaxDays = 35;
 constexpr int kWaterGraceDays = 3;
@@ -100,6 +101,17 @@ int BuildWoodCost(BuildingType type) {
 }
 }  // namespace
 
+const char* DeathReasonName(DeathReason reason) {
+  switch (reason) {
+    case DeathReason::Starvation:
+      return "starvation";
+    case DeathReason::Dehydration:
+      return "dehydration";
+    default:
+      return "unknown";
+  }
+}
+
 HumanManager::HumanManager() {
   newborns_.reserve(32);
 }
@@ -116,6 +128,8 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.gestationDays = 0;
   human.daysWithoutFood = 0;
   human.daysWithoutWater = 0;
+  human.foodCooldownDays = static_cast<uint8_t>(
+      rng.RangeInt(0, std::max(0, kFoodIntervalDays - 1)));
   human.animTimer = 0.0f;
   human.animFrame = 0;
   human.moving = false;
@@ -164,6 +178,18 @@ void HumanManager::RebuildIdMap() {
   }
 }
 
+void HumanManager::RecordDeath(int humanId, int day, DeathReason reason) {
+  deathLog_.push_back(DeathRecord{day, humanId, reason});
+  switch (reason) {
+    case DeathReason::Starvation:
+      deathSummary_.starvation++;
+      break;
+    case DeathReason::Dehydration:
+      deathSummary_.dehydration++;
+      break;
+  }
+}
+
 bool HumanManager::GetHumanById(int id, int& outX, int& outY) const {
   if (id <= 0 || id >= static_cast<int>(humanIdToIndex_.size())) return false;
   int idx = humanIdToIndex_[id];
@@ -206,7 +232,52 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
                               Random& rng, int tickCount, int ticksPerDay) {
   if (!human.alive) return;
 
-  if (human.hasTask) {
+  bool nearFire = world.At(human.x, human.y).burning;
+  if (!nearFire) {
+    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& d : dirs) {
+      int nx = human.x + d[0];
+      int ny = human.y + d[1];
+      if (!world.InBounds(nx, ny)) continue;
+      if (world.At(nx, ny).burning) {
+        nearFire = true;
+        break;
+      }
+    }
+  }
+
+  bool thirsty = human.daysWithoutWater >= 2;
+  bool hungry = human.daysWithoutFood >= 2;
+  bool adult = human.ageDays >= kAdultAgeDays;
+
+  if (nearFire) {
+    human.goal = Goal::FleeFire;
+    human.mateTargetId = -1;
+  } else if (thirsty) {
+    human.goal = Goal::SeekWater;
+    human.mateTargetId = -1;
+    bool hasTarget = false;
+    if (world.InBounds(human.lastWaterX, human.lastWaterY) &&
+        world.At(human.lastWaterX, human.lastWaterY).type == TileType::FreshWater) {
+      human.targetX = human.lastWaterX;
+      human.targetY = human.lastWaterY;
+      hasTarget = true;
+    } else if (human.settlementId != -1) {
+      const Settlement* settlement = settlements.Get(human.settlementId);
+      if (settlement && settlement->hasWaterTarget) {
+        human.targetX = settlement->waterTargetX;
+        human.targetY = settlement->waterTargetY;
+        hasTarget = true;
+      }
+    }
+    if (!hasTarget) {
+      human.targetX = human.x;
+      human.targetY = human.y;
+    }
+  } else if (hungry) {
+    human.goal = Goal::SeekFood;
+    human.mateTargetId = -1;
+  } else if (human.hasTask) {
     switch (human.taskType) {
       case TaskType::CollectFood:
       case TaskType::CollectWood:
@@ -230,62 +301,33 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
         break;
     }
   } else {
-    bool nearFire = world.At(human.x, human.y).burning;
-    if (!nearFire) {
-      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-      for (const auto& d : dirs) {
-        int nx = human.x + d[0];
-        int ny = human.y + d[1];
-        if (!world.InBounds(nx, ny)) continue;
-        if (world.At(nx, ny).burning) {
-          nearFire = true;
-          break;
-        }
+    bool canMate = adult && human.female && !human.pregnant && human.mateCooldownDays == 0 &&
+                   human.daysWithoutFood <= 4 && human.daysWithoutWater <= 4;
+    if (canMate && human.settlementId != -1) {
+      const Settlement* settlement = settlements.Get(human.settlementId);
+      if (!settlement || settlement->stockFood < settlement->population * 3 ||
+          settlement->housingCap <= settlement->population) {
+        canMate = false;
       }
     }
-
-    bool thirsty = human.daysWithoutWater >= 2;
-    bool hungry = human.daysWithoutFood >= 2;
-    bool adult = human.ageDays >= kAdultAgeDays;
-
-    if (nearFire) {
-      human.goal = Goal::FleeFire;
-      human.mateTargetId = -1;
-    } else if (thirsty) {
-      human.goal = Goal::SeekWater;
-      human.mateTargetId = -1;
-    } else if (hungry) {
-      human.goal = Goal::SeekFood;
-      human.mateTargetId = -1;
-    } else {
-      bool canMate = adult && human.female && !human.pregnant && human.mateCooldownDays == 0 &&
-                     human.daysWithoutFood <= 4 && human.daysWithoutWater <= 4;
-      if (canMate && human.settlementId != -1) {
-        const Settlement* settlement = settlements.Get(human.settlementId);
-        if (!settlement || settlement->stockFood < settlement->population * 3 ||
-            settlement->housingCap <= settlement->population) {
-          canMate = false;
-        }
+    if (canMate) {
+      int mateId = FindMateTargetId(human, world, rng);
+      if (mateId != -1) {
+        human.goal = Goal::SeekMate;
+        human.mateTargetId = mateId;
+      } else {
+        canMate = false;
       }
-      if (canMate) {
-        int mateId = FindMateTargetId(human, world, rng);
-        if (mateId != -1) {
-          human.goal = Goal::SeekMate;
-          human.mateTargetId = mateId;
-        } else {
-          canMate = false;
-        }
+    }
+    if (!canMate) {
+      if (human.settlementId != -1 &&
+          (human.wanderlust < 100 || human.role == Role::Guard || human.role == Role::Builder ||
+           human.role == Role::Farmer)) {
+        human.goal = Goal::StayHome;
+      } else {
+        human.goal = Goal::Wander;
       }
-      if (!canMate) {
-        if (human.settlementId != -1 &&
-            (human.wanderlust < 100 || human.role == Role::Guard || human.role == Role::Builder ||
-             human.role == Role::Farmer)) {
-          human.goal = Goal::StayHome;
-        } else {
-          human.goal = Goal::Wander;
-        }
-        human.mateTargetId = -1;
-      }
+      human.mateTargetId = -1;
     }
   }
 
@@ -355,16 +397,29 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     human.mateTargetId = -1;
   } else if (thirsty && human.goal != Goal::SeekWater) {
     human.goal = Goal::SeekWater;
-    if (!human.carrying) {
-      human.hasTask = false;
-    }
+    human.hasTask = false;
     human.mateTargetId = -1;
+    human.forceReplan = true;
   } else if (hungry && human.goal != Goal::SeekFood) {
     human.goal = Goal::SeekFood;
     if (human.hasTask && !human.carrying && human.taskType != TaskType::CollectFood &&
         human.taskType != TaskType::HarvestFarm) {
       human.hasTask = false;
       human.forceReplan = true;
+    }
+  }
+
+  if (thirsty && human.goal == Goal::SeekWater) {
+    if (world.InBounds(human.lastWaterX, human.lastWaterY) &&
+        world.At(human.lastWaterX, human.lastWaterY).type == TileType::FreshWater) {
+      human.targetX = human.lastWaterX;
+      human.targetY = human.lastWaterY;
+    } else if (human.settlementId != -1) {
+      const Settlement* settlement = settlements.Get(human.settlementId);
+      if (settlement && settlement->hasWaterTarget) {
+        human.targetX = settlement->waterTargetX;
+        human.targetY = settlement->waterTargetY;
+      }
     }
   }
 
@@ -449,6 +504,10 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
         break;
       case Goal::SeekWater:
         score += static_cast<int>(world.WaterScentAt(nx, ny)) * 4;
+        if (human.targetX != human.x || human.targetY != human.y) {
+          int dist = Manhattan(nx, ny, human.targetX, human.targetY);
+          score -= dist * 140;
+        }
         break;
       case Goal::FleeFire:
         score -= static_cast<int>(world.FireRiskAt(nx, ny)) * 6;
@@ -483,7 +542,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       score -= dist * 40;
     }
 
-    if (human.settlementId != -1) {
+    if (human.settlementId != -1 && human.goal != Goal::SeekWater) {
       bool wanderHeavy = (human.goal == Goal::Wander || human.role == Role::Gatherer);
       if (!wanderHeavy) {
         float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
@@ -681,7 +740,6 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
 void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng,
                                      int dayCount, int& birthsToday, int& deathsToday) {
   if (macroActive_) return;
-  (void)dayCount;
   CrashContextSetStage("Humans::UpdateDailyCoarse begin");
   CrashContextSetPopulation(static_cast<int>(humans_.size()));
   birthsToday = 0;
@@ -765,18 +823,60 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
 
     Tile& tile = world.At(human.x, human.y);
-    if (settlement && settlement->stockFood > 0) {
-      settlement->stockFood--;
+    if (human.foodCooldownDays > 0) {
+      human.foodCooldownDays--;
       human.daysWithoutFood = 0;
-      human.lastFoodX = human.x;
-      human.lastFoodY = human.y;
-    } else if (tile.food > 0) {
-      tile.food--;
-      human.daysWithoutFood = 0;
-      human.lastFoodX = human.x;
-      human.lastFoodY = human.y;
     } else {
-      human.daysWithoutFood++;
+      bool ate = false;
+      int eatX = human.x;
+      int eatY = human.y;
+
+      if (settlement && settlement->stockFood > 0) {
+        settlement->stockFood--;
+        ate = true;
+      } else if (tile.food > 0) {
+        tile.food--;
+        ate = true;
+      } else if (tile.building == BuildingType::Farm &&
+                 tile.farmStage >= Settlement::kFarmReadyStage &&
+                 (human.settlementId == -1 || tile.buildingOwnerId == human.settlementId)) {
+        tile.farmStage = 0;
+        ate = true;
+      } else {
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& d : dirs) {
+          int nx = human.x + d[0];
+          int ny = human.y + d[1];
+          if (!world.InBounds(nx, ny)) continue;
+          Tile& neighbor = world.At(nx, ny);
+          if (neighbor.food > 0) {
+            neighbor.food--;
+            ate = true;
+            eatX = nx;
+            eatY = ny;
+            break;
+          }
+          if (neighbor.building == BuildingType::Farm &&
+              neighbor.farmStage >= Settlement::kFarmReadyStage &&
+              (human.settlementId == -1 || neighbor.buildingOwnerId == human.settlementId)) {
+            neighbor.farmStage = 0;
+            ate = true;
+            eatX = nx;
+            eatY = ny;
+            break;
+          }
+        }
+      }
+
+      if (ate) {
+        human.daysWithoutFood = 0;
+        human.lastFoodX = eatX;
+        human.lastFoodY = eatY;
+        human.foodCooldownDays = static_cast<uint8_t>(
+            std::max(0, kFoodIntervalDays - 1));
+      } else {
+        human.daysWithoutFood++;
+      }
     }
 
     if (tile.type == TileType::FreshWater) {
@@ -828,6 +928,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 
     if (human.daysWithoutFood > kFoodGraceDays) {
       if (human.daysWithoutFood >= kFoodMaxDays) {
+        RecordDeath(human.id, dayCount, DeathReason::Starvation);
         human.alive = false;
         deathsToday++;
         continue;
@@ -835,6 +936,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       float chance = static_cast<float>(human.daysWithoutFood - kFoodGraceDays) /
                      static_cast<float>(kFoodMaxDays - kFoodGraceDays);
       if (rng.Chance(chance)) {
+        RecordDeath(human.id, dayCount, DeathReason::Starvation);
         human.alive = false;
         deathsToday++;
         continue;
@@ -843,6 +945,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 
     if (human.daysWithoutWater > kWaterGraceDays) {
       if (human.daysWithoutWater >= kWaterMaxDays) {
+        RecordDeath(human.id, dayCount, DeathReason::Dehydration);
         human.alive = false;
         deathsToday++;
         continue;
@@ -850,6 +953,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       float chance = static_cast<float>(human.daysWithoutWater - kWaterGraceDays) /
                      static_cast<float>(kWaterMaxDays - kWaterGraceDays);
       if (rng.Chance(chance)) {
+        RecordDeath(human.id, dayCount, DeathReason::Dehydration);
         human.alive = false;
         deathsToday++;
         continue;
@@ -1041,9 +1145,16 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
         settlement.stockWood += std::max(1, popTotal / 6);
       }
 
-      int need = popTotal;
-      if (settlement.stockFood > 0) {
-        settlement.stockFood = std::max(0, settlement.stockFood - need);
+      float dailyNeed = (kFoodIntervalDays > 0)
+                            ? (static_cast<float>(popTotal) / static_cast<float>(kFoodIntervalDays))
+                            : static_cast<float>(popTotal);
+      settlement.macroFoodNeedAccum += dailyNeed;
+      int need = static_cast<int>(settlement.macroFoodNeedAccum);
+      if (need > 0) {
+        settlement.macroFoodNeedAccum -= static_cast<float>(need);
+        if (settlement.stockFood > 0) {
+          settlement.stockFood = std::max(0, settlement.stockFood - need);
+        }
       }
 
       float foodFactor = 0.0f;
@@ -1092,23 +1203,33 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
       for (int bin = 0; bin < kMacroBins; ++bin) {
         int baseDeathsM = ApplyRate(settlement.macroPopM[bin], kMacroDeathRate[bin], rng);
         int baseDeathsF = ApplyRate(settlement.macroPopF[bin], kMacroDeathRate[bin], rng);
-        int extraDeathsM = 0;
-        int extraDeathsF = 0;
+        int starveDeathsM = 0;
+        int starveDeathsF = 0;
+        int fireDeathsM = 0;
+        int fireDeathsF = 0;
         if (starvationRate > 0.0f && (bin == 0 || bin == kMacroBins - 1)) {
-          extraDeathsM += ApplyRate(settlement.macroPopM[bin], starvationRate, rng);
-          extraDeathsF += ApplyRate(settlement.macroPopF[bin], starvationRate, rng);
+          starveDeathsM = ApplyRate(settlement.macroPopM[bin], starvationRate, rng);
+          starveDeathsF = ApplyRate(settlement.macroPopF[bin], starvationRate, rng);
         }
         if (fireFactor > 0.2f) {
           float fireRate = fireFactor * 0.0008f;
-          extraDeathsM += ApplyRate(settlement.macroPopM[bin], fireRate, rng);
-          extraDeathsF += ApplyRate(settlement.macroPopF[bin], fireRate, rng);
+          fireDeathsM = ApplyRate(settlement.macroPopM[bin], fireRate, rng);
+          fireDeathsF = ApplyRate(settlement.macroPopF[bin], fireRate, rng);
         }
 
         settlement.macroPopM[bin] =
-            std::max(0, settlement.macroPopM[bin] - baseDeathsM - extraDeathsM);
+            std::max(0, settlement.macroPopM[bin] - baseDeathsM - starveDeathsM - fireDeathsM);
         settlement.macroPopF[bin] =
-            std::max(0, settlement.macroPopF[bin] - baseDeathsF - extraDeathsF);
-        deathsToday += baseDeathsM + baseDeathsF + extraDeathsM + extraDeathsF;
+            std::max(0, settlement.macroPopF[bin] - baseDeathsF - starveDeathsF - fireDeathsF);
+        deathsToday += baseDeathsM + baseDeathsF + starveDeathsM + starveDeathsF + fireDeathsM +
+                       fireDeathsF;
+        deathSummary_.macroNatural += baseDeathsM + baseDeathsF;
+        if (starvationRate > 0.0f && (bin == 0 || bin == kMacroBins - 1)) {
+          deathSummary_.macroStarvation += starveDeathsM + starveDeathsF;
+        }
+        if (fireFactor > 0.2f) {
+          deathSummary_.macroFire += fireDeathsM + fireDeathsF;
+        }
       }
 
       for (int bin = 0; bin < kMacroBins - 1; ++bin) {
@@ -1163,6 +1284,7 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
           macroFallbackM_[bin] = std::max(0, macroFallbackM_[bin] - deathsM);
           macroFallbackF_[bin] = std::max(0, macroFallbackF_[bin] - deathsF);
           deathsToday += deathsM + deathsF;
+          deathSummary_.macroNatural += deathsM + deathsF;
         }
 
         for (int bin = 0; bin < kMacroBins - 1; ++bin) {

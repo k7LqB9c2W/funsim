@@ -21,9 +21,10 @@ constexpr int kHouseBuildRadius = 10;
 constexpr int kFarmBuildRadius = 12;
 constexpr int kFarmWorkRadius = 14;
 constexpr int kHousingBuffer = 2;
-constexpr int kDesiredFoodPerPop = 3;
+constexpr int kDesiredFoodPerPop = 5;
 constexpr int kDesiredWoodPerPop = 2;
 constexpr int kFarmsPerPop = 3;
+constexpr int kWaterSearchRadius = 28;
 
 uint32_t Hash32(uint32_t a, uint32_t b) {
   uint32_t h = a * 0x9E3779B9u;
@@ -305,6 +306,41 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
   }
 }
 
+void SettlementManager::ComputeSettlementWaterTargets(const World& world) {
+  if (settlements_.empty()) return;
+  const int maxDistSq = kWaterSearchRadius * kWaterSearchRadius;
+
+  for (auto& settlement : settlements_) {
+    int bestX = -1;
+    int bestY = -1;
+    int bestDistSq = maxDistSq + 1;
+    for (int dy = -kWaterSearchRadius; dy <= kWaterSearchRadius; ++dy) {
+      int y = settlement.centerY + dy;
+      if (y < 0 || y >= world.height()) continue;
+      for (int dx = -kWaterSearchRadius; dx <= kWaterSearchRadius; ++dx) {
+        int x = settlement.centerX + dx;
+        if (x < 0 || x >= world.width()) continue;
+        if (world.At(x, y).type != TileType::FreshWater) continue;
+        int distSq = dx * dx + dy * dy;
+        if (distSq < bestDistSq) {
+          bestDistSq = distSq;
+          bestX = x;
+          bestY = y;
+        }
+      }
+    }
+    if (bestX != -1) {
+      settlement.hasWaterTarget = true;
+      settlement.waterTargetX = bestX;
+      settlement.waterTargetY = bestY;
+    } else {
+      settlement.hasWaterTarget = false;
+      settlement.waterTargetX = settlement.centerX;
+      settlement.waterTargetY = settlement.centerY;
+    }
+  }
+}
+
 void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng, int dayCount,
                                                        HumanManager& humans) {
   if (settlements_.empty()) return;
@@ -369,7 +405,7 @@ void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng
     int pop = settlement.population;
     if (pop <= 0) continue;
 
-    int farmers = std::min(pop, settlement.farms);
+    int farmers = std::min(pop, settlement.farms * 2);
     int gatherers = (pop * 25) / 100;
     if (pop >= 6 && gatherers < 1) gatherers = 1;
     int builders = (settlement.stockFood > pop * 3) ? (pop * 12) / 100 : (pop * 5) / 100;
@@ -456,41 +492,29 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
     int desiredFarms = std::max(1, (pop + kFarmsPerPop - 1) / kFarmsPerPop);
     int desiredHousing = pop + kHousingBuffer;
 
-    if (settlement.stockFood < desiredFood && settlement.farms > 0 && available > 0) {
-      int tasksToPush = std::min(available, std::max(1, settlement.farmers + settlement.gatherers));
-      for (int i = 0; i < tasksToPush; ++i) {
-        int bestX = -1;
-        int bestY = -1;
-        int bestScore = std::numeric_limits<int>::min();
-
-        for (int sample = 0; sample < 10; ++sample) {
-          int dx = rng.RangeInt(-kFarmWorkRadius, kFarmWorkRadius);
-          int dy = rng.RangeInt(-kFarmWorkRadius, kFarmWorkRadius);
+    if (settlement.farms > 0 && available > 0) {
+      for (int dy = -kFarmWorkRadius; dy <= kFarmWorkRadius && available > 0; ++dy) {
+        int y = settlement.centerY + dy;
+        if (y < 0 || y >= world.height()) continue;
+        for (int dx = -kFarmWorkRadius; dx <= kFarmWorkRadius && available > 0; ++dx) {
           int x = settlement.centerX + dx;
-          int y = settlement.centerY + dy;
-          if (!world.InBounds(x, y)) continue;
+          if (x < 0 || x >= world.width()) continue;
           const Tile& tile = world.At(x, y);
           if (tile.building != BuildingType::Farm || tile.buildingOwnerId != settlement.id) continue;
           if (tile.farmStage < Settlement::kFarmReadyStage) continue;
 
-          int score = static_cast<int>(world.WaterScentAt(x, y));
-          if (score > bestScore) {
-            bestScore = score;
-            bestX = x;
-            bestY = y;
+          Task task;
+          task.type = TaskType::HarvestFarm;
+          task.x = x;
+          task.y = y;
+          task.amount = Settlement::kFarmYield;
+          task.settlementId = settlement.id;
+          if (!settlement.PushTask(task)) {
+            available = 0;
+            break;
           }
+          available--;
         }
-
-        if (bestX == -1 || bestY == -1) break;
-        Task task;
-        task.type = TaskType::HarvestFarm;
-        task.x = bestX;
-        task.y = bestY;
-        task.amount = Settlement::kFarmYield;
-        task.settlementId = settlement.id;
-        if (!settlement.PushTask(task)) break;
-        available--;
-        if (available <= 0) break;
       }
     }
 
@@ -751,6 +775,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   TryFoundNewSettlements(world, rng, dayCount, markers);
   RecomputeZoneOwners(world);
   AssignHumansToSettlements(humans);
+  ComputeSettlementWaterTargets(world);
   RecomputeSettlementBuildings(world);
   RecomputeSettlementPopAndRoles(world, rng, dayCount, humans);
   GenerateTasks(world, rng);
@@ -769,6 +794,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
     idToIndex_[settlements_[i].id] = i;
   }
+  ComputeSettlementWaterTargets(world);
   RecomputeSettlementBuildings(world);
 
   auto placeBuilding = [&](Settlement& settlement, BuildingType type, int radius) {

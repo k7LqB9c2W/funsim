@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <imgui.h>
@@ -26,6 +27,7 @@ App::App() : world_(kDefaultWidth, kDefaultHeight) {
 }
 
 App::~App() {
+  WriteDeathLog();
   rendererAssets_.Shutdown();
 
   if (imguiInitialized_) {
@@ -483,4 +485,33 @@ void App::RefreshTotals() {
     stats_.totalHousingCap += settlement.housingCap;
   }
   CrashContextSetPopulation(stats_.totalPop);
+}
+
+void App::WriteDeathLog() const {
+  std::ofstream out("death_log.txt", std::ios::trunc);
+  if (!out.is_open()) {
+    return;
+  }
+
+  out << "funsim_death_log\n";
+  out << "days=" << stats_.dayCount << "\n";
+  out << "total_births=" << stats_.totalBirths << "\n";
+  out << "total_deaths=" << stats_.totalDeaths << "\n";
+  out << "final_population=" << stats_.totalPop << "\n";
+
+  const auto& deathStats = humans_.GetDeathSummary();
+  out << "starvation=" << deathStats.starvation << "\n";
+  out << "dehydration=" << deathStats.dehydration << "\n";
+  out << "macro_natural=" << deathStats.macroNatural << "\n";
+  out << "macro_starvation=" << deathStats.macroStarvation << "\n";
+  out << "macro_fire=" << deathStats.macroFire << "\n";
+
+  out << "\n# micro_deaths\n";
+  out << "day,id,reason\n";
+  for (const auto& record : humans_.DeathLog()) {
+    out << record.day << "," << record.humanId << "," << DeathReasonName(record.reason) << "\n";
+  }
+
+  out << "\n# macro_deaths_summary\n";
+  out << "macro counts are aggregated; no per-human ids in macro mode\n";
 }

@@ -32,6 +32,7 @@ class App {
   bool ScreenToTile(int screenX, int screenY, int& tileX, int& tileY) const;
   void ClampCamera();
   void RefreshTotals();
+  void WriteDeathLog() const;
 
   SDL_Window* window_ = nullptr;
   SDL_Renderer* renderer_ = nullptr;
