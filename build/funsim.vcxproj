@@ -88,7 +88,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2" /external:I "C:/funsim/third_party/SDL2_ttf/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
@@ -107,10 +107,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -118,7 +118,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>	</Message>
+      <Message>		</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file C:/Users/Jacob/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary C:/funsim/build/Debug/funsim.exe -installedDir C:/Users/Jacob/vcpkg/installed/x64-windows/debug/bin -OutVariable out
 if %errorlevel% neq 0 goto :cmEnd
@@ -136,10 +136,19 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 :cmErrorLevel
 exit /b %1
 :cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_if_different C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.dll C:/funsim/build/Debug
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\manual-link\SDL2maind.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\SDL2_imaged.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\SDL2d.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\manual-link\SDL2maind.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\SDL2_imaged.lib;C:\funsim\third_party\SDL2_ttf\lib\x64\SDL2_ttf.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\debug\lib\SDL2d.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -155,7 +164,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2" /external:I "C:/funsim/third_party/SDL2_ttf/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <ExceptionHandling>Sync</ExceptionHandling>
       <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
@@ -174,10 +183,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -185,7 +194,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>	</Message>
+      <Message>		</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file C:/Users/Jacob/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary C:/funsim/build/Release/funsim.exe -installedDir C:/Users/Jacob/vcpkg/installed/x64-windows/bin -OutVariable out
 if %errorlevel% neq 0 goto :cmEnd
@@ -203,10 +212,19 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 :cmErrorLevel
 exit /b %1
 :cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_if_different C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.dll C:/funsim/build/Release
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;C:\funsim\third_party\SDL2_ttf\lib\x64\SDL2_ttf.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -222,7 +240,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2" /external:I "C:/funsim/third_party/SDL2_ttf/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <ExceptionHandling>Sync</ExceptionHandling>
       <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
@@ -241,10 +259,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -252,7 +270,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>	</Message>
+      <Message>		</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file C:/Users/Jacob/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary C:/funsim/build/MinSizeRel/funsim.exe -installedDir C:/Users/Jacob/vcpkg/installed/x64-windows/bin -OutVariable out
 if %errorlevel% neq 0 goto :cmEnd
@@ -270,10 +288,19 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 :cmErrorLevel
 exit /b %1
 :cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_if_different C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.dll C:/funsim/build/MinSizeRel
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;C:\funsim\third_party\SDL2_ttf\lib\x64\SDL2_ttf.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
@@ -289,7 +316,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
       <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2"</AdditionalOptions>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include" /external:I "C:/Users/Jacob/vcpkg/installed/x64-windows/include/SDL2" /external:I "C:/funsim/third_party/SDL2_ttf/include"</AdditionalOptions>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -307,10 +334,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\funsim\src;C:\funsim\third_party\imgui;C:\funsim\third_party\imgui\backends;C:\Users\Jacob\vcpkg\installed\x64-windows\include;C:\Users\Jacob\vcpkg\installed\x64-windows\include\SDL2;C:\funsim\third_party\SDL2_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -318,7 +345,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>	</Message>
+      <Message>		</Message>
       <Command>setlocal
 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -noprofile -executionpolicy Bypass -file C:/Users/Jacob/vcpkg/scripts/buildsystems/msbuild/applocal.ps1 -targetBinary C:/funsim/build/RelWithDebInfo/funsim.exe -installedDir C:/Users/Jacob/vcpkg/installed/x64-windows/bin -OutVariable out
 if %errorlevel% neq 0 goto :cmEnd
@@ -336,10 +363,19 @@ endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
 :cmErrorLevel
 exit /b %1
 :cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_if_different C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.dll C:/funsim/build/RelWithDebInfo
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
 if %errorlevel% neq 0 goto :VCEnd</Command>
     </PostBuildEvent>
     <Link>
-      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalDependencies>C:\Users\Jacob\vcpkg\installed\x64-windows\lib\manual-link\SDL2main.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2_image.lib;C:\funsim\third_party\SDL2_ttf\lib\x64\SDL2_ttf.lib;shell32.lib;C:\Users\Jacob\vcpkg\installed\x64-windows\lib\SDL2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -417,6 +453,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\funsim\src\tools.cpp" />
     <ClCompile Include="C:\funsim\src\render.cpp" />
     <ClCompile Include="C:\funsim\src\settlements.cpp" />
+    <ClCompile Include="C:\funsim\src\factions.cpp" />
     <ClCompile Include="C:\funsim\src\ui.cpp" />
     <ClCompile Include="C:\funsim\src\util.cpp" />
     <ClCompile Include="C:\funsim\third_party\imgui\imgui.cpp" />

@@ -3,6 +3,7 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+#include "factions.h"
 #include "humans.h"
 #include "render.h"
 #include "settlements.h"
@@ -42,6 +43,7 @@ class App {
   World world_;
   HumanManager humans_;
   SettlementManager settlements_;
+  FactionManager factions_;
   Renderer rendererAssets_;
   Camera camera_;
   UIState ui_;
@@ -61,6 +63,7 @@ class App {
   int hoverTileX_ = 0;
   int hoverTileY_ = 0;
   bool hoverValid_ = false;
+  HoverInfo hoverInfo_;
 
   bool imguiInitialized_ = false;
   bool worldDirty_ = false;

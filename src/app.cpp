@@ -94,7 +94,8 @@ bool App::Init() {
   if (!rendererAssets_.Load(renderer_, "assets/sprites/humans.png", "assets/sprites/tiles.png",
                             "assets/sprites/terrain_tiles.png",
                             "assets/sprites/object_tiles.png",
-                            "assets/sprites/buildings_tiles.png")) {
+                            "assets/sprites/buildings_tiles.png",
+                            "assets/fonts/Inter-Regular.ttc", 14)) {
     return false;
   }
 
@@ -126,7 +127,7 @@ void App::Run() {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    DrawUI(ui_, stats_);
+    DrawUI(ui_, stats_, factions_, settlements_, hoverInfo_);
 
     Update(dt);
 
@@ -197,6 +198,22 @@ void App::Update(float dt) {
     hoverValid_ = false;
   }
 
+  hoverInfo_.valid = hoverValid_;
+  hoverInfo_.tileX = hoverTileX_;
+  hoverInfo_.tileY = hoverTileY_;
+  hoverInfo_.settlementId = -1;
+  hoverInfo_.factionId = -1;
+  if (hoverValid_) {
+    int ownerId = settlements_.ZoneOwnerForTile(hoverTileX_, hoverTileY_);
+    hoverInfo_.settlementId = ownerId;
+    if (ownerId > 0) {
+      const Settlement* settlement = settlements_.Get(ownerId);
+      if (settlement) {
+        hoverInfo_.factionId = settlement->factionId;
+      }
+    }
+  }
+
   humans_.UpdateAnimation(dt);
 
   const bool wantsMacro = (ui_.speedIndex == 4);
@@ -257,8 +274,9 @@ void App::RenderFrame() {
   SDL_SetRenderDrawColor(renderer_, 8, 12, 22, 255);
   SDL_RenderClear(renderer_);
 
-  rendererAssets_.Render(renderer_, world_, humans_, camera_, winW, winH, villageMarkers_,
-                         hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize);
+  rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
+                         villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
+                         ui_.showTerritoryOverlay);
 
   ImGui::Render();
   ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer_);
@@ -277,7 +295,7 @@ void App::StepDayCoarse() {
   CrashContextSetStage("StepDay:World");
   world_.UpdateDaily(rng_);
   CrashContextSetStage("StepDay:Settlements");
-  settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, villageMarkers_);
+  settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, villageMarkers_, factions_);
   CrashContextSetStage("StepDay:Humans");
   humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, stats_.birthsToday,
                             stats_.deathsToday);
@@ -307,7 +325,7 @@ void App::AdvanceMacro(int days) {
       world_.UpdateDaily(rng_);
     }
     humans_.AdvanceMacro(world_, settlements_, rng_, 1, stats_.birthsToday, stats_.deathsToday);
-    settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_);
+    settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_, factions_);
   }
   stats_.totalBirths += stats_.birthsToday;
   stats_.totalDeaths += stats_.deathsToday;
@@ -484,6 +502,8 @@ void App::RefreshTotals() {
     stats_.totalTownHalls += settlement.townHalls;
     stats_.totalHousingCap += settlement.housingCap;
   }
+  factions_.UpdateStats(settlements_);
+  factions_.UpdateLeaders(settlements_, humans_);
   CrashContextSetPopulation(stats_.totalPop);
 }
 

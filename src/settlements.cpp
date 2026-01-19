@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "factions.h"
 #include "humans.h"
 #include "util.h"
 #include "world.h"
@@ -25,6 +26,7 @@ constexpr int kDesiredFoodPerPop = 5;
 constexpr int kDesiredWoodPerPop = 2;
 constexpr int kFarmsPerPop = 3;
 constexpr int kWaterSearchRadius = 28;
+constexpr int kFactionLinkRadiusTiles = 96;
 
 uint32_t Hash32(uint32_t a, uint32_t b) {
   uint32_t h = a * 0x9E3779B9u;
@@ -86,6 +88,12 @@ int SettlementManager::ZoneOwnerForTile(int x, int y) const {
   return zoneOwner_[zy * zonesX_ + zx];
 }
 
+int SettlementManager::ZoneOwnerAt(int zx, int zy) const {
+  if (zonesX_ == 0 || zonesY_ == 0) return -1;
+  if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return -1;
+  return zoneOwner_[zy * zonesX_ + zx];
+}
+
 void SettlementManager::EnsureZoneBuffers(const World& world) {
   int neededZonesX = (world.width() + zoneSize_ - 1) / zoneSize_;
   int neededZonesY = (world.height() + zoneSize_ - 1) / zoneSize_;
@@ -139,12 +147,11 @@ void SettlementManager::RecomputeZonePopMacro() {
 }
 
 void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int dayCount,
-                                               std::vector<VillageMarker>& markers) {
+                                               std::vector<VillageMarker>& markers,
+                                               FactionManager& factions) {
   const int minDistSq = kMinVillageDistTiles * kMinVillageDistTiles;
 
   for (int zoneIndex = 0; zoneIndex < static_cast<int>(zoneDenseDays_.size()); ++zoneIndex) {
-    if (zoneDenseDays_[zoneIndex] < kZoneRequiredDays) continue;
-
     int zx = zoneIndex % zonesX_;
     int zy = zoneIndex / zonesX_;
     int startX = zx * zoneSize_;
@@ -153,15 +160,52 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     int endY = std::min(world.height(), startY + zoneSize_);
 
     bool tooClose = false;
+    int nearestId = -1;
+    int nearestDistSq = std::numeric_limits<int>::max();
     for (const auto& settlement : settlements_) {
       int dx = settlement.centerX - (startX + zoneSize_ / 2);
       int dy = settlement.centerY - (startY + zoneSize_ / 2);
-      if (dx * dx + dy * dy <= minDistSq) {
+      int distSq = dx * dx + dy * dy;
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
+        nearestId = settlement.id;
+      }
+      if (distSq <= minDistSq) {
         tooClose = true;
         break;
       }
     }
     if (tooClose) continue;
+
+    int zonePop = zonePop_[zoneIndex];
+    int sourceFactionId = 0;
+    const Settlement* nearestSettlement = Get(nearestId);
+    if (nearestSettlement) {
+      sourceFactionId = nearestSettlement->factionId;
+    }
+    const Faction* sourceFaction = factions.Get(sourceFactionId);
+    float expansionBias = sourceFaction ? sourceFaction->traits.expansionBias : 1.0f;
+    int popThreshold = std::max(6, static_cast<int>(std::round(kZonePopThreshold / expansionBias)));
+    int requiredDays = std::max(2, static_cast<int>(std::round(kZoneRequiredDays / expansionBias)));
+    if (zonePop < popThreshold) continue;
+    if (zoneDenseDays_[zoneIndex] < requiredDays) continue;
+
+    int ownerId = zoneOwner_[zoneIndex];
+    if (ownerId != -1 && sourceFactionId > 0) {
+      const Settlement* ownerSettlement = Get(ownerId);
+      if (ownerSettlement && ownerSettlement->factionId > 0 &&
+          ownerSettlement->factionId != sourceFactionId) {
+        bool resourceStress = false;
+        if (nearestSettlement) {
+          int pop = std::max(1, nearestSettlement->population);
+          resourceStress = (nearestSettlement->stockFood < pop * 2) ||
+                           (nearestSettlement->stockWood < pop);
+        }
+        if (!factions.CanExpandInto(sourceFactionId, ownerSettlement->factionId, resourceStress)) {
+          continue;
+        }
+      }
+    }
 
     int bestScore = std::numeric_limits<int>::min();
     int bestX = -1;
@@ -205,13 +249,27 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     settlement.stockWood = 0;
     settlement.population = 0;
     settlement.ageDays = 0;
+
+    int factionId = 0;
+    if (nearestSettlement && sourceFactionId > 0) {
+      int linkRadius = kFactionLinkRadiusTiles;
+      if (sourceFaction && sourceFaction->traits.outlook == FactionOutlook::Isolationist) {
+        linkRadius = kFactionLinkRadiusTiles / 2;
+      }
+      if (nearestDistSq <= linkRadius * linkRadius) {
+        factionId = sourceFactionId;
+      }
+    }
+    if (factionId == 0) {
+      factionId = factions.CreateFaction(rng);
+    }
+    settlement.factionId = factionId;
     settlements_.push_back(settlement);
 
     markers.push_back(VillageMarker{bestX, bestY, 25});
     zoneDenseDays_[zoneIndex] = 0;
 
   }
-  (void)rng;
   (void)dayCount;
 }
 
@@ -242,6 +300,47 @@ void SettlementManager::RecomputeZoneOwners(const World& world) {
       }
       zoneOwner_[zoneIndex] = bestId;
     }
+  }
+}
+
+void SettlementManager::EnsureSettlementFactions(FactionManager& factions, Random& rng) {
+  for (size_t i = 0; i < settlements_.size(); ++i) {
+    Settlement& settlement = settlements_[i];
+    if (settlement.factionId > 0 && factions.Get(settlement.factionId)) {
+      continue;
+    }
+
+    int nearestFactionId = 0;
+    int nearestDistSq = std::numeric_limits<int>::max();
+    for (size_t j = 0; j < settlements_.size(); ++j) {
+      if (i == j) continue;
+      const Settlement& other = settlements_[j];
+      if (other.factionId <= 0 || !factions.Get(other.factionId)) continue;
+      int dx = other.centerX - settlement.centerX;
+      int dy = other.centerY - settlement.centerY;
+      int distSq = dx * dx + dy * dy;
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq;
+        nearestFactionId = other.factionId;
+      }
+    }
+
+    int assigned = 0;
+    if (nearestFactionId > 0) {
+      const Faction* faction = factions.Get(nearestFactionId);
+      int linkRadius = kFactionLinkRadiusTiles;
+      if (faction && faction->traits.outlook == FactionOutlook::Isolationist) {
+        linkRadius = kFactionLinkRadiusTiles / 2;
+      }
+      if (nearestDistSq <= linkRadius * linkRadius) {
+        assigned = nearestFactionId;
+      }
+    }
+
+    if (assigned == 0) {
+      assigned = factions.CreateFaction(rng);
+    }
+    settlement.factionId = assigned;
   }
 }
 
@@ -768,11 +867,13 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng) {
 }
 
 void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount,
-                                    std::vector<VillageMarker>& markers) {
+                                    std::vector<VillageMarker>& markers, FactionManager& factions) {
   CrashContextSetStage("Settlements::UpdateDaily");
   EnsureZoneBuffers(world);
+  EnsureSettlementFactions(factions, rng);
+  RecomputeZoneOwners(world);
   RecomputeZonePop(world, humans);
-  TryFoundNewSettlements(world, rng, dayCount, markers);
+  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
   RecomputeZoneOwners(world);
   AssignHumansToSettlements(humans);
   ComputeSettlementWaterTargets(world);
@@ -784,11 +885,13 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
 }
 
 void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
-                                    std::vector<VillageMarker>& markers) {
+                                    std::vector<VillageMarker>& markers, FactionManager& factions) {
   CrashContextSetStage("Settlements::UpdateMacro");
   EnsureZoneBuffers(world);
+  EnsureSettlementFactions(factions, rng);
+  RecomputeZoneOwners(world);
   RecomputeZonePopMacro();
-  TryFoundNewSettlements(world, rng, dayCount, markers);
+  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
   RecomputeZoneOwners(world);
   idToIndex_.assign(nextId_, -1);
   for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {

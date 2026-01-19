@@ -6,6 +6,7 @@
 #include "render.h"
 
 class HumanManager;
+class FactionManager;
 class Random;
 class World;
 
@@ -115,8 +116,9 @@ struct Settlement {
 class SettlementManager {
  public:
   void UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount,
-                   std::vector<VillageMarker>& markers);
-  void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers);
+                   std::vector<VillageMarker>& markers, FactionManager& factions);
+  void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers,
+                   FactionManager& factions);
   void RefreshBuildingStats(const World& world) { RecomputeSettlementBuildings(world); }
 
   int Count() const { return static_cast<int>(settlements_.size()); }
@@ -127,13 +129,17 @@ class SettlementManager {
   const Settlement* Get(int settlementId) const;
   Settlement* GetMutable(int settlementId);
   int ZoneOwnerForTile(int x, int y) const;
+  int ZoneOwnerAt(int zx, int zy) const;
+  int ZoneSize() const { return zoneSize_; }
+  int ZonesX() const { return zonesX_; }
+  int ZonesY() const { return zonesY_; }
 
  private:
   void EnsureZoneBuffers(const World& world);
   void RecomputeZonePop(const World& world, const HumanManager& humans);
   void RecomputeZonePopMacro();
   void TryFoundNewSettlements(World& world, Random& rng, int dayCount,
-                              std::vector<VillageMarker>& markers);
+                              std::vector<VillageMarker>& markers, FactionManager& factions);
   void RecomputeZoneOwners(const World& world);
   void AssignHumansToSettlements(HumanManager& humans);
   void RecomputeSettlementBuildings(const World& world);
@@ -142,6 +148,7 @@ class SettlementManager {
                                       HumanManager& humans);
   void GenerateTasks(World& world, Random& rng);
   void RunSettlementEconomy(World& world, Random& rng);
+  void EnsureSettlementFactions(FactionManager& factions, Random& rng);
 
   int nextId_ = 1;
   std::vector<Settlement> settlements_;

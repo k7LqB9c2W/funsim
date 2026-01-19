@@ -9,6 +9,11 @@
 #include "humans.h"
 #include "world.h"
 
+class FactionManager;
+class SettlementManager;
+struct _TTF_Font;
+typedef struct _TTF_Font TTF_Font;
+
 struct Camera {
   float x = 0.0f;
   float y = 0.0f;
@@ -26,18 +31,23 @@ class Renderer {
   Renderer() = default;
   bool Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
             const std::string& tilesPath, const std::string& terrainOverlayPath,
-            const std::string& objectsPath, const std::string& buildingsPath);
+            const std::string& objectsPath, const std::string& buildingsPath,
+            const std::string& labelFontPath, int labelFontSize);
   void Shutdown();
   void Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
+              const SettlementManager& settlements, const FactionManager& factions,
               const Camera& camera, int windowWidth, int windowHeight,
               const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
-              bool hoverValid, int brushSize);
+              bool hoverValid, int brushSize, bool showTerritoryOverlay);
 
  private:
   void DestroyTerrainCache();
   void EnsureTerrainCache(SDL_Renderer* renderer, const World& world);
   void RebuildTerrainCache(SDL_Renderer* renderer, const World& world);
   void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
+  void ClearLabelCache();
+  void UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
+                        const FactionManager& factions);
 
   struct TerrainChunk {
     SDL_Texture* texture = nullptr;
@@ -55,6 +65,9 @@ class Renderer {
   SDL_Texture* buildingsTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
   SDL_Texture* fireTexture_ = nullptr;
+  TTF_Font* labelFont_ = nullptr;
+  bool ttfReady_ = false;
+  bool ttfOwned_ = false;
   int spriteWidth_ = 32;
   int spriteHeight_ = 32;
 
@@ -67,4 +80,15 @@ class Renderer {
   std::vector<TerrainChunk> chunks_;
   std::vector<uint8_t> landMask_;
   std::vector<int> waterDistance_;
+
+  struct LabelCacheEntry {
+    int settlementId = -1;
+    std::string text;
+    SDL_Color color{255, 255, 255, 255};
+    SDL_Texture* texture = nullptr;
+    int width = 0;
+    int height = 0;
+    bool used = false;
+  };
+  std::vector<LabelCacheEntry> labelCache_;
 };

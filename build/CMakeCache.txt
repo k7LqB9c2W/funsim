@@ -182,8 +182,20 @@ PNG_PNG_INCLUDE_DIR:PATH=C:/Users/Jacob/vcpkg/installed/x64-windows/include
 //The directory containing a CMake configuration file for SDL2.
 SDL2_DIR:PATH=C:/Users/Jacob/vcpkg/installed/x64-windows/share/sdl2
 
+//Path to a file.
+SDL2_TTF_DLL:FILEPATH=C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.dll
+
+//Path to a file.
+SDL2_TTF_INCLUDE_DIR:PATH=C:/funsim/third_party/SDL2_ttf/include
+
+//Path to a library.
+SDL2_TTF_LIBRARY:FILEPATH=C:/funsim/third_party/SDL2_ttf/lib/x64/SDL2_ttf.lib
+
 //The directory containing a CMake configuration file for SDL2_image.
 SDL2_image_DIR:PATH=C:/Users/Jacob/vcpkg/installed/x64-windows/share/SDL2_image
+
+//The directory containing a CMake configuration file for SDL2_ttf.
+SDL2_ttf_DIR:PATH=SDL2_ttf_DIR-NOTFOUND
 
 //Automatically copy dependencies into the output directory for
 // executables.
