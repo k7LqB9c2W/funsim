@@ -1,6 +1,7 @@
 #include "render.h"
 
 #include <SDL_image.h>
+#include <SDL_ttf.h>
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,9 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+
+#include "factions.h"
+#include "settlements.h"
 
 namespace {
 constexpr int kTilePx = 32;
@@ -200,12 +204,35 @@ SDL_Texture* CreateFireTexture(SDL_Renderer* renderer) {
   return texture;
 }
 
+bool SameColor(const SDL_Color& a, const SDL_Color& b) {
+  return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
 }  // namespace
 
 bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
                     const std::string& tilesPath, const std::string& terrainOverlayPath,
-                    const std::string& objectsPath, const std::string& buildingsPath) {
+                    const std::string& objectsPath, const std::string& buildingsPath,
+                    const std::string& labelFontPath, int labelFontSize) {
   Shutdown();
+
+  if (TTF_WasInit() == 0) {
+    if (TTF_Init() != 0) {
+      SDL_Log("TTF_Init failed: %s", TTF_GetError());
+    } else {
+      ttfReady_ = true;
+      ttfOwned_ = true;
+    }
+  } else {
+    ttfReady_ = true;
+  }
+
+  if (ttfReady_) {
+    labelFont_ = TTF_OpenFont(labelFontPath.c_str(), labelFontSize);
+    if (!labelFont_) {
+      SDL_Log("Failed to load label font (%s): %s", labelFontPath.c_str(), TTF_GetError());
+    }
+  }
 
   auto loadTexture = [&](const std::string& path, SDL_Texture*& texture, const char* label) {
     texture = IMG_LoadTexture(renderer, path.c_str());
@@ -304,6 +331,17 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
 
 void Renderer::Shutdown() {
   DestroyTerrainCache();
+  ClearLabelCache();
+
+  if (labelFont_) {
+    TTF_CloseFont(labelFont_);
+    labelFont_ = nullptr;
+  }
+  if (ttfOwned_) {
+    TTF_Quit();
+    ttfOwned_ = false;
+    ttfReady_ = false;
+  }
 
   if (humansTexture_) {
     SDL_DestroyTexture(humansTexture_);
@@ -350,6 +388,123 @@ void Renderer::DestroyTerrainCache() {
   chunksX_ = 0;
   chunksY_ = 0;
   terrainDirty_ = true;
+}
+
+void Renderer::ClearLabelCache() {
+  for (auto& entry : labelCache_) {
+    if (entry.texture) {
+      SDL_DestroyTexture(entry.texture);
+      entry.texture = nullptr;
+    }
+  }
+  labelCache_.clear();
+}
+
+void Renderer::UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
+                                const FactionManager& factions) {
+  if (!labelFont_) {
+    ClearLabelCache();
+    return;
+  }
+
+  const auto& list = settlements.Settlements();
+  std::vector<int> factionCounts(factions.Count() + 1, 0);
+  for (const auto& settlement : list) {
+    int factionId = settlement.factionId;
+    if (factionId > 0 && factionId < static_cast<int>(factionCounts.size())) {
+      factionCounts[factionId]++;
+    }
+  }
+
+  for (auto& entry : labelCache_) {
+    entry.used = false;
+  }
+
+  for (const auto& settlement : list) {
+    std::string label;
+    SDL_Color color{255, 255, 255, 255};
+    const Faction* faction = factions.Get(settlement.factionId);
+    if (faction) {
+      label = faction->name;
+      color.r = faction->color.r;
+      color.g = faction->color.g;
+      color.b = faction->color.b;
+      int factionId = settlement.factionId;
+      if (factionId > 0 && factionId < static_cast<int>(factionCounts.size()) &&
+          factionCounts[factionId] > 1) {
+        label += " #";
+        label += std::to_string(settlement.id);
+      }
+    } else {
+      label = "Settlement ";
+      label += std::to_string(settlement.id);
+    }
+
+    LabelCacheEntry* entry = nullptr;
+    for (auto& existing : labelCache_) {
+      if (existing.settlementId == settlement.id) {
+        entry = &existing;
+        break;
+      }
+    }
+    if (!entry) {
+      labelCache_.push_back(LabelCacheEntry{});
+      entry = &labelCache_.back();
+      entry->settlementId = settlement.id;
+    }
+
+    entry->used = true;
+    if (entry->text == label && SameColor(entry->color, color)) {
+      continue;
+    }
+
+    if (entry->texture) {
+      SDL_DestroyTexture(entry->texture);
+      entry->texture = nullptr;
+    }
+
+    SDL_Surface* surface = TTF_RenderUTF8_Blended(labelFont_, label.c_str(), color);
+    if (!surface) {
+      SDL_Log("Failed to render label text: %s", TTF_GetError());
+      entry->text = label;
+      entry->color = color;
+      entry->width = 0;
+      entry->height = 0;
+      continue;
+    }
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (!texture) {
+      SDL_Log("Failed to create label texture: %s", SDL_GetError());
+      SDL_FreeSurface(surface);
+      entry->text = label;
+      entry->color = color;
+      entry->width = 0;
+      entry->height = 0;
+      continue;
+    }
+
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+    entry->texture = texture;
+    entry->width = surface->w;
+    entry->height = surface->h;
+    entry->text = label;
+    entry->color = color;
+    SDL_FreeSurface(surface);
+  }
+
+  for (auto it = labelCache_.begin(); it != labelCache_.end();) {
+    if (!it->used) {
+      if (it->texture) {
+        SDL_DestroyTexture(it->texture);
+        it->texture = nullptr;
+      }
+      it = labelCache_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight) {
@@ -527,9 +682,10 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
 }
 
 void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
+                      const SettlementManager& settlements, const FactionManager& factions,
                       const Camera& camera, int windowWidth, int windowHeight,
                       const std::vector<VillageMarker>& villageMarkers, int hoverTileX,
-                      int hoverTileY, bool hoverValid, int brushSize) {
+                      int hoverTileY, bool hoverValid, int brushSize, bool showTerritoryOverlay) {
   const float tileSize = static_cast<float>(kTilePx);
   const float invZoom = 1.0f / camera.zoom;
 
@@ -555,6 +711,40 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
     float height = static_cast<float>(chunk.tilesHigh) * tileSize;
     SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
     SDL_RenderCopyF(renderer, chunk.texture, nullptr, &dst);
+  }
+
+  if (showTerritoryOverlay) {
+    int zoneSize = settlements.ZoneSize();
+    int zonesX = settlements.ZonesX();
+    int zonesY = settlements.ZonesY();
+    if (zoneSize > 0 && zonesX > 0 && zonesY > 0) {
+      int minZoneX = std::max(0, minX / zoneSize);
+      int minZoneY = std::max(0, minY / zoneSize);
+      int maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
+      int maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
+        for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
+          int ownerId = settlements.ZoneOwnerAt(zx, zy);
+          if (ownerId <= 0) continue;
+          const Settlement* settlement = settlements.Get(ownerId);
+          if (!settlement) continue;
+          const Faction* faction = factions.Get(settlement->factionId);
+          if (!faction) continue;
+
+          int tilesWide = std::min(zoneSize, world.width() - zx * zoneSize);
+          int tilesHigh = std::min(zoneSize, world.height() - zy * zoneSize);
+          float worldX = static_cast<float>(zx * zoneSize) * tileSize;
+          float worldY = static_cast<float>(zy * zoneSize) * tileSize;
+          float width = static_cast<float>(tilesWide) * tileSize;
+          float height = static_cast<float>(tilesHigh) * tileSize;
+
+          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, 70);
+          SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
+          SDL_RenderFillRectF(renderer, &dst);
+        }
+      }
+    }
   }
 
   if (buildingsTexture_) {
@@ -674,6 +864,36 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
 
     SDL_FRect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
     SDL_RenderCopyF(renderer, humansTexture_, &humanSrc, &dst);
+  }
+
+  if (labelFont_) {
+    UpdateLabelCache(renderer, settlements, factions);
+    const int padding = 3;
+    for (const auto& entry : labelCache_) {
+      if (!entry.texture) continue;
+      const Settlement* settlement = settlements.Get(entry.settlementId);
+      if (!settlement) continue;
+      if (settlement->centerX < minX || settlement->centerX > maxX ||
+          settlement->centerY < minY || settlement->centerY > maxY) {
+        continue;
+      }
+
+      float worldX = settlement->centerX * tileSize + tileSize * 0.5f - entry.width * 0.5f;
+      float worldY = settlement->centerY * tileSize - entry.height - tileSize * 0.3f;
+      float bgX = worldX - padding;
+      float bgY = worldY - padding;
+      float bgW = entry.width + padding * 2.0f;
+      float bgH = entry.height + padding * 2.0f;
+
+      SDL_FRect bgDst = MakeDstRect(bgX, bgY, bgW, bgH, camera);
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+      SDL_RenderFillRectF(renderer, &bgDst);
+
+      SDL_FRect dst = MakeDstRect(worldX, worldY, static_cast<float>(entry.width),
+                                  static_cast<float>(entry.height), camera);
+      SDL_RenderCopyF(renderer, entry.texture, nullptr, &dst);
+    }
   }
 
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);

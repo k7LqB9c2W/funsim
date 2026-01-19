@@ -2,6 +2,9 @@
 
 #include "tools.h"
 
+class FactionManager;
+class SettlementManager;
+
 struct SimStats {
   int dayCount = 0;
   int totalPop = 0;
@@ -26,6 +29,16 @@ struct UIState {
   bool paused = false;
   int speedIndex = 0;
   bool stepDay = false;
+  bool showTerritoryOverlay = true;
 };
 
-void DrawUI(UIState& state, const SimStats& stats);
+struct HoverInfo {
+  bool valid = false;
+  int tileX = 0;
+  int tileY = 0;
+  int settlementId = -1;
+  int factionId = -1;
+};
+
+void DrawUI(UIState& state, const SimStats& stats, const FactionManager& factions,
+            const SettlementManager& settlements, const HoverInfo& hover);

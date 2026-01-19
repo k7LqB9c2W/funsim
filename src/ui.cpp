@@ -2,6 +2,9 @@
 
 #include <imgui.h>
 
+#include "factions.h"
+#include "settlements.h"
+
 namespace {
 const ToolType kToolOrder[] = {
     ToolType::PlaceLand,     ToolType::PlaceFreshWater, ToolType::AddTrees,
@@ -10,7 +13,8 @@ const ToolType kToolOrder[] = {
 };
 }  // namespace
 
-void DrawUI(UIState& state, const SimStats& stats) {
+void DrawUI(UIState& state, const SimStats& stats, const FactionManager& factions,
+            const SettlementManager& settlements, const HoverInfo& hover) {
   state.stepDay = false;
 
   ImGui::Begin("Tools");
@@ -29,6 +33,10 @@ void DrawUI(UIState& state, const SimStats& stats) {
   ImGui::RadioButton("3", &state.brushSize, 3);
   ImGui::SameLine();
   ImGui::RadioButton("5", &state.brushSize, 5);
+
+  ImGui::Separator();
+  ImGui::Text("View");
+  ImGui::Checkbox("Show Territory", &state.showTerritoryOverlay);
 
   ImGui::Separator();
   if (ImGui::Button(state.paused ? "Play" : "Pause")) {
@@ -71,5 +79,56 @@ void DrawUI(UIState& state, const SimStats& stats) {
   ImGui::Separator();
   ImGui::Text("Left click: apply tool");
   ImGui::Text("Right click: erase");
+  ImGui::End();
+
+  ImGui::Begin("Kingdoms");
+  if (hover.valid && hover.settlementId > 0) {
+    const Settlement* settlement = settlements.Get(hover.settlementId);
+    const Faction* faction = factions.Get(hover.factionId);
+    if (settlement && faction) {
+      ImVec4 color(faction->color.r / 255.0f, faction->color.g / 255.0f,
+                   faction->color.b / 255.0f, 1.0f);
+      ImGui::Text("Hover: (%d, %d)", hover.tileX, hover.tileY);
+      ImGui::TextColored(color, "%s", faction->name.c_str());
+      ImGui::Text("Leader: %s %s", faction->leaderTitle.c_str(), faction->leaderName.c_str());
+      ImGui::Text("Ideology: %s", faction->ideology.c_str());
+      ImGui::Text("Settlement %d | Pop %d | Stock %d food, %d wood", settlement->id,
+                  settlement->population, settlement->stockFood, settlement->stockWood);
+      ImGui::Separator();
+    }
+  }
+
+  if (factions.Count() == 0) {
+    ImGui::Text("No kingdoms yet.");
+    ImGui::End();
+    return;
+  }
+
+  for (const auto& faction : factions.Factions()) {
+    ImVec4 color(faction.color.r / 255.0f, faction.color.g / 255.0f,
+                 faction.color.b / 255.0f, 1.0f);
+    ImGui::Separator();
+    ImGui::TextColored(color, "%s", faction.name.c_str());
+    ImGui::Text("Leader: %s %s", faction.leaderTitle.c_str(), faction.leaderName.c_str());
+    ImGui::Text("Ideology: %s", faction.ideology.c_str());
+    ImGui::Text("Traits: %s, %s", FactionTemperamentName(faction.traits.temperament),
+                FactionOutlookName(faction.traits.outlook));
+    ImGui::Text("Population: %d", faction.stats.population);
+    ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
+                faction.stats.territoryZones);
+    ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
+
+    ImGui::PushID(faction.id);
+    if (ImGui::TreeNode("Relations")) {
+      for (const auto& other : factions.Factions()) {
+        if (other.id == faction.id) continue;
+        int score = factions.RelationScore(faction.id, other.id);
+        const char* rel = FactionRelationName(factions.RelationType(faction.id, other.id));
+        ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
+      }
+      ImGui::TreePop();
+    }
+    ImGui::PopID();
+  }
   ImGui::End();
 }
