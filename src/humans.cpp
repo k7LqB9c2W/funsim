@@ -23,6 +23,7 @@ constexpr int kFoodGraceDays = 21;
 constexpr int kFoodMaxDays = 35;
 constexpr int kWaterGraceDays = 3;
 constexpr int kWaterMaxDays = 7;
+constexpr int kCarryFoodEmergencyDays = 3;
 
 constexpr int kMacroBins = 6;
 constexpr int kMacroBinDays[kMacroBins] = {365, 4 * 365, 13 * 365, 22 * 365, 20 * 365, 200 * 365};
@@ -85,6 +86,14 @@ bool TaskTargetsTile(TaskType type) {
     default:
       return false;
   }
+}
+
+bool SameFaction(const SettlementManager& settlements, int settlementA, int settlementB) {
+  if (settlementA <= 0 || settlementB <= 0) return false;
+  const Settlement* a = settlements.Get(settlementA);
+  const Settlement* b = settlements.Get(settlementB);
+  if (!a || !b) return false;
+  return a->factionId == b->factionId;
 }
 
 int BuildWoodCost(BuildingType type) {
@@ -388,6 +397,8 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
   bool thirsty = human.daysWithoutWater >= 2;
   bool hungry = human.daysWithoutFood >= 2;
   bool emergency = nearFire || thirsty || hungry;
+  bool haulingFood = human.hasTask && human.taskType == TaskType::HaulToStockpile &&
+                     human.carryFood > 0;
 
   if (nearFire && human.goal != Goal::FleeFire) {
     human.goal = Goal::FleeFire;
@@ -401,11 +412,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     human.mateTargetId = -1;
     human.forceReplan = true;
   } else if (hungry && human.goal != Goal::SeekFood) {
-    human.goal = Goal::SeekFood;
-    if (human.hasTask && !human.carrying && human.taskType != TaskType::CollectFood &&
-        human.taskType != TaskType::HarvestFarm) {
-      human.hasTask = false;
-      human.forceReplan = true;
+    if (haulingFood) {
+      human.goal = Goal::StayHome;
+      human.targetX = human.taskX;
+      human.targetY = human.taskY;
+    } else {
+      human.goal = Goal::SeekFood;
+      if (human.hasTask && !human.carrying && human.taskType != TaskType::CollectFood &&
+          human.taskType != TaskType::HarvestFarm) {
+        human.hasTask = false;
+        human.forceReplan = true;
+      }
     }
   }
 
@@ -432,11 +449,23 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
   }
 
-  if (!emergency && !human.hasTask && human.settlementId != -1) {
+  if (!human.hasTask && human.settlementId != -1) {
     Settlement* settlement = settlements.GetMutable(human.settlementId);
     if (settlement) {
       Task task;
-      if (settlement->PopTask(task)) {
+      int attempts = 0;
+      bool allowFoodTask = emergency;
+      bool picked = false;
+      while (attempts < 4 && settlement->PopTask(task)) {
+        attempts++;
+        if (!allowFoodTask ||
+            task.type == TaskType::CollectFood || task.type == TaskType::HarvestFarm ||
+            task.type == TaskType::PlantFarm) {
+          picked = true;
+          break;
+        }
+      }
+      if (picked) {
         human.hasTask = true;
         human.taskType = task.type;
         human.taskX = task.x;
@@ -654,7 +683,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
           settlement->stockWood = std::max(0, settlement->stockWood - cost);
           tile.building = human.taskBuildType;
           tile.buildingOwnerId = settlement->id;
-          tile.farmStage = 0;
+          tile.farmStage = (human.taskBuildType == BuildingType::Farm) ? 1 : 0;
           tile.trees = 0;
           tile.food = 0;
           tile.burning = false;
@@ -831,18 +860,30 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       int eatX = human.x;
       int eatY = human.y;
 
-      if (settlement && settlement->stockFood > 0) {
-        settlement->stockFood--;
-        ate = true;
-      } else if (tile.food > 0) {
-        tile.food--;
-        ate = true;
-      } else if (tile.building == BuildingType::Farm &&
-                 tile.farmStage >= Settlement::kFarmReadyStage &&
-                 (human.settlementId == -1 || tile.buildingOwnerId == human.settlementId)) {
-        tile.farmStage = 0;
-        ate = true;
-      } else {
+        if (settlement && settlement->stockFood > 0) {
+          settlement->stockFood--;
+          ate = true;
+        } else if (tile.food > 0) {
+          tile.food--;
+          ate = true;
+        } else if (tile.building == BuildingType::Farm &&
+                   tile.farmStage >= Settlement::kFarmReadyStage &&
+                   (human.settlementId == -1 || tile.buildingOwnerId == human.settlementId ||
+                    SameFaction(settlements, human.settlementId, tile.buildingOwnerId))) {
+          int yield = Settlement::kFarmYield;
+          int remaining = std::max(0, yield - 1);
+          if (remaining > 0) {
+            human.carryFood += remaining;
+            human.carrying = true;
+            human.hasTask = true;
+            human.taskType = TaskType::HaulToStockpile;
+            human.taskX = human.homeX;
+            human.taskY = human.homeY;
+            human.taskSettlementId = human.settlementId;
+          }
+          tile.farmStage = 0;
+          ate = true;
+        } else {
         const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
         for (const auto& d : dirs) {
           int nx = human.x + d[0];
@@ -858,7 +899,19 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
           }
           if (neighbor.building == BuildingType::Farm &&
               neighbor.farmStage >= Settlement::kFarmReadyStage &&
-              (human.settlementId == -1 || neighbor.buildingOwnerId == human.settlementId)) {
+              (human.settlementId == -1 || neighbor.buildingOwnerId == human.settlementId ||
+               SameFaction(settlements, human.settlementId, neighbor.buildingOwnerId))) {
+            int yield = Settlement::kFarmYield;
+            int remaining = std::max(0, yield - 1);
+            if (remaining > 0) {
+              human.carryFood += remaining;
+              human.carrying = true;
+              human.hasTask = true;
+              human.taskType = TaskType::HaulToStockpile;
+              human.taskX = human.homeX;
+              human.taskY = human.homeY;
+              human.taskSettlementId = human.settlementId;
+            }
             neighbor.farmStage = 0;
             ate = true;
             eatX = nx;
@@ -866,6 +919,12 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             break;
           }
         }
+      }
+
+      if (!ate && human.carryFood > 0 && human.daysWithoutFood >= kCarryFoodEmergencyDays) {
+        human.carryFood--;
+        human.carrying = (human.carryFood > 0 || human.carryWood > 0);
+        ate = true;
       }
 
       if (ate) {

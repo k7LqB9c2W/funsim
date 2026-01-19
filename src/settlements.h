@@ -37,7 +37,7 @@ struct Settlement {
   static constexpr int kHouseWoodCost = 10;
   static constexpr int kFarmWoodCost = 6;
   static constexpr int kTownHallWoodCost = 18;
-  static constexpr int kFarmYield = 8;
+  static constexpr int kFarmYield = 24;
   static constexpr int kFarmReadyStage = 3;
 
   int id = 0;
@@ -55,6 +55,8 @@ struct Settlement {
   int ageDays = 0;
   int houses = 0;
   int farms = 0;
+  int farmsPlanted = 0;
+  int farmsReady = 0;
   int townHalls = 0;
   int housingCap = 0;
   int waterTargetX = 0;
