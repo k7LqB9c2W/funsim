@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <cstdlib>
+
 #include <imgui.h>
 
 #include "factions.h"
@@ -33,6 +35,10 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   ImGui::RadioButton("3", &state.brushSize, 3);
   ImGui::SameLine();
   ImGui::RadioButton("5", &state.brushSize, 5);
+  ImGui::SameLine();
+  ImGui::RadioButton("10", &state.brushSize, 10);
+  ImGui::SameLine();
+  ImGui::RadioButton("15", &state.brushSize, 15);
 
   ImGui::Separator();
   ImGui::Text("View");
@@ -101,34 +107,80 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   if (factions.Count() == 0) {
     ImGui::Text("No kingdoms yet.");
     ImGui::End();
+  } else {
+    for (const auto& faction : factions.Factions()) {
+      ImVec4 color(faction.color.r / 255.0f, faction.color.g / 255.0f,
+                   faction.color.b / 255.0f, 1.0f);
+      ImGui::Separator();
+      ImGui::TextColored(color, "%s", faction.name.c_str());
+      ImGui::Text("Leader: %s %s", faction.leaderTitle.c_str(), faction.leaderName.c_str());
+      ImGui::Text("Ideology: %s", faction.ideology.c_str());
+      ImGui::Text("Traits: %s, %s", FactionTemperamentName(faction.traits.temperament),
+                  FactionOutlookName(faction.traits.outlook));
+      ImGui::Text("Population: %d", faction.stats.population);
+      ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
+                  faction.stats.territoryZones);
+      ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
+
+      ImGui::PushID(faction.id);
+      if (ImGui::TreeNode("Relations")) {
+        for (const auto& other : factions.Factions()) {
+          if (other.id == faction.id) continue;
+          int score = factions.RelationScore(faction.id, other.id);
+          const char* rel = FactionRelationName(factions.RelationType(faction.id, other.id));
+          ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
+        }
+        ImGui::TreePop();
+      }
+      ImGui::PopID();
+    }
+    ImGui::End();
+  }
+
+  ImGui::Begin("Settlement Economy");
+  if (settlements.Count() == 0) {
+    ImGui::Text("No settlements yet.");
+    ImGui::End();
     return;
   }
 
-  for (const auto& faction : factions.Factions()) {
-    ImVec4 color(faction.color.r / 255.0f, faction.color.g / 255.0f,
-                 faction.color.b / 255.0f, 1.0f);
+  for (const auto& settlement : settlements.Settlements()) {
     ImGui::Separator();
-    ImGui::TextColored(color, "%s", faction.name.c_str());
-    ImGui::Text("Leader: %s %s", faction.leaderTitle.c_str(), faction.leaderName.c_str());
-    ImGui::Text("Ideology: %s", faction.ideology.c_str());
-    ImGui::Text("Traits: %s, %s", FactionTemperamentName(faction.traits.temperament),
-                FactionOutlookName(faction.traits.outlook));
-    ImGui::Text("Population: %d", faction.stats.population);
-    ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
-                faction.stats.territoryZones);
-    ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
-
-    ImGui::PushID(faction.id);
-    if (ImGui::TreeNode("Relations")) {
-      for (const auto& other : factions.Factions()) {
-        if (other.id == faction.id) continue;
-        int score = factions.RelationScore(faction.id, other.id);
-        const char* rel = FactionRelationName(factions.RelationType(faction.id, other.id));
-        ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
-      }
-      ImGui::TreePop();
+    const Faction* faction = factions.Get(settlement.factionId);
+    if (faction) {
+      ImVec4 color(faction->color.r / 255.0f, faction->color.g / 255.0f,
+                   faction->color.b / 255.0f, 1.0f);
+      ImGui::TextColored(color, "Settlement %d (%s)", settlement.id, faction->name.c_str());
+    } else {
+      ImGui::Text("Settlement %d", settlement.id);
     }
-    ImGui::PopID();
+
+    ImGui::Text("Population: %d | Stock Food: %d | Stock Wood: %d", settlement.population,
+                settlement.stockFood, settlement.stockWood);
+    ImGui::Text("Farms: %d total | %d planted | %d ready", settlement.farms, settlement.farmsPlanted,
+                settlement.farmsReady);
+    ImGui::Text("Farmers: %d | Gatherers: %d", settlement.farmers, settlement.gatherers);
+
+    int harvestTasks = 0;
+    int haulDistanceSum = 0;
+    int haulDistanceCount = 0;
+    for (int idx = settlement.taskHead; idx != settlement.taskTail;
+         idx = (idx + 1) % Settlement::kTaskCap) {
+      const Task& task = settlement.tasks[idx];
+      if (task.type == TaskType::HarvestFarm) {
+        harvestTasks++;
+      }
+      if (task.type == TaskType::HarvestFarm || task.type == TaskType::CollectFood) {
+        int dist = std::abs(task.x - settlement.centerX) + std::abs(task.y - settlement.centerY);
+        haulDistanceSum += dist;
+        haulDistanceCount++;
+      }
+    }
+
+    float avgHaul = (haulDistanceCount > 0)
+                        ? static_cast<float>(haulDistanceSum) / static_cast<float>(haulDistanceCount)
+                        : 0.0f;
+    ImGui::Text("Harvest Tasks: %d | Avg Haul Dist: %.1f", harvestTasks, avgHaul);
   }
   ImGui::End();
 }

@@ -11,9 +11,9 @@
 #include "world.h"
 
 namespace {
-constexpr int kZonePopThreshold = 14;
-constexpr int kZoneRequiredDays = 6;
-constexpr int kMinVillageDistTiles = 24;
+constexpr int kZonePopThreshold = 10;
+constexpr int kZoneRequiredDays = 3;
+constexpr int kMinVillageDistTiles = 16;
 constexpr int kClaimRadiusTiles = 40;
 
 constexpr int kGatherRadius = 12;
@@ -27,6 +27,9 @@ constexpr int kDesiredWoodPerPop = 2;
 constexpr int kFarmsPerPop = 3;
 constexpr int kWaterSearchRadius = 28;
 constexpr int kFactionLinkRadiusTiles = 96;
+constexpr int kEmergencyFoodPerPop = 2;
+constexpr int kEmergencyFarmerPct = 35;
+constexpr int kEmergencyGathererPct = 35;
 
 uint32_t Hash32(uint32_t a, uint32_t b) {
   uint32_t h = a * 0x9E3779B9u;
@@ -370,6 +373,8 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
   for (auto& settlement : settlements_) {
     settlement.houses = 0;
     settlement.farms = 0;
+    settlement.farmsPlanted = 0;
+    settlement.farmsReady = 0;
     settlement.townHalls = 0;
     settlement.housingCap = 0;
   }
@@ -389,6 +394,12 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
           break;
         case BuildingType::Farm:
           settlement.farms++;
+          if (tile.farmStage > 0) {
+            settlement.farmsPlanted++;
+          }
+          if (tile.farmStage >= Settlement::kFarmReadyStage) {
+            settlement.farmsReady++;
+          }
           break;
         case BuildingType::TownHall:
           settlement.townHalls++;
@@ -524,6 +535,31 @@ void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng
 
     int guards = pop * (nearFire ? 8 : 2) / 100;
 
+    bool foodEmergency = settlement.stockFood < pop * kEmergencyFoodPerPop;
+    if (foodEmergency) {
+      int desiredFarmers = std::max(farmers, (pop * kEmergencyFarmerPct) / 100);
+      desiredFarmers = std::min(desiredFarmers, settlement.farms * 2);
+      int desiredGatherers = std::max(gatherers, (pop * kEmergencyGathererPct) / 100);
+
+      int neededFarmers = std::max(0, desiredFarmers - farmers);
+      int neededGatherers = std::max(0, desiredGatherers - gatherers);
+      int needed = neededFarmers + neededGatherers;
+      if (needed > 0) {
+        int available = std::min(needed, builders + guards);
+        int shiftGuards = std::min(guards, available);
+        guards -= shiftGuards;
+        available -= shiftGuards;
+        int shiftBuilders = std::min(builders, available);
+        builders -= shiftBuilders;
+        int shifted = shiftGuards + shiftBuilders;
+        int addFarmers = std::min(neededFarmers, shifted);
+        farmers += addFarmers;
+        shifted -= addFarmers;
+        int addGatherers = std::min(neededGatherers, shifted);
+        gatherers += addGatherers;
+      }
+    }
+
     int assigned = farmers + gatherers + builders + guards;
     if (assigned > pop) {
       int overflow = assigned - pop;
@@ -581,10 +617,12 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
     int pop = settlement.population;
     if (pop <= 0) continue;
 
-    int available = Settlement::kTaskCap - 1 - settlement.TaskCount();
+    int taskCount = settlement.TaskCount();
+    int available = Settlement::kTaskCap - 1 - taskCount;
     if (available <= 0) continue;
 
-    if (settlement.TaskCount() > Settlement::kTaskCap / 2) continue;
+    bool foodEmergency = settlement.stockFood < pop * kEmergencyFoodPerPop;
+    if (taskCount > Settlement::kTaskCap / 2 && !foodEmergency) continue;
 
     int desiredFood = pop * kDesiredFoodPerPop;
     int desiredWood = pop * kDesiredWoodPerPop;
@@ -657,7 +695,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
     }
 
     if (settlement.farms > 0 && available > 0) {
-      int tasksToPush = std::min(available, std::max(1, settlement.farmers));
+      int tasksToPush = std::min(available, std::max(2, settlement.farmers * 2));
       for (int i = 0; i < tasksToPush; ++i) {
         int bestX = -1;
         int bestY = -1;
@@ -733,7 +771,49 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
       }
     }
 
-    if (settlement.housingCap < desiredHousing && available > 0 &&
+    if (settlement.farms < desiredFarms && available > 0 &&
+        settlement.stockWood >= Settlement::kFarmWoodCost) {
+      int farmsNeeded = desiredFarms - settlement.farms;
+      int builderBudget = settlement.builders + 1;
+      if (foodEmergency) {
+        builderBudget = std::max(builderBudget, settlement.builders + settlement.idle / 2);
+      }
+      int tasksToPush = std::min(farmsNeeded, std::min(available, builderBudget));
+      for (int i = 0; i < tasksToPush; ++i) {
+        int bestX = -1;
+        int bestY = -1;
+        int bestScore = std::numeric_limits<int>::min();
+
+        for (int sample = 0; sample < 12; ++sample) {
+          int dx = rng.RangeInt(-kFarmBuildRadius, kFarmBuildRadius);
+          int dy = rng.RangeInt(-kFarmBuildRadius, kFarmBuildRadius);
+          int x = settlement.centerX + dx;
+          int y = settlement.centerY + dy;
+          if (!IsBuildableTile(world, x, y)) continue;
+          const Tile& tile = world.At(x, y);
+          int score = static_cast<int>(world.WaterScentAt(x, y)) - tile.trees * 4;
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = x;
+            bestY = y;
+          }
+        }
+
+        if (bestX == -1 || bestY == -1) break;
+        Task task;
+        task.type = TaskType::BuildStructure;
+        task.x = bestX;
+        task.y = bestY;
+        task.amount = 0;
+        task.settlementId = settlement.id;
+        task.buildType = BuildingType::Farm;
+        if (!settlement.PushTask(task)) break;
+        available--;
+        if (available <= 0) break;
+      }
+    }
+
+    if (!foodEmergency && settlement.housingCap < desiredHousing && available > 0 &&
         settlement.stockWood >= Settlement::kHouseWoodCost) {
       int needed = desiredHousing - settlement.housingCap;
       int housesNeeded = (needed + Settlement::kHouseCapacity - 1) / Settlement::kHouseCapacity;
@@ -767,44 +847,6 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
         task.amount = 0;
         task.settlementId = settlement.id;
         task.buildType = BuildingType::House;
-        if (!settlement.PushTask(task)) break;
-        available--;
-        if (available <= 0) break;
-      }
-    }
-
-    if (settlement.farms < desiredFarms && available > 0 &&
-        settlement.stockWood >= Settlement::kFarmWoodCost) {
-      int farmsNeeded = desiredFarms - settlement.farms;
-      int tasksToPush = std::min(farmsNeeded, std::min(available, settlement.builders + 1));
-      for (int i = 0; i < tasksToPush; ++i) {
-        int bestX = -1;
-        int bestY = -1;
-        int bestScore = std::numeric_limits<int>::min();
-
-        for (int sample = 0; sample < 12; ++sample) {
-          int dx = rng.RangeInt(-kFarmBuildRadius, kFarmBuildRadius);
-          int dy = rng.RangeInt(-kFarmBuildRadius, kFarmBuildRadius);
-          int x = settlement.centerX + dx;
-          int y = settlement.centerY + dy;
-          if (!IsBuildableTile(world, x, y)) continue;
-          const Tile& tile = world.At(x, y);
-          int score = static_cast<int>(world.WaterScentAt(x, y)) - tile.trees * 4;
-          if (score > bestScore) {
-            bestScore = score;
-            bestX = x;
-            bestY = y;
-          }
-        }
-
-        if (bestX == -1 || bestY == -1) break;
-        Task task;
-        task.type = TaskType::BuildStructure;
-        task.x = bestX;
-        task.y = bestY;
-        task.amount = 0;
-        task.settlementId = settlement.id;
-        task.buildType = BuildingType::Farm;
         if (!settlement.PushTask(task)) break;
         available--;
         if (available <= 0) break;
@@ -926,7 +968,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     Tile& tile = world.At(bestX, bestY);
     tile.building = type;
     tile.buildingOwnerId = settlement.id;
-    tile.farmStage = 0;
+    tile.farmStage = (type == BuildingType::Farm) ? 1 : 0;
     tile.trees = 0;
     tile.food = 0;
     tile.burning = false;
