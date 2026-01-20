@@ -18,19 +18,19 @@ constexpr int kClaimRadiusTiles = 40;
 
 constexpr int kGatherRadius = 12;
 constexpr int kWoodRadius = 12;
-constexpr int kHouseBuildRadius = 10;
+constexpr int kHouseBuildRadius = 16;
 constexpr int kFarmBuildRadius = 12;
 constexpr int kFarmWorkRadius = 14;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGranaryBuildRadius = 4;
 constexpr int kFarGatherRadius = 24;
-constexpr int kHousingBuffer = 2;
+constexpr int kHousingBuffer = 10;
 constexpr int kDesiredFoodPerPop = 60;
-constexpr int kDesiredWoodPerPop = 2;
+constexpr int kDesiredWoodPerPop = 4;
 constexpr int kFarmsPerPop = 3;
 constexpr int kWaterSearchRadius = 28;
 constexpr int kFactionLinkRadiusTiles = 96;
-constexpr int kEmergencyFoodPerPop = 20;
+constexpr int kEmergencyFoodPerPop = 12;
 constexpr int kEmergencyFarmerPct = 60;
 constexpr int kEmergencyGathererPct = 60;
 
@@ -525,7 +525,10 @@ void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng
     int farmers = std::min(pop, settlement.farms * 2);
     int gatherers = (pop * 25) / 100;
     if (pop >= 6 && gatherers < 1) gatherers = 1;
-    int builders = (settlement.stockFood > pop * 3) ? (pop * 12) / 100 : (pop * 5) / 100;
+    int builders = (settlement.stockFood > pop * 3) ? (pop * 20) / 100 : (pop * 10) / 100;
+    if (settlement.housingCap < pop + kHousingBuffer) {
+      builders = std::max(builders, std::max(1, (pop * 25) / 100));
+    }
 
     bool nearFire = false;
     for (int dy = -10; dy <= 10 && !nearFire; ++dy) {
@@ -950,11 +953,15 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
       }
     }
 
-    if (!foodEmergency && settlement.housingCap < desiredHousing && available > 0 &&
+    if (settlement.housingCap < desiredHousing && available > 0 &&
         settlement.stockWood >= Settlement::kHouseWoodCost) {
       int needed = desiredHousing - settlement.housingCap;
       int housesNeeded = (needed + Settlement::kHouseCapacity - 1) / Settlement::kHouseCapacity;
-      int tasksToPush = std::min(housesNeeded, std::min(available, settlement.builders + 1));
+      int builderBudget = settlement.builders + std::max(1, settlement.idle / 2);
+      if (settlement.housingCap < pop) {
+        builderBudget = std::max(builderBudget, settlement.builders + settlement.idle);
+      }
+      int tasksToPush = std::min(housesNeeded, std::min(available, builderBudget));
       for (int i = 0; i < tasksToPush; ++i) {
         int bestX = -1;
         int bestY = -1;
@@ -1125,7 +1132,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
       }
     }
 
-    int houseBudget = 2;
+    int houseBudget = 6;
     while (houseBudget > 0 && settlement.housingCap < desiredHousing &&
            settlement.stockWood >= Settlement::kHouseWoodCost) {
       if (!placeBuilding(settlement, BuildingType::House, kHouseBuildRadius)) break;
