@@ -32,9 +32,9 @@ struct Task {
 
 struct Settlement {
   static constexpr int kTaskCap = 2048;
-  static constexpr int kHouseCapacity = 4;
+  static constexpr int kHouseCapacity = 10;
   static constexpr int kTownHallCapacity = 8;
-  static constexpr int kHouseWoodCost = 10;
+  static constexpr int kHouseWoodCost = 6;
   static constexpr int kFarmWoodCost = 6;
   static constexpr int kGranaryWoodCost = 6;
   static constexpr int kTownHallWoodCost = 18;
