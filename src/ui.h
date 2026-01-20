@@ -31,6 +31,10 @@ struct UIState {
   int speedIndex = 0;
   bool stepDay = false;
   bool showTerritoryOverlay = true;
+  bool wholeMapView = false;
+  bool saveMap = false;
+  bool loadMap = false;
+  char mapPath[256] = "maps/map.fmap";
 };
 
 struct HoverInfo {

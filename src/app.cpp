@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 
 #include <imgui.h>
 #include <backends/imgui_impl_sdl2.h>
@@ -142,9 +143,13 @@ void App::HandleEvents() {
     if (event.type == SDL_QUIT) {
       running_ = false;
     } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
-      ClampCamera();
+      if (ui_.wholeMapView) {
+        FitCameraToWorld();
+      } else {
+        ClampCamera();
+      }
     } else if (event.type == SDL_MOUSEWHEEL) {
-      if (ImGui::GetIO().WantCaptureMouse) {
+      if (ImGui::GetIO().WantCaptureMouse || ui_.wholeMapView) {
         continue;
       }
       int mouseX = 0;
@@ -170,7 +175,20 @@ void App::HandleEvents() {
 void App::Update(float dt) {
   ImGuiIO& io = ImGui::GetIO();
 
-  if (!io.WantCaptureKeyboard) {
+  if (ui_.saveMap) {
+    if (!SaveMap(ui_.mapPath)) {
+      SDL_Log("Failed to save map: %s", ui_.mapPath);
+    }
+  }
+  if (ui_.loadMap) {
+    if (!LoadMap(ui_.mapPath)) {
+      SDL_Log("Failed to load map: %s", ui_.mapPath);
+    }
+  }
+
+  UpdateWholeMapView();
+
+  if (!io.WantCaptureKeyboard && !ui_.wholeMapView) {
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
     float move = 500.0f * dt / camera_.zoom;
     if (keys[SDL_SCANCODE_W] || keys[SDL_SCANCODE_UP]) camera_.y -= move;
@@ -451,6 +469,111 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
     worldDirty_ = true;
   }
   CrashContextSetNote("");
+}
+
+void App::ResetSimulationState() {
+  humans_ = HumanManager();
+  settlements_ = SettlementManager();
+  factions_ = FactionManager();
+  villageMarkers_.clear();
+  stats_ = SimStats{};
+  tickCount_ = 0;
+  accumulator_ = 0.0;
+  macroActive_ = false;
+  hoverValid_ = false;
+  hoverInfo_ = HoverInfo{};
+  worldDirty_ = true;
+  CrashContextSetDay(0);
+  CrashContextSetPopulation(0);
+}
+
+void App::ResetCameraToWorld() {
+  int winW = 0;
+  int winH = 0;
+  SDL_GetWindowSize(window_, &winW, &winH);
+
+  camera_.zoom = 1.0f;
+  camera_.x = (world_.width() * kTileSize - winW) * 0.5f;
+  camera_.y = (world_.height() * kTileSize - winH) * 0.5f;
+  ClampCamera();
+}
+
+void App::FitCameraToWorld() {
+  int winW = 0;
+  int winH = 0;
+  SDL_GetWindowSize(window_, &winW, &winH);
+
+  float worldW = world_.width() * static_cast<float>(kTileSize);
+  float worldH = world_.height() * static_cast<float>(kTileSize);
+  if (worldW <= 0.0f || worldH <= 0.0f || winW <= 0 || winH <= 0) {
+    return;
+  }
+
+  float zoomX = static_cast<float>(winW) / worldW;
+  float zoomY = static_cast<float>(winH) / worldH;
+  float zoom = std::min(zoomX, zoomY);
+  if (zoom <= 0.0f) {
+    return;
+  }
+
+  camera_.zoom = zoom;
+  float viewW = winW / camera_.zoom;
+  float viewH = winH / camera_.zoom;
+  camera_.x = (worldW - viewW) * 0.5f;
+  camera_.y = (worldH - viewH) * 0.5f;
+  camera_.x = std::floor(camera_.x + 0.5f);
+  camera_.y = std::floor(camera_.y + 0.5f);
+}
+
+void App::UpdateWholeMapView() {
+  if (ui_.wholeMapView) {
+    if (!wholeMapViewActive_) {
+      savedCamera_ = camera_;
+      wholeMapViewActive_ = true;
+    }
+    FitCameraToWorld();
+  } else if (wholeMapViewActive_) {
+    camera_ = savedCamera_;
+    wholeMapViewActive_ = false;
+    ClampCamera();
+  }
+}
+
+bool App::SaveMap(const char* path) const {
+  if (!path || !path[0]) {
+    return false;
+  }
+
+  std::filesystem::path outPath(path);
+  if (outPath.has_parent_path()) {
+    std::error_code ec;
+    std::filesystem::create_directories(outPath.parent_path(), ec);
+  }
+
+  return world_.SaveMap(outPath.string());
+}
+
+bool App::LoadMap(const char* path) {
+  if (!path || !path[0]) {
+    return false;
+  }
+
+  if (!world_.LoadMap(path)) {
+    return false;
+  }
+
+  ResetSimulationState();
+  CrashContextSetWorld(world_.width(), world_.height());
+
+  ResetCameraToWorld();
+  savedCamera_ = camera_;
+  wholeMapViewActive_ = ui_.wholeMapView;
+  if (ui_.wholeMapView) {
+    FitCameraToWorld();
+  }
+
+  RefreshTotals();
+  return true;
 }
 
 bool App::ScreenToTile(int screenX, int screenY, int& tileX, int& tileY) const {

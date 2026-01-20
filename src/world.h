@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "util.h"
@@ -56,6 +57,9 @@ class World {
   uint16_t WaterScentAt(int x, int y) const;
   uint16_t FireRiskAt(int x, int y) const;
   uint16_t HomeScentAt(int x, int y) const;
+
+  bool SaveMap(const std::string& path) const;
+  bool LoadMap(const std::string& path);
 
  private:
   int width_ = 0;
