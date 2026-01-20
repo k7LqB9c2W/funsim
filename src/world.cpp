@@ -1,6 +1,10 @@
 #include "world.h"
 
 #include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <limits>
+#include <utility>
 #include <vector>
 
 #include "settlements.h"
@@ -9,6 +13,14 @@ namespace {
 constexpr int kFireDuration = 4;
 constexpr float kFarmGrowBaseChance = 0.85f;
 constexpr float kFarmGrowWaterBonus = 0.95f;
+
+constexpr char kMapMagic[8] = {'F', 'S', 'M', 'A', 'P', '0', '1', '\0'};
+
+struct MapHeader {
+  char magic[8];
+  uint32_t width = 0;
+  uint32_t height = 0;
+};
 }  // namespace
 
 World::World(int width, int height)
@@ -278,4 +290,94 @@ void World::RecomputeHomeField(const SettlementManager& settlements) {
   };
 
   relaxField(baseHome_, homeScent_);
+}
+
+bool World::SaveMap(const std::string& path) const {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out.is_open()) {
+    return false;
+  }
+
+  MapHeader header{};
+  std::memcpy(header.magic, kMapMagic, sizeof(header.magic));
+  header.width = static_cast<uint32_t>(width_);
+  header.height = static_cast<uint32_t>(height_);
+  out.write(reinterpret_cast<const char*>(&header), sizeof(header));
+  if (!out.good()) {
+    return false;
+  }
+
+  for (const auto& tile : tiles_) {
+    uint8_t type = static_cast<uint8_t>(tile.type);
+    uint8_t trees = static_cast<uint8_t>(std::min(tile.trees, 255));
+    uint8_t food = static_cast<uint8_t>(std::min(tile.food, 255));
+    out.write(reinterpret_cast<const char*>(&type), sizeof(type));
+    out.write(reinterpret_cast<const char*>(&trees), sizeof(trees));
+    out.write(reinterpret_cast<const char*>(&food), sizeof(food));
+    if (!out.good()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool World::LoadMap(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.is_open()) {
+    return false;
+  }
+
+  MapHeader header{};
+  in.read(reinterpret_cast<char*>(&header), sizeof(header));
+  if (!in.good()) {
+    return false;
+  }
+  if (std::memcmp(header.magic, kMapMagic, sizeof(header.magic)) != 0) {
+    return false;
+  }
+  if (header.width == 0 || header.height == 0) {
+    return false;
+  }
+  if (header.width > std::numeric_limits<size_t>::max() / header.height) {
+    return false;
+  }
+
+  World loaded(static_cast<int>(header.width), static_cast<int>(header.height));
+  const size_t total = static_cast<size_t>(header.width) * static_cast<size_t>(header.height);
+  for (size_t i = 0; i < total; ++i) {
+    uint8_t type = 0;
+    uint8_t trees = 0;
+    uint8_t food = 0;
+    in.read(reinterpret_cast<char*>(&type), sizeof(type));
+    in.read(reinterpret_cast<char*>(&trees), sizeof(trees));
+    in.read(reinterpret_cast<char*>(&food), sizeof(food));
+    if (!in.good()) {
+      return false;
+    }
+
+    Tile& tile = loaded.tiles_[i];
+    if (type <= static_cast<uint8_t>(TileType::FreshWater)) {
+      tile.type = static_cast<TileType>(type);
+    } else {
+      tile.type = TileType::Ocean;
+    }
+
+    if (tile.type == TileType::Land) {
+      tile.trees = trees;
+      tile.food = food;
+    } else {
+      tile.trees = 0;
+      tile.food = 0;
+    }
+    tile.burning = false;
+    tile.burnDaysRemaining = 0;
+    tile.building = BuildingType::None;
+    tile.farmStage = 0;
+    tile.buildingOwnerId = -1;
+  }
+
+  loaded.RecomputeScentFields();
+  *this = std::move(loaded);
+  return true;
 }

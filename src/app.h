@@ -31,6 +31,12 @@ class App {
   void ExitMacroMode();
   void ApplyToolAt(int tileX, int tileY, bool erase);
   bool ScreenToTile(int screenX, int screenY, int& tileX, int& tileY) const;
+  void ResetSimulationState();
+  void ResetCameraToWorld();
+  void FitCameraToWorld();
+  void UpdateWholeMapView();
+  bool SaveMap(const char* path) const;
+  bool LoadMap(const char* path);
   void ClampCamera();
   void RefreshTotals();
   void WriteDeathLog() const;
@@ -46,6 +52,7 @@ class App {
   FactionManager factions_;
   Renderer rendererAssets_;
   Camera camera_;
+  Camera savedCamera_;
   UIState ui_;
   SimStats stats_;
   Random rng_;
@@ -67,4 +74,5 @@ class App {
 
   bool imguiInitialized_ = false;
   bool worldDirty_ = false;
+  bool wholeMapViewActive_ = false;
 };

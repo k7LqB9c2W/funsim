@@ -18,6 +18,8 @@ const ToolType kToolOrder[] = {
 void DrawUI(UIState& state, const SimStats& stats, const FactionManager& factions,
             const SettlementManager& settlements, const HoverInfo& hover) {
   state.stepDay = false;
+  state.saveMap = false;
+  state.loadMap = false;
 
   ImGui::Begin("Tools");
   ImGui::Text("Tools");
@@ -43,6 +45,18 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   ImGui::Separator();
   ImGui::Text("View");
   ImGui::Checkbox("Show Territory", &state.showTerritoryOverlay);
+  ImGui::Checkbox("Whole Map View", &state.wholeMapView);
+
+  ImGui::Separator();
+  ImGui::Text("Map");
+  ImGui::InputText("Path", state.mapPath, sizeof(state.mapPath));
+  if (ImGui::Button("Save Map")) {
+    state.saveMap = true;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Load Map")) {
+    state.loadMap = true;
+  }
 
   ImGui::Separator();
   if (ImGui::Button(state.paused ? "Play" : "Pause")) {
