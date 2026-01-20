@@ -19,6 +19,7 @@ struct SimStats {
   int totalStockWood = 0;
   int totalHouses = 0;
   int totalFarms = 0;
+  int totalGranaries = 0;
   int totalTownHalls = 0;
   int totalHousingCap = 0;
 };

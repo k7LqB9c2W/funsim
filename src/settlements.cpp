@@ -21,15 +21,18 @@ constexpr int kWoodRadius = 12;
 constexpr int kHouseBuildRadius = 10;
 constexpr int kFarmBuildRadius = 12;
 constexpr int kFarmWorkRadius = 14;
+constexpr int kGranaryDropRadius = 4;
+constexpr int kGranaryBuildRadius = 4;
+constexpr int kFarGatherRadius = 24;
 constexpr int kHousingBuffer = 2;
-constexpr int kDesiredFoodPerPop = 5;
+constexpr int kDesiredFoodPerPop = 60;
 constexpr int kDesiredWoodPerPop = 2;
 constexpr int kFarmsPerPop = 3;
 constexpr int kWaterSearchRadius = 28;
 constexpr int kFactionLinkRadiusTiles = 96;
-constexpr int kEmergencyFoodPerPop = 2;
-constexpr int kEmergencyFarmerPct = 35;
-constexpr int kEmergencyGathererPct = 35;
+constexpr int kEmergencyFoodPerPop = 20;
+constexpr int kEmergencyFarmerPct = 60;
+constexpr int kEmergencyGathererPct = 60;
 
 uint32_t Hash32(uint32_t a, uint32_t b) {
   uint32_t h = a * 0x9E3779B9u;
@@ -373,6 +376,7 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
   for (auto& settlement : settlements_) {
     settlement.houses = 0;
     settlement.farms = 0;
+    settlement.granaries = 0;
     settlement.farmsPlanted = 0;
     settlement.farmsReady = 0;
     settlement.townHalls = 0;
@@ -400,6 +404,9 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
           if (tile.farmStage >= Settlement::kFarmReadyStage) {
             settlement.farmsReady++;
           }
+          break;
+        case BuildingType::Granary:
+          settlement.granaries++;
           break;
         case BuildingType::TownHall:
           settlement.townHalls++;
@@ -655,9 +662,99 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
       }
     }
 
-    if (settlement.stockFood < desiredFood && available > 0) {
-      int need = desiredFood - settlement.stockFood;
-      int tasksToPush = std::min(need, std::min(available, pop * 2));
+    if (settlement.farms > 0 && available > 0 &&
+        settlement.stockWood >= Settlement::kGranaryWoodCost) {
+      int builderBudget = settlement.builders + 1;
+      if (foodEmergency) {
+        builderBudget = std::max(builderBudget, settlement.builders + settlement.idle / 2);
+      }
+      int tasksToPush = std::min(available, builderBudget);
+
+      auto hasPlannedGranaryNear = [&](int cx, int cy) {
+        for (int idx = settlement.taskHead; idx != settlement.taskTail;
+             idx = (idx + 1) % Settlement::kTaskCap) {
+          const Task& task = settlement.tasks[idx];
+          if (task.type != TaskType::BuildStructure || task.buildType != BuildingType::Granary) {
+            continue;
+          }
+          int dist = std::abs(task.x - cx) + std::abs(task.y - cy);
+          if (dist <= kGranaryDropRadius) return true;
+        }
+        return false;
+      };
+
+      for (int dy = -kFarmWorkRadius; dy <= kFarmWorkRadius && available > 0 && tasksToPush > 0;
+           ++dy) {
+        int y = settlement.centerY + dy;
+        if (y < 0 || y >= world.height()) continue;
+        for (int dx = -kFarmWorkRadius;
+             dx <= kFarmWorkRadius && available > 0 && tasksToPush > 0; ++dx) {
+          int x = settlement.centerX + dx;
+          if (x < 0 || x >= world.width()) continue;
+          const Tile& tile = world.At(x, y);
+          if (tile.building != BuildingType::Farm || tile.buildingOwnerId != settlement.id) continue;
+          int distToTown = std::abs(x - settlement.centerX) + std::abs(y - settlement.centerY);
+          if (distToTown <= kGranaryDropRadius) continue;
+
+          bool hasGranary = false;
+          for (int gdy = -kGranaryDropRadius; gdy <= kGranaryDropRadius && !hasGranary; ++gdy) {
+            for (int gdx = -kGranaryDropRadius; gdx <= kGranaryDropRadius; ++gdx) {
+              int gdist = std::abs(gdx) + std::abs(gdy);
+              if (gdist > kGranaryDropRadius) continue;
+              int tx = x + gdx;
+              int ty = y + gdy;
+              if (!world.InBounds(tx, ty)) continue;
+              const Tile& check = world.At(tx, ty);
+              if (check.building == BuildingType::Granary &&
+                  check.buildingOwnerId == settlement.id) {
+                hasGranary = true;
+                break;
+              }
+            }
+          }
+          if (hasGranary || hasPlannedGranaryNear(x, y)) continue;
+
+          int bestX = -1;
+          int bestY = -1;
+          int bestScore = std::numeric_limits<int>::min();
+          for (int gdy = -kGranaryBuildRadius; gdy <= kGranaryBuildRadius; ++gdy) {
+            for (int gdx = -kGranaryBuildRadius; gdx <= kGranaryBuildRadius; ++gdx) {
+              int gdist = std::abs(gdx) + std::abs(gdy);
+              if (gdist > kGranaryBuildRadius) continue;
+              int tx = x + gdx;
+              int ty = y + gdy;
+              if (!IsBuildableTile(world, tx, ty)) continue;
+              const Tile& candidate = world.At(tx, ty);
+              int score = -gdist * 20 - candidate.trees * 3 - candidate.food * 2;
+              if (score > bestScore) {
+                bestScore = score;
+                bestX = tx;
+                bestY = ty;
+              }
+            }
+          }
+
+          if (bestX == -1 || bestY == -1) continue;
+          Task task;
+          task.type = TaskType::BuildStructure;
+          task.x = bestX;
+          task.y = bestY;
+          task.amount = 0;
+          task.settlementId = settlement.id;
+          task.buildType = BuildingType::Granary;
+          if (!settlement.PushTask(task)) {
+            available = 0;
+            break;
+          }
+          available--;
+          tasksToPush--;
+        }
+      }
+    }
+
+    if (available > 0) {
+      int foodNeed = std::max(0, desiredFood - settlement.stockFood);
+      int tasksToPush = std::min(available, std::max(pop * 4, foodNeed));
       for (int i = 0; i < tasksToPush; ++i) {
         int bestX = -1;
         int bestY = -1;
@@ -694,8 +791,48 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
       }
     }
 
+    if (available > 0 && settlement.gatherers > 0) {
+      int farTasksToPush = std::min(available, std::max(1, settlement.gatherers / 2));
+      for (int i = 0; i < farTasksToPush; ++i) {
+        int bestX = -1;
+        int bestY = -1;
+        int bestScore = std::numeric_limits<int>::min();
+
+        for (int sample = 0; sample < 12; ++sample) {
+          int dx = rng.RangeInt(-kFarGatherRadius, kFarGatherRadius);
+          int dy = rng.RangeInt(-kFarGatherRadius, kFarGatherRadius);
+          int x = settlement.centerX + dx;
+          int y = settlement.centerY + dy;
+          if (!world.InBounds(x, y)) continue;
+          const Tile& tile = world.At(x, y);
+          if (tile.type != TileType::Land || tile.burning) continue;
+          if (tile.food <= 0) continue;
+
+          int dist = std::abs(dx) + std::abs(dy);
+          int score =
+              static_cast<int>(world.FoodScentAt(x, y)) + tile.food * 200 + dist * 10;
+          if (score > bestScore) {
+            bestScore = score;
+            bestX = x;
+            bestY = y;
+          }
+        }
+
+        if (bestX == -1 || bestY == -1) break;
+        Task task;
+        task.type = TaskType::CollectFood;
+        task.x = bestX;
+        task.y = bestY;
+        task.amount = 1;
+        task.settlementId = settlement.id;
+        if (!settlement.PushTask(task)) break;
+        available--;
+        if (available <= 0) break;
+      }
+    }
+
     if (settlement.farms > 0 && available > 0) {
-      int tasksToPush = std::min(available, std::max(2, settlement.farmers * 2));
+      int tasksToPush = std::min(available, std::max(2, settlement.farmers * 4));
       for (int i = 0; i < tasksToPush; ++i) {
         int bestX = -1;
         int bestY = -1;

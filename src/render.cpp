@@ -754,23 +754,26 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
         const Tile& tile = world.At(x, y);
         if (tile.building == BuildingType::None) continue;
 
-        int row = 0;
+        AtlasCoord coord{0, 0};
         switch (tile.building) {
           case BuildingType::House:
-            row = 0;
+            coord = AtlasCoord{0, 0};
             break;
           case BuildingType::TownHall:
-            row = 1;
+            coord = AtlasCoord{0, 1};
             break;
           case BuildingType::Farm:
-            row = 2;
+            coord = AtlasCoord{0, 2};
+            break;
+          case BuildingType::Granary:
+            coord = AtlasCoord{1, 2};
             break;
           default:
-            row = 0;
+            coord = AtlasCoord{0, 0};
             break;
         }
-        buildingSrc.x = 0;
-        buildingSrc.y = row * kTilePx;
+        buildingSrc.x = coord.col * kTilePx;
+        buildingSrc.y = coord.row * kTilePx;
 
         const float worldX = static_cast<float>(x) * tileSize;
         const float worldY = static_cast<float>(y) * tileSize;

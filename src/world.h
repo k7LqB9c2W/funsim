@@ -18,6 +18,7 @@ enum class BuildingType : uint8_t {
   House,
   TownHall,
   Farm,
+  Granary,
 };
 
 struct Tile {

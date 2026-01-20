@@ -492,6 +492,7 @@ void App::RefreshTotals() {
   stats_.totalStockWood = 0;
   stats_.totalHouses = 0;
   stats_.totalFarms = 0;
+  stats_.totalGranaries = 0;
   stats_.totalTownHalls = 0;
   stats_.totalHousingCap = 0;
   for (const auto& settlement : settlements_.Settlements()) {
@@ -499,6 +500,7 @@ void App::RefreshTotals() {
     stats_.totalStockWood += settlement.stockWood;
     stats_.totalHouses += settlement.houses;
     stats_.totalFarms += settlement.farms;
+    stats_.totalGranaries += settlement.granaries;
     stats_.totalTownHalls += settlement.townHalls;
     stats_.totalHousingCap += settlement.housingCap;
   }
