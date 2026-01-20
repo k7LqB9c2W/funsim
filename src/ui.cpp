@@ -79,6 +79,7 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   ImGui::Text("Stock Wood: %d", stats.totalStockWood);
   ImGui::Text("Houses: %d", stats.totalHouses);
   ImGui::Text("Farms: %d", stats.totalFarms);
+  ImGui::Text("Granaries: %d", stats.totalGranaries);
   ImGui::Text("Town Halls: %d", stats.totalTownHalls);
   ImGui::Text("Housing Cap: %d", stats.totalHousingCap);
 
@@ -159,6 +160,7 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
                 settlement.stockFood, settlement.stockWood);
     ImGui::Text("Farms: %d total | %d planted | %d ready", settlement.farms, settlement.farmsPlanted,
                 settlement.farmsReady);
+    ImGui::Text("Granaries: %d", settlement.granaries);
     ImGui::Text("Farmers: %d | Gatherers: %d", settlement.farmers, settlement.gatherers);
 
     int harvestTasks = 0;
