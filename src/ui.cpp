@@ -143,7 +143,7 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
                   settlement->population, settlement->stockFood, settlement->stockWood);
       ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement->tier),
                   settlement->techTier, settlement->stability);
-      ImGui::Text("Border Pressure: %d | War Pressure: %d | Influence %d",
+      ImGui::Text("Border Pressure: %d | War Pressure: %d | Claim Radius %d",
                   settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
       if (settlement->isCapital) {
         ImGui::Text("Capital Seat");

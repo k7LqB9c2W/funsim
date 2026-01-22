@@ -14,7 +14,11 @@ namespace {
 constexpr int kZonePopThreshold = 10;
 constexpr int kZoneRequiredDays = 3;
 constexpr int kMinVillageDistTiles = 16;
-constexpr int kClaimRadiusTiles = 40;
+constexpr int kClaimRadiusTownHall = 30;
+constexpr int kClaimRadiusHouse = 10;
+constexpr int kClaimRadiusFarm = 10;
+constexpr int kClaimRadiusGranary = 12;
+constexpr int kClaimRadiusWell = 10;
 constexpr int kInfluenceVillage = 36;
 constexpr int kInfluenceTown = 48;
 constexpr int kInfluenceCity = 64;
@@ -75,6 +79,31 @@ bool IsBuildableTile(const World& world, int x, int y) {
   if (tile.burning) return false;
   if (tile.building != BuildingType::None) return false;
   return true;
+}
+
+int ClaimRadiusForBuilding(BuildingType type) {
+  switch (type) {
+    case BuildingType::TownHall:
+      return kClaimRadiusTownHall;
+    case BuildingType::House:
+      return kClaimRadiusHouse;
+    case BuildingType::Farm:
+      return kClaimRadiusFarm;
+    case BuildingType::Granary:
+      return kClaimRadiusGranary;
+    case BuildingType::Well:
+      return kClaimRadiusWell;
+    default:
+      return 0;
+  }
+}
+
+bool IsBuildableTileForSettlement(const World& world, const SettlementManager& settlements,
+                                  int settlementId, int x, int y) {
+  if (!IsBuildableTile(world, x, y)) return false;
+  if (settlementId <= 0) return true;
+  int ownerId = settlements.ZoneOwnerForTile(x, y);
+  return ownerId == -1 || ownerId == settlementId;
 }
 }  // namespace
 
@@ -352,7 +381,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     settlement.unrest = 0;
     settlement.borderPressure = 0;
     settlement.warPressure = 0;
-    settlement.influenceRadius = kInfluenceVillage;
+    settlement.influenceRadius = kClaimRadiusTownHall;
     settlement.isCapital = false;
 
     int factionId = 0;
@@ -384,27 +413,42 @@ void SettlementManager::RecomputeZoneOwners(const World& world) {
     std::fill(zoneOwner_.begin(), zoneOwner_.end(), -1);
     return;
   }
+  if (zonesX_ <= 0 || zonesY_ <= 0 || zoneOwner_.empty()) return;
 
-  for (int zy = 0; zy < zonesY_; ++zy) {
-    for (int zx = 0; zx < zonesX_; ++zx) {
-      int zoneIndex = zy * zonesX_ + zx;
-      int centerX = std::min(world.width() - 1, zx * zoneSize_ + zoneSize_ / 2);
-      int centerY = std::min(world.height() - 1, zy * zoneSize_ + zoneSize_ / 2);
+  std::fill(zoneOwner_.begin(), zoneOwner_.end(), -1);
+  std::vector<int> bestDist(zoneOwner_.size(), std::numeric_limits<int>::max());
 
-      int bestId = -1;
-      int bestDist = std::numeric_limits<int>::max();
-      for (const auto& settlement : settlements_) {
-        int dx = settlement.centerX - centerX;
-        int dy = settlement.centerY - centerY;
-        int dist = dx * dx + dy * dy;
-        int radius = settlement.influenceRadius > 0 ? settlement.influenceRadius : kClaimRadiusTiles;
-        int radiusSq = radius * radius;
-        if (dist <= radiusSq && dist < bestDist) {
-          bestDist = dist;
-          bestId = settlement.id;
+  for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+    const Settlement& settlement = settlements_[i];
+    if (i >= static_cast<int>(claimSources_.size())) continue;
+    const auto& sources = claimSources_[i];
+    if (sources.empty()) continue;
+
+    for (const auto& source : sources) {
+      int radius = source.radius;
+      if (radius <= 0) continue;
+      int radiusSq = radius * radius;
+
+      int minZoneX = std::max(0, (source.x - radius) / zoneSize_);
+      int maxZoneX = std::min(zonesX_ - 1, (source.x + radius) / zoneSize_);
+      int minZoneY = std::max(0, (source.y - radius) / zoneSize_);
+      int maxZoneY = std::min(zonesY_ - 1, (source.y + radius) / zoneSize_);
+
+      for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
+        int centerY = std::min(world.height() - 1, zy * zoneSize_ + zoneSize_ / 2);
+        for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
+          int centerX = std::min(world.width() - 1, zx * zoneSize_ + zoneSize_ / 2);
+          int dx = source.x - centerX;
+          int dy = source.y - centerY;
+          int dist = dx * dx + dy * dy;
+          if (dist > radiusSq) continue;
+          int zoneIndex = zy * zonesX_ + zx;
+          if (dist < bestDist[zoneIndex]) {
+            bestDist[zoneIndex] = dist;
+            zoneOwner_[zoneIndex] = settlement.id;
+          }
         }
       }
-      zoneOwner_[zoneIndex] = bestId;
     }
   }
 }
@@ -542,7 +586,17 @@ void SettlementManager::AssignHumansToSettlements(HumanManager& humans) {
 }
 
 void SettlementManager::RecomputeSettlementBuildings(const World& world) {
-  if (settlements_.empty()) return;
+  if (settlements_.empty()) {
+    claimSources_.clear();
+    return;
+  }
+  if (idToIndex_.size() != static_cast<size_t>(nextId_)) {
+    idToIndex_.assign(nextId_, -1);
+    for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+      idToIndex_[settlements_[i].id] = i;
+    }
+  }
+  claimSources_.assign(settlements_.size(), {});
   for (auto& settlement : settlements_) {
     settlement.houses = 0;
     settlement.farms = 0;
@@ -552,6 +606,7 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
     settlement.farmsReady = 0;
     settlement.townHalls = 0;
     settlement.housingCap = 0;
+    settlement.influenceRadius = 0;
   }
 
   for (int y = 0; y < world.height(); ++y) {
@@ -587,6 +642,11 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
           break;
         default:
           break;
+      }
+      int radius = ClaimRadiusForBuilding(tile.building);
+      if (radius > 0) {
+        claimSources_[idx].push_back(ClaimSource{x, y, radius});
+        settlement.influenceRadius = std::max(settlement.influenceRadius, radius);
       }
     }
   }
@@ -995,7 +1055,6 @@ void SettlementManager::UpdateSettlementEvolution(const FactionManager& factions
     settlement.tier = newTier;
   }
 
-  UpdateSettlementInfluence(factions);
   UpdateSettlementCaps();
   UpdateSettlementStability(factions, rng);
 }
@@ -1356,7 +1415,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
               if (gdist > kGranaryBuildRadius) continue;
               int tx = x + gdx;
               int ty = y + gdy;
-              if (!IsBuildableTile(world, tx, ty)) continue;
+              if (!IsBuildableTileForSettlement(world, *this, settlement.id, tx, ty)) continue;
               const Tile& candidate = world.At(tx, ty);
               int score = -gdist * 20 - candidate.trees * 3 - candidate.food * 2;
               if (score > bestScore) {
@@ -1460,7 +1519,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
               int dy = rng.RangeInt(-kWaterSearchRadius, kWaterSearchRadius);
               int x = settlement.centerX + dx;
               int y = settlement.centerY + dy;
-              if (!IsBuildableTile(world, x, y)) continue;
+              if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
               int newRadius = wellRadiusForNewWell(x, y);
               if (newRadius == 0) continue;
               const Tile& tile = world.At(x, y);
@@ -1663,7 +1722,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
           int dy = rng.RangeInt(-kFarmBuildRadius, kFarmBuildRadius);
           int x = settlement.centerX + dx;
           int y = settlement.centerY + dy;
-          if (!IsBuildableTile(world, x, y)) continue;
+          if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
           const Tile& tile = world.At(x, y);
           int score = static_cast<int>(world.WaterScentAt(x, y)) - tile.trees * 4;
           if (score > bestScore) {
@@ -1706,7 +1765,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
           int dy = rng.RangeInt(-kHouseBuildRadius, kHouseBuildRadius);
           int x = settlement.centerX + dx;
           int y = settlement.centerY + dy;
-          if (!IsBuildableTile(world, x, y)) continue;
+          if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
           const Tile& tile = world.At(x, y);
           int dist = std::abs(dx) + std::abs(dy);
           int score = -dist * 10 - tile.trees * 3 - tile.food * 2;
@@ -1736,8 +1795,8 @@ void SettlementManager::GenerateTasks(World& world, Random& rng) {
       int bestX = settlement.centerX;
       int bestY = settlement.centerY;
       for (int attempt = 0; attempt < 6; ++attempt) {
-        int dx = rng.RangeInt(-kClaimRadiusTiles / 2, kClaimRadiusTiles / 2);
-        int dy = rng.RangeInt(-kClaimRadiusTiles / 2, kClaimRadiusTiles / 2);
+        int dx = rng.RangeInt(-kClaimRadiusTownHall / 2, kClaimRadiusTownHall / 2);
+        int dy = rng.RangeInt(-kClaimRadiusTownHall / 2, kClaimRadiusTownHall / 2);
         int x = settlement.centerX + dx;
         int y = settlement.centerY + dy;
         if (!world.InBounds(x, y)) continue;
@@ -1791,19 +1850,22 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   CrashContextSetStage("Settlements::UpdateDaily");
   EnsureZoneBuffers(world);
   EnsureSettlementFactions(factions, rng);
-  UpdateSettlementInfluence(factions);
-  RecomputeZoneOwners(world);
-  RecomputeZonePop(world, humans);
-  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
-  UpdateSettlementInfluence(factions);
-  RecomputeZoneOwners(world);
-  AssignHumansToSettlements(humans);
-  ComputeSettlementWaterTargets(world);
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);
   } else {
     UpdateSettlementCaps();
   }
+  RecomputeZoneOwners(world);
+  RecomputeZonePop(world, humans);
+  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
+  RecomputeZoneOwners(world);
+  AssignHumansToSettlements(humans);
+  ComputeSettlementWaterTargets(world);
   UpdateBorderPressure(factions);
   RecomputeSettlementPopAndRoles(world, rng, dayCount, humans);
   UpdateSettlementEvolution(factions, rng);
@@ -1821,22 +1883,25 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   CrashContextSetStage("Settlements::UpdateMacro");
   EnsureZoneBuffers(world);
   EnsureSettlementFactions(factions, rng);
-  UpdateSettlementInfluence(factions);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
   RecomputeZoneOwners(world);
   RecomputeZonePopMacro();
   TryFoundNewSettlements(world, rng, dayCount, markers, factions);
-  UpdateSettlementInfluence(factions);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
   RecomputeZoneOwners(world);
   idToIndex_.assign(nextId_, -1);
   for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
     idToIndex_[settlements_[i].id] = i;
   }
   ComputeSettlementWaterTargets(world);
-  if (world.ConsumeBuildingDirty()) {
-    RecomputeSettlementBuildings(world);
-  } else {
-    UpdateSettlementCaps();
-  }
   UpdateBorderPressure(factions);
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpactMacro(world, rng, dayCount, factions);
@@ -1851,7 +1916,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
       int dy = rng.RangeInt(-radius, radius);
       int x = settlement.centerX + dx;
       int y = settlement.centerY + dy;
-      if (!IsBuildableTile(world, x, y)) continue;
+      if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
       int score = 0;
       if (type == BuildingType::Farm) {
         score = static_cast<int>(world.WaterScentAt(x, y));
