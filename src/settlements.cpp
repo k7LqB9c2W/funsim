@@ -334,6 +334,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     centerTile.food = 0;
     centerTile.burning = false;
     centerTile.burnDaysRemaining = 0;
+    world.MarkBuildingDirty();
 
     Settlement settlement;
     settlement.id = nextId_++;
@@ -369,6 +370,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     }
     settlement.factionId = factionId;
     settlements_.push_back(settlement);
+    homeFieldDirty_ = true;
 
     markers.push_back(VillageMarker{bestX, bestY, 25});
     zoneDenseDays_[zoneIndex] = 0;
@@ -1797,14 +1799,21 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   RecomputeZoneOwners(world);
   AssignHumansToSettlements(humans);
   ComputeSettlementWaterTargets(world);
-  RecomputeSettlementBuildings(world);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
   UpdateBorderPressure(factions);
   RecomputeSettlementPopAndRoles(world, rng, dayCount, humans);
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpact(world, humans, rng, dayCount, factions);
   GenerateTasks(world, rng);
   RunSettlementEconomy(world, rng);
-  world.RecomputeHomeField(*this);
+  if (homeFieldDirty_) {
+    world.RecomputeHomeField(*this);
+    homeFieldDirty_ = false;
+  }
 }
 
 void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
@@ -1823,7 +1832,11 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     idToIndex_[settlements_[i].id] = i;
   }
   ComputeSettlementWaterTargets(world);
-  RecomputeSettlementBuildings(world);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
   UpdateBorderPressure(factions);
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpactMacro(world, rng, dayCount, factions);
@@ -1860,6 +1873,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     tile.food = 0;
     tile.burning = false;
     tile.burnDaysRemaining = 0;
+    world.MarkBuildingDirty();
     return true;
   };
 
@@ -1904,6 +1918,13 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     }
   }
 
-  RecomputeSettlementBuildings(world);
-  world.RecomputeHomeField(*this);
+  if (world.ConsumeBuildingDirty()) {
+    RecomputeSettlementBuildings(world);
+  } else {
+    UpdateSettlementCaps();
+  }
+  if (homeFieldDirty_) {
+    world.RecomputeHomeField(*this);
+    homeFieldDirty_ = false;
+  }
 }

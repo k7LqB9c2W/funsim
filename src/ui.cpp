@@ -20,6 +20,7 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   state.stepDay = false;
   state.saveMap = false;
   state.loadMap = false;
+  state.newWorld = false;
 
   ImGui::Begin("Tools");
   ImGui::Text("Tools");
@@ -63,6 +64,12 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   if (ImGui::Button("Load Map")) {
     state.loadMap = true;
   }
+  const char* worldSizes[] = {"1x", "4x"};
+  ImGui::Combo("New World Size", &state.worldSizeIndex, worldSizes,
+               static_cast<int>(sizeof(worldSizes) / sizeof(worldSizes[0])));
+  if (ImGui::Button("New World")) {
+    state.newWorld = true;
+  }
 
   ImGui::Separator();
   if (ImGui::Button(state.paused ? "Play" : "Pause")) {
@@ -91,26 +98,30 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   ImGui::Separator();
   ImGui::Text("Stats");
   ImGui::Text("Day: %d", stats.dayCount);
-  ImGui::Text("Population: %d", stats.totalPop);
+  ImGui::Text("Population: %lld", static_cast<long long>(stats.totalPop));
   ImGui::Text("Births Today: %d", stats.birthsToday);
   ImGui::Text("Deaths Today: %d", stats.deathsToday);
-  ImGui::Text("Total Births: %d", stats.totalBirths);
-  ImGui::Text("Total Deaths: %d", stats.totalDeaths);
-  ImGui::Text("Total Food: %d", stats.totalFood);
-  ImGui::Text("Total Trees: %d", stats.totalTrees);
-  ImGui::Text("Settlements: %d", stats.totalSettlements);
-  ImGui::Text("Stock Food: %d", stats.totalStockFood);
-  ImGui::Text("Stock Wood: %d", stats.totalStockWood);
-  ImGui::Text("Houses: %d", stats.totalHouses);
-  ImGui::Text("Farms: %d", stats.totalFarms);
-  ImGui::Text("Granaries: %d", stats.totalGranaries);
-  ImGui::Text("Wells: %d", stats.totalWells);
-  ImGui::Text("Town Halls: %d", stats.totalTownHalls);
-  ImGui::Text("Housing Cap: %d", stats.totalHousingCap);
-  ImGui::Text("Villages/Towns/Cities: %d/%d/%d", stats.totalVillages, stats.totalTowns,
-              stats.totalCities);
-  ImGui::Text("Soldiers: %d | Scouts: %d", stats.totalSoldiers, stats.totalScouts);
-  ImGui::Text("Legendary: %d | Wars: %d", stats.totalLegendary, stats.totalWars);
+  ImGui::Text("Total Births: %lld", static_cast<long long>(stats.totalBirths));
+  ImGui::Text("Total Deaths: %lld", static_cast<long long>(stats.totalDeaths));
+  ImGui::Text("Total Food: %lld", static_cast<long long>(stats.totalFood));
+  ImGui::Text("Total Trees: %lld", static_cast<long long>(stats.totalTrees));
+  ImGui::Text("Settlements: %lld", static_cast<long long>(stats.totalSettlements));
+  ImGui::Text("Stock Food: %lld", static_cast<long long>(stats.totalStockFood));
+  ImGui::Text("Stock Wood: %lld", static_cast<long long>(stats.totalStockWood));
+  ImGui::Text("Houses: %lld", static_cast<long long>(stats.totalHouses));
+  ImGui::Text("Farms: %lld", static_cast<long long>(stats.totalFarms));
+  ImGui::Text("Granaries: %lld", static_cast<long long>(stats.totalGranaries));
+  ImGui::Text("Wells: %lld", static_cast<long long>(stats.totalWells));
+  ImGui::Text("Town Halls: %lld", static_cast<long long>(stats.totalTownHalls));
+  ImGui::Text("Housing Cap: %lld", static_cast<long long>(stats.totalHousingCap));
+  ImGui::Text("Villages/Towns/Cities: %lld/%lld/%lld",
+              static_cast<long long>(stats.totalVillages),
+              static_cast<long long>(stats.totalTowns),
+              static_cast<long long>(stats.totalCities));
+  ImGui::Text("Soldiers: %lld | Scouts: %lld", static_cast<long long>(stats.totalSoldiers),
+              static_cast<long long>(stats.totalScouts));
+  ImGui::Text("Legendary: %lld | Wars: %lld", static_cast<long long>(stats.totalLegendary),
+              static_cast<long long>(stats.totalWars));
 
   ImGui::Separator();
   ImGui::Text("Left click: apply tool");

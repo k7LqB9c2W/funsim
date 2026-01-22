@@ -35,6 +35,7 @@ class App {
   void ResetCameraToWorld();
   void FitCameraToWorld();
   void UpdateWholeMapView();
+  void CreateNewWorld(int scale);
   bool SaveMap(const char* path) const;
   bool LoadMap(const char* path);
   void ClampCamera();

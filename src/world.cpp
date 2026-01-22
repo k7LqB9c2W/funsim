@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,6 +32,106 @@ struct MapHeader {
   uint32_t width = 0;
   uint32_t height = 0;
 };
+
+class ThreadBarrier {
+ public:
+  explicit ThreadBarrier(int count) : threshold_(count), count_(count), generation_(0) {}
+
+  void Wait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    int gen = generation_;
+    if (--count_ == 0) {
+      generation_++;
+      count_ = threshold_;
+      cv_.notify_all();
+    } else {
+      cv_.wait(lock, [&] { return gen != generation_; });
+    }
+  }
+
+ private:
+  int threshold_ = 0;
+  int count_ = 0;
+  int generation_ = 0;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+};
+
+int ThreadCountForRows(int rows) {
+  if (rows < 64) return 1;
+  unsigned int count = std::thread::hardware_concurrency();
+  if (count == 0) count = 4;
+  count = std::min(count, 8u);
+  count = std::min<unsigned int>(count, static_cast<unsigned int>(rows));
+  return static_cast<int>(count);
+}
+
+void RelaxField(const std::vector<uint16_t>& base, std::vector<uint16_t>& field,
+                std::vector<uint16_t>& scratch, int width, int height, int iters) {
+  field = base;
+  if (iters <= 0) return;
+
+  int threads = ThreadCountForRows(height);
+  if (threads <= 1) {
+    for (int iter = 0; iter < iters; ++iter) {
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+          int idx = y * width + x;
+          uint16_t best = base[idx];
+          uint16_t maxNeighbor = 0;
+          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
+          if (x + 1 < width) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
+          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width]);
+          if (y + 1 < height) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width]);
+          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
+          if (decayed > best) best = decayed;
+          scratch[idx] = best;
+        }
+      }
+      field.swap(scratch);
+    }
+    return;
+  }
+
+  ThreadBarrier barrier(threads);
+  int rowsPerThread = (height + threads - 1) / threads;
+
+  auto worker = [&](int tid) {
+    int yStart = tid * rowsPerThread;
+    int yEnd = std::min(height, yStart + rowsPerThread);
+    for (int iter = 0; iter < iters; ++iter) {
+      for (int y = yStart; y < yEnd; ++y) {
+        for (int x = 0; x < width; ++x) {
+          int idx = y * width + x;
+          uint16_t best = base[idx];
+          uint16_t maxNeighbor = 0;
+          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
+          if (x + 1 < width) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
+          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width]);
+          if (y + 1 < height) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width]);
+          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
+          if (decayed > best) best = decayed;
+          scratch[idx] = best;
+        }
+      }
+      barrier.Wait();
+      if (tid == 0) {
+        field.swap(scratch);
+      }
+      barrier.Wait();
+    }
+  };
+
+  std::vector<std::thread> workers;
+  workers.reserve(threads - 1);
+  for (int tid = 1; tid < threads; ++tid) {
+    workers.emplace_back(worker, tid);
+  }
+  worker(0);
+  for (auto& thread : workers) {
+    thread.join();
+  }
+}
 }  // namespace
 
 World::World(int width, int height)
@@ -44,7 +147,9 @@ World::World(int width, int height)
       baseFire_(width * height, 0),
       baseHome_(width * height, 0),
       scentScratch_(width * height, 0),
-      wellRadius_(width * height, 0) {}
+      wellRadius_(width * height, 0) {
+  MarkTerrainDirtyAll();
+}
 
 bool World::InBounds(int x, int y) const {
   return x >= 0 && y >= 0 && x < width_ && y < height_;
@@ -68,7 +173,12 @@ void World::UpdateDaily(Random& rng) {
         tile.food = 0;
         tile.burning = false;
         tile.burnDaysRemaining = 0;
-        tile.building = BuildingType::None;
+        if (tile.building != BuildingType::None) {
+          tile.building = BuildingType::None;
+          MarkBuildingDirty();
+        } else {
+          tile.building = BuildingType::None;
+        }
         tile.farmStage = 0;
         tile.buildingOwnerId = -1;
         continue;
@@ -79,6 +189,7 @@ void World::UpdateDaily(Random& rng) {
           tile.building = BuildingType::None;
           tile.farmStage = 0;
           tile.buildingOwnerId = -1;
+          MarkBuildingDirty();
         }
         if (tile.trees > 0) {
           tile.trees = std::max(0, tile.trees - 2);
@@ -168,10 +279,17 @@ void World::UpdateDaily(Random& rng) {
 void World::EraseAt(int x, int y) {
   if (!InBounds(x, y)) return;
   Tile& tile = At(x, y);
+  TileType oldType = tile.type;
   if (tile.type == TileType::Land) {
     tile.type = TileType::Ocean;
   } else if (tile.type == TileType::FreshWater) {
     tile.type = TileType::Land;
+  }
+  if ((oldType == TileType::Land) != (tile.type == TileType::Land)) {
+    MarkTerrainDirty(x, y);
+  }
+  if (tile.building != BuildingType::None) {
+    MarkBuildingDirty();
   }
   tile.trees = 0;
   tile.food = 0;
@@ -221,6 +339,46 @@ uint16_t World::HomeScentAt(int x, int y) const {
 uint8_t World::WellRadiusAt(int x, int y) const {
   if (!InBounds(x, y)) return 0;
   return wellRadius_[y * width_ + x];
+}
+
+bool World::ConsumeBuildingDirty() {
+  bool dirty = buildingDirty_;
+  buildingDirty_ = false;
+  return dirty;
+}
+
+void World::MarkTerrainDirty(int x, int y) {
+  if (!InBounds(x, y)) return;
+  if (!terrainDirty_) {
+    terrainDirty_ = true;
+    terrainMinX_ = x;
+    terrainMaxX_ = x;
+    terrainMinY_ = y;
+    terrainMaxY_ = y;
+    return;
+  }
+  terrainMinX_ = std::min(terrainMinX_, x);
+  terrainMaxX_ = std::max(terrainMaxX_, x);
+  terrainMinY_ = std::min(terrainMinY_, y);
+  terrainMaxY_ = std::max(terrainMaxY_, y);
+}
+
+void World::MarkTerrainDirtyAll() {
+  terrainDirty_ = true;
+  terrainMinX_ = 0;
+  terrainMinY_ = 0;
+  terrainMaxX_ = std::max(0, width_ - 1);
+  terrainMaxY_ = std::max(0, height_ - 1);
+}
+
+bool World::ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY) {
+  if (!terrainDirty_) return false;
+  minX = terrainMinX_;
+  minY = terrainMinY_;
+  maxX = terrainMaxX_;
+  maxY = terrainMaxY_;
+  terrainDirty_ = false;
+  return true;
 }
 
 void World::RecomputeWellRadius() {
@@ -353,31 +511,9 @@ void World::RecomputeScentFields() {
     }
   }
 
-  auto relaxField = [&](const std::vector<uint16_t>& base, std::vector<uint16_t>& field,
-                        int iters) {
-    field = base;
-    for (int iter = 0; iter < iters; ++iter) {
-      for (int y = 0; y < height_; ++y) {
-        for (int x = 0; x < width_; ++x) {
-          int idx = y * width_ + x;
-          uint16_t best = base[idx];
-          uint16_t maxNeighbor = 0;
-          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
-          if (x + 1 < width_) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
-          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width_]);
-          if (y + 1 < height_) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width_]);
-          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
-          if (decayed > best) best = decayed;
-          scentScratch_[idx] = best;
-        }
-      }
-      field.swap(scentScratch_);
-    }
-  };
-
-  relaxField(baseFood_, foodScent_, kScentIters);
-  relaxField(baseWater_, waterScent_, kWaterScentIters);
-  relaxField(baseFire_, fireRisk_, kScentIters);
+  RelaxField(baseFood_, foodScent_, scentScratch_, width_, height_, kScentIters);
+  RelaxField(baseWater_, waterScent_, scentScratch_, width_, height_, kWaterScentIters);
+  RelaxField(baseFire_, fireRisk_, scentScratch_, width_, height_, kScentIters);
 }
 
 void World::RecomputeHomeField(const SettlementManager& settlements) {
@@ -395,30 +531,7 @@ void World::RecomputeHomeField(const SettlementManager& settlements) {
     if (!InBounds(settlement.centerX, settlement.centerY)) continue;
     baseHome_[settlement.centerY * width_ + settlement.centerX] = 60000u;
   }
-
-  auto relaxField = [&](const std::vector<uint16_t>& base, std::vector<uint16_t>& field) {
-    field = base;
-    constexpr int kIters = 6;
-    for (int iter = 0; iter < kIters; ++iter) {
-      for (int y = 0; y < height_; ++y) {
-        for (int x = 0; x < width_; ++x) {
-          int idx = y * width_ + x;
-          uint16_t best = base[idx];
-          uint16_t maxNeighbor = 0;
-          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
-          if (x + 1 < width_) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
-          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width_]);
-          if (y + 1 < height_) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width_]);
-          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
-          if (decayed > best) best = decayed;
-          scentScratch_[idx] = best;
-        }
-      }
-      field.swap(scentScratch_);
-    }
-  };
-
-  relaxField(baseHome_, homeScent_);
+  RelaxField(baseHome_, homeScent_, scentScratch_, width_, height_, kScentIters);
 }
 
 bool World::SaveMap(const std::string& path) const {
@@ -508,5 +621,6 @@ bool World::LoadMap(const std::string& path) {
 
   loaded.RecomputeScentFields();
   *this = std::move(loaded);
+  MarkTerrainDirtyAll();
   return true;
 }

@@ -8,7 +8,6 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
-#include <deque>
 
 #include "factions.h"
 #include "settlements.h"
@@ -550,39 +549,82 @@ void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeig
   }
 }
 
-void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, const World& world) {
+void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
+  bool fullRebuild = false;
   if (world.width() != worldWidth_ || world.height() != worldHeight_) {
     DestroyTerrainCache();
     worldWidth_ = world.width();
     worldHeight_ = world.height();
     landMask_.assign(worldWidth_ * worldHeight_, 0);
     BuildChunks(renderer, worldWidth_, worldHeight_);
+    fullRebuild = true;
     terrainDirty_ = true;
   }
 
-  bool changed = false;
-  for (int y = 0; y < worldHeight_; ++y) {
-    for (int x = 0; x < worldWidth_; ++x) {
-      uint8_t land = (world.At(x, y).type == TileType::Land) ? 1u : 0u;
-      int idx = y * worldWidth_ + x;
-      if (landMask_[idx] != land) {
-        landMask_[idx] = land;
-        changed = true;
+  int dirtyMinX = 0;
+  int dirtyMinY = 0;
+  int dirtyMaxX = worldWidth_ > 0 ? worldWidth_ - 1 : 0;
+  int dirtyMaxY = worldHeight_ > 0 ? worldHeight_ - 1 : 0;
+  bool hasDirty = false;
+  if (terrainDirty_ || fullRebuild) {
+    terrainDirty_ = false;
+    int clearMinX = 0;
+    int clearMinY = 0;
+    int clearMaxX = 0;
+    int clearMaxY = 0;
+    world.ConsumeTerrainDirty(clearMinX, clearMinY, clearMaxX, clearMaxY);
+    hasDirty = true;
+    dirtyMinX = 0;
+    dirtyMinY = 0;
+    dirtyMaxX = worldWidth_ > 0 ? worldWidth_ - 1 : 0;
+    dirtyMaxY = worldHeight_ > 0 ? worldHeight_ - 1 : 0;
+  } else {
+    hasDirty = world.ConsumeTerrainDirty(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY);
+  }
+  if (!hasDirty) return;
+
+  dirtyMinX = std::max(0, dirtyMinX);
+  dirtyMinY = std::max(0, dirtyMinY);
+  dirtyMaxX = std::min(worldWidth_ - 1, dirtyMaxX);
+  dirtyMaxY = std::min(worldHeight_ - 1, dirtyMaxY);
+
+  if (dirtyMinX > dirtyMaxX || dirtyMinY > dirtyMaxY) return;
+
+  if (fullRebuild) {
+    for (int y = 0; y < worldHeight_; ++y) {
+      for (int x = 0; x < worldWidth_; ++x) {
+        int idx = y * worldWidth_ + x;
+        landMask_[idx] = (world.At(x, y).type == TileType::Land) ? 1u : 0u;
+      }
+    }
+  } else {
+    for (int y = dirtyMinY; y <= dirtyMaxY; ++y) {
+      for (int x = dirtyMinX; x <= dirtyMaxX; ++x) {
+        int idx = y * worldWidth_ + x;
+        landMask_[idx] = (world.At(x, y).type == TileType::Land) ? 1u : 0u;
       }
     }
   }
 
-  if (changed) {
-    terrainDirty_ = true;
+  constexpr int kTerrainPadding = 6;
+  int paddedMinX = std::max(0, dirtyMinX - kTerrainPadding);
+  int paddedMinY = std::max(0, dirtyMinY - kTerrainPadding);
+  int paddedMaxX = std::min(worldWidth_ - 1, dirtyMaxX + kTerrainPadding);
+  int paddedMaxY = std::min(worldHeight_ - 1, dirtyMaxY + kTerrainPadding);
+  int minChunkX = paddedMinX / chunkTiles_;
+  int maxChunkX = paddedMaxX / chunkTiles_;
+  int minChunkY = paddedMinY / chunkTiles_;
+  int maxChunkY = paddedMaxY / chunkTiles_;
+  for (int cy = minChunkY; cy <= maxChunkY; ++cy) {
+    for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
+      int idx = cy * chunksX_ + cx;
+      if (idx >= 0 && idx < static_cast<int>(chunks_.size())) {
+        chunks_[idx].dirty = true;
+      }
+    }
   }
 
-  if (terrainDirty_) {
-    for (auto& chunk : chunks_) {
-      chunk.dirty = true;
-    }
-    RebuildTerrainCache(renderer, world);
-    terrainDirty_ = false;
-  }
+  RebuildTerrainCache(renderer, world);
 }
 
 void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
@@ -598,40 +640,25 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
     return landMask_[y * worldWidth_ + x] != 0u;
   };
 
-  waterDistance_.assign(worldWidth_ * worldHeight_, -1);
-  std::deque<int> queue;
-
-  for (int y = 0; y < worldHeight_; ++y) {
-    for (int x = 0; x < worldWidth_; ++x) {
-      int idx = y * worldWidth_ + x;
-      if (landMask_[idx] != 0u) continue;
-      bool coast = isLand(x, y - 1) || isLand(x + 1, y) || isLand(x, y + 1) || isLand(x - 1, y);
-      if (coast) {
-        waterDistance_[idx] = 0;
-        queue.push_back(idx);
+  auto coastDistance = [&](int x, int y) -> int {
+    constexpr int kMaxLandDist = 5;
+    for (int dist = 1; dist <= kMaxLandDist; ++dist) {
+      for (int dy = -dist; dy <= dist; ++dy) {
+        int yPos = y + dy;
+        if (yPos < 0 || yPos >= worldHeight_) continue;
+        int dx = dist - std::abs(dy);
+        int xLeft = x - dx;
+        int xRight = x + dx;
+        if (xLeft >= 0 && xLeft < worldWidth_ && isLand(xLeft, yPos)) {
+          return dist;
+        }
+        if (dx != 0 && xRight >= 0 && xRight < worldWidth_ && isLand(xRight, yPos)) {
+          return dist;
+        }
       }
     }
-  }
-
-  while (!queue.empty()) {
-    int idx = queue.front();
-    queue.pop_front();
-    int x = idx % worldWidth_;
-    int y = idx / worldWidth_;
-    int dist = waterDistance_[idx];
-
-    const int dirs[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
-    for (const auto& d : dirs) {
-      int nx = x + d[0];
-      int ny = y + d[1];
-      if (nx < 0 || ny < 0 || nx >= worldWidth_ || ny >= worldHeight_) continue;
-      int nidx = ny * worldWidth_ + nx;
-      if (landMask_[nidx] != 0u) continue;
-      if (waterDistance_[nidx] != -1) continue;
-      waterDistance_[nidx] = dist + 1;
-      queue.push_back(nidx);
-    }
-  }
+    return kMaxLandDist + 1;
+  };
 
   SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
 
@@ -648,15 +675,16 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
         int idx = y * worldWidth_ + x;
         if (landMask_[idx] != 0u) continue;
 
-        int dist = waterDistance_[idx];
+        int distToLand = coastDistance(x, y);
+        int coastDist = std::max(0, distToLand - 1);
         uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
-                            static_cast<uint32_t>((dist <= 1 && dist >= 0)   ? kShallowSeed
-                                                 : (dist >= 2 && dist <= 4) ? kMidSeed
-                                                                           : kDeepSeed));
+                            static_cast<uint32_t>((coastDist <= 1)   ? kShallowSeed
+                                                 : (coastDist <= 4) ? kMidSeed
+                                                                   : kDeepSeed));
         SDL_Rect src;
-        if (dist <= 1 && dist >= 0) {
+        if (coastDist <= 1) {
           src = PickTilesVariant(kShallowWaterCoords, h);
-        } else if (dist >= 2 && dist <= 4) {
+        } else if (coastDist <= 4) {
           src = PickTilesVariant(kMidWaterCoords, h);
         } else {
           src = PickTilesVariant(kDeepWaterCoords, h);
@@ -696,7 +724,7 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
   SDL_SetRenderTarget(renderer, previousTarget);
 }
 
-void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
+void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
                       const SettlementManager& settlements, const FactionManager& factions,
                       const Camera& camera, int windowWidth, int windowHeight,
                       const std::vector<VillageMarker>& villageMarkers, int hoverTileX,

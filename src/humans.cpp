@@ -890,6 +890,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
           tile.food = 0;
           tile.burning = false;
           tile.burnDaysRemaining = 0;
+          world.MarkBuildingDirty();
         }
         human.hasTask = false;
         human.forceReplan = true;

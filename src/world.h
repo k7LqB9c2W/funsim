@@ -59,6 +59,11 @@ class World {
   uint16_t FireRiskAt(int x, int y) const;
   uint16_t HomeScentAt(int x, int y) const;
   uint8_t WellRadiusAt(int x, int y) const;
+  void MarkBuildingDirty() { buildingDirty_ = true; }
+  bool ConsumeBuildingDirty();
+  void MarkTerrainDirty(int x, int y);
+  void MarkTerrainDirtyAll();
+  bool ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY);
 
   bool SaveMap(const std::string& path) const;
  bool LoadMap(const std::string& path);
@@ -79,4 +84,10 @@ class World {
   std::vector<uint16_t> baseHome_;
   std::vector<uint16_t> scentScratch_;
   std::vector<uint8_t> wellRadius_;
+  bool buildingDirty_ = true;
+  bool terrainDirty_ = true;
+  int terrainMinX_ = 0;
+  int terrainMinY_ = 0;
+  int terrainMaxX_ = 0;
+  int terrainMaxY_ = 0;
 };
