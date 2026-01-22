@@ -44,7 +44,13 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
 
   ImGui::Separator();
   ImGui::Text("View");
-  ImGui::Checkbox("Show Territory", &state.showTerritoryOverlay);
+  const char* overlayNames[] = {"None", "Faction Borders", "Settlement Influence",
+                                "Population Heat", "Conflict"};
+  int overlayIndex = static_cast<int>(state.overlayMode);
+  if (ImGui::Combo("Overlay", &overlayIndex, overlayNames,
+                   static_cast<int>(sizeof(overlayNames) / sizeof(overlayNames[0])))) {
+    state.overlayMode = static_cast<OverlayMode>(overlayIndex);
+  }
   ImGui::Checkbox("Whole Map View", &state.wholeMapView);
 
   ImGui::Separator();
@@ -79,6 +85,10 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   if (ImGui::RadioButton("2000x", state.speedIndex == 4)) state.speedIndex = 4;
 
   ImGui::Separator();
+  ImGui::Checkbox("Allow War", &state.warEnabled);
+  ImGui::Checkbox("Allow Starvation Death", &state.starvationDeathEnabled);
+  ImGui::Checkbox("Allow Dehydration Death", &state.dehydrationDeathEnabled);
+  ImGui::Separator();
   ImGui::Text("Stats");
   ImGui::Text("Day: %d", stats.dayCount);
   ImGui::Text("Population: %d", stats.totalPop);
@@ -94,8 +104,13 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
   ImGui::Text("Houses: %d", stats.totalHouses);
   ImGui::Text("Farms: %d", stats.totalFarms);
   ImGui::Text("Granaries: %d", stats.totalGranaries);
+  ImGui::Text("Wells: %d", stats.totalWells);
   ImGui::Text("Town Halls: %d", stats.totalTownHalls);
   ImGui::Text("Housing Cap: %d", stats.totalHousingCap);
+  ImGui::Text("Villages/Towns/Cities: %d/%d/%d", stats.totalVillages, stats.totalTowns,
+              stats.totalCities);
+  ImGui::Text("Soldiers: %d | Scouts: %d", stats.totalSoldiers, stats.totalScouts);
+  ImGui::Text("Legendary: %d | Wars: %d", stats.totalLegendary, stats.totalWars);
 
   ImGui::Separator();
   ImGui::Text("Left click: apply tool");
@@ -115,6 +130,13 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
       ImGui::Text("Ideology: %s", faction->ideology.c_str());
       ImGui::Text("Settlement %d | Pop %d | Stock %d food, %d wood", settlement->id,
                   settlement->population, settlement->stockFood, settlement->stockWood);
+      ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement->tier),
+                  settlement->techTier, settlement->stability);
+      ImGui::Text("Border Pressure: %d | War Pressure: %d | Influence %d",
+                  settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
+      if (settlement->isCapital) {
+        ImGui::Text("Capital Seat");
+      }
       ImGui::Separator();
     }
   }
@@ -132,6 +154,8 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
       ImGui::Text("Ideology: %s", faction.ideology.c_str());
       ImGui::Text("Traits: %s, %s", FactionTemperamentName(faction.traits.temperament),
                   FactionOutlookName(faction.traits.outlook));
+      ImGui::Text("Tech Tier: %d | Stability: %d | War Exhaustion: %.2f", faction.techTier,
+                  faction.stability, faction.warExhaustion);
       ImGui::Text("Population: %d", faction.stats.population);
       ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
                   faction.stats.territoryZones);
@@ -143,7 +167,11 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
           if (other.id == faction.id) continue;
           int score = factions.RelationScore(faction.id, other.id);
           const char* rel = FactionRelationName(factions.RelationType(faction.id, other.id));
-          ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
+          if (factions.IsAtWar(faction.id, other.id)) {
+            ImGui::Text("%s: war (%d)", other.name.c_str(), score);
+          } else {
+            ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
+          }
         }
         ImGui::TreePop();
       }
@@ -172,6 +200,13 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
 
     ImGui::Text("Population: %d | Stock Food: %d | Stock Wood: %d", settlement.population,
                 settlement.stockFood, settlement.stockWood);
+    ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement.tier),
+                settlement.techTier, settlement.stability);
+    if (settlement.isCapital) {
+      ImGui::Text("Capital Seat");
+    }
+    ImGui::Text("Guards: %d | Soldiers: %d | Scouts: %d", settlement.guards, settlement.soldiers,
+                settlement.scouts);
     ImGui::Text("Farms: %d total | %d planted | %d ready", settlement.farms, settlement.farmsPlanted,
                 settlement.farmsReady);
     ImGui::Text("Granaries: %d", settlement.granaries);
@@ -197,6 +232,22 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
                         ? static_cast<float>(haulDistanceSum) / static_cast<float>(haulDistanceCount)
                         : 0.0f;
     ImGui::Text("Harvest Tasks: %d | Avg Haul Dist: %.1f", harvestTasks, avgHaul);
+  }
+  ImGui::End();
+
+  ImGui::Begin("Legends");
+  if (stats.legendaryShown == 0) {
+    ImGui::Text("No legendary humans yet.");
+  } else {
+    for (int i = 0; i < stats.legendaryShown; ++i) {
+      const auto& info = stats.legendary[i];
+      const Faction* faction = factions.Get(info.factionId);
+      const char* factionName = faction ? faction->name.c_str() : "Wanderer";
+      ImGui::Separator();
+      ImGui::Text("Legend #%d | Age %d", info.id, info.ageDays / 365);
+      ImGui::Text("Traits: %s", info.traitsText);
+      ImGui::Text("Faction: %s | Settlement %d", factionName, info.settlementId);
+    }
   }
   ImGui::End();
 }

@@ -187,6 +187,9 @@ void App::Update(float dt) {
   }
 
   UpdateWholeMapView();
+  factions_.SetWarEnabled(ui_.warEnabled);
+  humans_.SetAllowStarvationDeath(ui_.starvationDeathEnabled);
+  humans_.SetAllowDehydrationDeath(ui_.dehydrationDeathEnabled);
 
   if (!io.WantCaptureKeyboard && !ui_.wholeMapView) {
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
@@ -294,7 +297,7 @@ void App::RenderFrame() {
 
   rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
                          villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
-                         ui_.showTerritoryOverlay);
+                         ui_.overlayMode);
 
   ImGui::Render();
   ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer_);
@@ -314,9 +317,11 @@ void App::StepDayCoarse() {
   world_.UpdateDaily(rng_);
   CrashContextSetStage("StepDay:Settlements");
   settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, villageMarkers_, factions_);
+  int warDeathsToday = settlements_.ConsumeWarDeaths();
   CrashContextSetStage("StepDay:Humans");
   humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, stats_.birthsToday,
                             stats_.deathsToday);
+  stats_.deathsToday += warDeathsToday;
   stats_.totalBirths += stats_.birthsToday;
   stats_.totalDeaths += stats_.deathsToday;
   for (auto& marker : villageMarkers_) {
@@ -328,6 +333,11 @@ void App::StepDayCoarse() {
       std::remove_if(villageMarkers_.begin(), villageMarkers_.end(),
                      [](const VillageMarker& marker) { return marker.ttlDays <= 0; }),
       villageMarkers_.end());
+  factions_.UpdateStats(settlements_);
+  if (!macroActive_) {
+    factions_.UpdateLeaders(settlements_, humans_);
+  }
+  factions_.UpdateDiplomacy(settlements_, rng_, stats_.dayCount);
   RefreshTotals();
   CrashContextSetStage("StepDay:Done");
 }
@@ -336,6 +346,7 @@ void App::AdvanceMacro(int days) {
   if (days <= 0) return;
   stats_.birthsToday = 0;
   stats_.deathsToday = 0;
+  int warDeathsTotal = 0;
   for (int i = 0; i < days; ++i) {
     stats_.dayCount++;
     CrashContextSetDay(stats_.dayCount);
@@ -344,7 +355,12 @@ void App::AdvanceMacro(int days) {
     }
     humans_.AdvanceMacro(world_, settlements_, rng_, 1, stats_.birthsToday, stats_.deathsToday);
     settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_, factions_);
+    warDeathsTotal += settlements_.ConsumeWarDeaths();
+    factions_.UpdateStats(settlements_);
+    factions_.UpdateDiplomacy(settlements_, rng_, stats_.dayCount);
   }
+  stats_.deathsToday += warDeathsTotal;
+  humans_.RecordWarDeaths(warDeathsTotal);
   stats_.totalBirths += stats_.birthsToday;
   stats_.totalDeaths += stats_.deathsToday;
   for (auto& marker : villageMarkers_) {
@@ -616,19 +632,63 @@ void App::RefreshTotals() {
   stats_.totalHouses = 0;
   stats_.totalFarms = 0;
   stats_.totalGranaries = 0;
+  stats_.totalWells = 0;
   stats_.totalTownHalls = 0;
   stats_.totalHousingCap = 0;
+  stats_.totalSoldiers = 0;
+  stats_.totalScouts = 0;
+  stats_.totalVillages = 0;
+  stats_.totalTowns = 0;
+  stats_.totalCities = 0;
+  stats_.totalLegendary = 0;
+  stats_.totalWars = 0;
+  stats_.legendaryShown = 0;
+  for (int i = 0; i < SimStats::kLegendaryDisplayCount; ++i) {
+    stats_.legendary[i] = SimStats::LegendaryInfo{};
+  }
   for (const auto& settlement : settlements_.Settlements()) {
     stats_.totalStockFood += settlement.stockFood;
     stats_.totalStockWood += settlement.stockWood;
     stats_.totalHouses += settlement.houses;
     stats_.totalFarms += settlement.farms;
     stats_.totalGranaries += settlement.granaries;
+    stats_.totalWells += settlement.wells;
     stats_.totalTownHalls += settlement.townHalls;
     stats_.totalHousingCap += settlement.housingCap;
+    stats_.totalSoldiers += settlement.soldiers;
+    stats_.totalScouts += settlement.scouts;
+    if (settlement.tier == SettlementTier::Village) {
+      stats_.totalVillages++;
+    } else if (settlement.tier == SettlementTier::Town) {
+      stats_.totalTowns++;
+    } else if (settlement.tier == SettlementTier::City) {
+      stats_.totalCities++;
+    }
   }
   factions_.UpdateStats(settlements_);
   factions_.UpdateLeaders(settlements_, humans_);
+  stats_.totalWars = factions_.WarCount();
+
+  for (const auto& human : humans_.Humans()) {
+    if (!human.alive) continue;
+    if (!human.legendary) continue;
+    stats_.totalLegendary++;
+    if (stats_.legendaryShown >= SimStats::kLegendaryDisplayCount) continue;
+    auto& info = stats_.legendary[stats_.legendaryShown++];
+    info.id = human.id;
+    info.ageDays = human.ageDays;
+    info.settlementId = human.settlementId;
+    info.factionId = -1;
+    if (human.settlementId > 0) {
+      const Settlement* settlement = settlements_.Get(human.settlementId);
+      if (settlement) {
+        info.factionId = settlement->factionId;
+      }
+    }
+    info.traits = human.traits;
+    info.legendary = human.legendary;
+    HumanTraitsToString(info.traitsText, sizeof(info.traitsText), human.traits, human.legendary);
+  }
   CrashContextSetPopulation(stats_.totalPop);
 }
 
@@ -647,6 +707,7 @@ void App::WriteDeathLog() const {
   const auto& deathStats = humans_.GetDeathSummary();
   out << "starvation=" << deathStats.starvation << "\n";
   out << "dehydration=" << deathStats.dehydration << "\n";
+  out << "war=" << deathStats.war << "\n";
   out << "macro_natural=" << deathStats.macroNatural << "\n";
   out << "macro_starvation=" << deathStats.macroStarvation << "\n";
   out << "macro_fire=" << deathStats.macroFire << "\n";

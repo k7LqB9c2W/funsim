@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -10,8 +11,18 @@ class SettlementManager;
 enum class TaskType : uint8_t;
 
 enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
-enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard };
-enum class DeathReason : uint8_t { Starvation, Dehydration };
+enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
+enum class DeathReason : uint8_t { Starvation, Dehydration, War };
+
+enum class HumanTrait : uint16_t {
+  Brave = 1u << 0,
+  Lazy = 1u << 1,
+  Wise = 1u << 2,
+  Greedy = 1u << 3,
+  Ambitious = 1u << 4,
+  Kind = 1u << 5,
+  Curious = 1u << 6,
+};
 
 struct DeathRecord {
   int day = 0;
@@ -22,6 +33,7 @@ struct DeathRecord {
 struct DeathSummary {
   int starvation = 0;
   int dehydration = 0;
+  int war = 0;
   int macroNatural = 0;
   int macroStarvation = 0;
   int macroFire = 0;
@@ -58,6 +70,9 @@ struct Human {
   uint8_t bravery = 0;
   uint8_t greed = 0;
   uint8_t wanderlust = 0;
+  uint16_t traits = 0;
+  bool legendary = false;
+  uint8_t legendPower = 0;
   int parentIdMother = -1;
   int parentIdFather = -1;
   float moveAccum = 0.0f;
@@ -91,6 +106,10 @@ class HumanManager {
                     int& birthsToday, int& deathsToday);
   int MacroPopulation(const SettlementManager& settlements) const;
   void UpdateAnimation(float dt);
+  void MarkDeadByIndex(int index, int day, DeathReason reason);
+  void RecordWarDeaths(int count);
+  void SetAllowStarvationDeath(bool enabled) { allowStarvationDeath_ = enabled; }
+  void SetAllowDehydrationDeath(bool enabled) { allowDehydrationDeath_ = enabled; }
 
   int CountAlive() const;
   const std::vector<Human>& Humans() const { return humans_; }
@@ -126,6 +145,11 @@ class HumanManager {
   int macroFallbackX_ = 0;
   int macroFallbackY_ = 0;
   bool macroHasFallback_ = false;
+  bool allowStarvationDeath_ = true;
+  bool allowDehydrationDeath_ = true;
 };
 
 const char* DeathReasonName(DeathReason reason);
+const char* HumanTraitName(HumanTrait trait);
+bool HumanHasTrait(uint16_t traits, HumanTrait trait);
+void HumanTraitsToString(char* buffer, size_t size, uint16_t traits, bool legendary);

@@ -20,6 +20,7 @@ enum class BuildingType : uint8_t {
   TownHall,
   Farm,
   Granary,
+  Well,
 };
 
 struct Tile {
@@ -57,11 +58,14 @@ class World {
   uint16_t WaterScentAt(int x, int y) const;
   uint16_t FireRiskAt(int x, int y) const;
   uint16_t HomeScentAt(int x, int y) const;
+  uint8_t WellRadiusAt(int x, int y) const;
 
   bool SaveMap(const std::string& path) const;
-  bool LoadMap(const std::string& path);
+ bool LoadMap(const std::string& path);
 
  private:
+  void RecomputeWellRadius();
+
   int width_ = 0;
   int height_ = 0;
   std::vector<Tile> tiles_;
@@ -74,4 +78,5 @@ class World {
   std::vector<uint16_t> baseFire_;
   std::vector<uint16_t> baseHome_;
   std::vector<uint16_t> scentScratch_;
+  std::vector<uint8_t> wellRadius_;
 };

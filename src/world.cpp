@@ -1,6 +1,7 @@
 #include "world.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -13,6 +14,13 @@ namespace {
 constexpr int kFireDuration = 4;
 constexpr float kFarmGrowBaseChance = 0.85f;
 constexpr float kFarmGrowWaterBonus = 0.95f;
+constexpr int kWellSourceRadius = 6;
+constexpr int kWellRadiusStrong = 12;
+constexpr int kWellRadiusMedium = 6;
+constexpr int kWellRadiusWeak = 3;
+constexpr int kWellRadiusTiny = 1;
+constexpr int kScentIters = 6;
+constexpr int kWaterScentIters = 10;
 
 constexpr char kMapMagic[8] = {'F', 'S', 'M', 'A', 'P', '0', '1', '\0'};
 
@@ -35,7 +43,8 @@ World::World(int width, int height)
       baseWater_(width * height, 0),
       baseFire_(width * height, 0),
       baseHome_(width * height, 0),
-      scentScratch_(width * height, 0) {}
+      scentScratch_(width * height, 0),
+      wellRadius_(width * height, 0) {}
 
 bool World::InBounds(int x, int y) const {
   return x >= 0 && y >= 0 && x < width_ && y < height_;
@@ -48,6 +57,7 @@ void World::UpdateDaily(Random& rng) {
   CrashContextSetStage("World::UpdateDaily");
   std::vector<int> ignitions;
   ignitions.reserve(128);
+  RecomputeWellRadius();
 
   for (int y = 0; y < height_; ++y) {
     for (int x = 0; x < width_; ++x) {
@@ -105,6 +115,27 @@ void World::UpdateDaily(Random& rng) {
           if (!InBounds(nx, ny)) continue;
           if (At(nx, ny).type == TileType::FreshWater) {
             waterAdj++;
+          }
+        }
+        if (waterAdj == 0) {
+          bool hasWellWater = false;
+          for (int dy = -kWellRadiusStrong; dy <= kWellRadiusStrong && !hasWellWater; ++dy) {
+            int wy = y + dy;
+            if (wy < 0 || wy >= height_) continue;
+            for (int dx = -kWellRadiusStrong; dx <= kWellRadiusStrong; ++dx) {
+              int wx = x + dx;
+              if (wx < 0 || wx >= width_) continue;
+              int dist = std::abs(dx) + std::abs(dy);
+              if (dist > kWellRadiusStrong) continue;
+              uint8_t radius = wellRadius_[wy * width_ + wx];
+              if (radius > 0 && dist <= radius) {
+                hasWellWater = true;
+                break;
+              }
+            }
+          }
+          if (hasWellWater) {
+            waterAdj = 4;
           }
         }
         float waterFactor = static_cast<float>(waterAdj) / 4.0f;
@@ -187,6 +218,91 @@ uint16_t World::HomeScentAt(int x, int y) const {
   return homeScent_[y * width_ + x];
 }
 
+uint8_t World::WellRadiusAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  return wellRadius_[y * width_ + x];
+}
+
+void World::RecomputeWellRadius() {
+  const int size = width_ * height_;
+  if (static_cast<int>(wellRadius_.size()) != size) {
+    wellRadius_.assign(size, 0);
+  } else {
+    std::fill(wellRadius_.begin(), wellRadius_.end(), 0);
+  }
+
+  struct WellPos {
+    int x = 0;
+    int y = 0;
+    int idx = 0;
+  };
+  std::vector<WellPos> wells;
+  wells.reserve(128);
+
+  for (int y = 0; y < height_; ++y) {
+    for (int x = 0; x < width_; ++x) {
+      int idx = y * width_ + x;
+      if (tiles_[idx].building == BuildingType::Well) {
+        wells.push_back(WellPos{x, y, idx});
+      }
+    }
+  }
+
+  auto hasFreshWaterWithin = [&](int cx, int cy, int radius) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      int y = cy + dy;
+      if (y < 0 || y >= height_) continue;
+      for (int dx = -radius; dx <= radius; ++dx) {
+        int x = cx + dx;
+        if (x < 0 || x >= width_) continue;
+        int dist = std::abs(dx) + std::abs(dy);
+        if (dist > radius) continue;
+        if (tiles_[y * width_ + x].type == TileType::FreshWater) return true;
+      }
+    }
+    return false;
+  };
+
+  auto hasWellWithin = [&](int cx, int cy, int radius, int requiredRadius) {
+    for (int dy = -radius; dy <= radius; ++dy) {
+      int y = cy + dy;
+      if (y < 0 || y >= height_) continue;
+      for (int dx = -radius; dx <= radius; ++dx) {
+        int x = cx + dx;
+        if (x < 0 || x >= width_) continue;
+        int dist = std::abs(dx) + std::abs(dy);
+        if (dist > radius) continue;
+        if (wellRadius_[y * width_ + x] == requiredRadius) return true;
+      }
+    }
+    return false;
+  };
+
+  for (const auto& well : wells) {
+    if (hasFreshWaterWithin(well.x, well.y, kWellSourceRadius)) {
+      wellRadius_[well.idx] = kWellRadiusStrong;
+    }
+  }
+  for (const auto& well : wells) {
+    if (wellRadius_[well.idx] == 0 &&
+        hasWellWithin(well.x, well.y, kWellRadiusStrong, kWellRadiusStrong)) {
+      wellRadius_[well.idx] = kWellRadiusMedium;
+    }
+  }
+  for (const auto& well : wells) {
+    if (wellRadius_[well.idx] == 0 &&
+        hasWellWithin(well.x, well.y, kWellRadiusMedium, kWellRadiusMedium)) {
+      wellRadius_[well.idx] = kWellRadiusWeak;
+    }
+  }
+  for (const auto& well : wells) {
+    if (wellRadius_[well.idx] == 0 &&
+        hasWellWithin(well.x, well.y, kWellRadiusWeak, kWellRadiusWeak)) {
+      wellRadius_[well.idx] = kWellRadiusTiny;
+    }
+  }
+}
+
 void World::RecomputeScentFields() {
   const int size = width_ * height_;
   if (static_cast<int>(foodScent_.size()) != size) {
@@ -200,6 +316,15 @@ void World::RecomputeScentFields() {
     baseHome_.assign(size, 0);
     scentScratch_.assign(size, 0);
   }
+
+  RecomputeWellRadius();
+
+  auto wellStrength = [&](uint8_t radius) -> uint16_t {
+    if (radius <= 0) return 0;
+    int value = (static_cast<int>(radius) * 60000) / kWellRadiusStrong;
+    if (value < 12000) value = 12000;
+    return static_cast<uint16_t>(value);
+  };
 
   for (int y = 0; y < height_; ++y) {
     for (int x = 0; x < width_; ++x) {
@@ -219,15 +344,19 @@ void World::RecomputeScentFields() {
       }
       baseFood_[idx] = food;
 
-      baseWater_[idx] = (tile.type == TileType::FreshWater) ? 60000u : 0u;
+      uint16_t water = (tile.type == TileType::FreshWater) ? 60000u : 0u;
+      if (tile.building == BuildingType::Well && wellRadius_[idx] > 0) {
+        water = std::max(water, wellStrength(wellRadius_[idx]));
+      }
+      baseWater_[idx] = water;
       baseFire_[idx] = tile.burning ? 60000u : 0u;
     }
   }
 
-  auto relaxField = [&](const std::vector<uint16_t>& base, std::vector<uint16_t>& field) {
+  auto relaxField = [&](const std::vector<uint16_t>& base, std::vector<uint16_t>& field,
+                        int iters) {
     field = base;
-    constexpr int kIters = 6;
-    for (int iter = 0; iter < kIters; ++iter) {
+    for (int iter = 0; iter < iters; ++iter) {
       for (int y = 0; y < height_; ++y) {
         for (int x = 0; x < width_; ++x) {
           int idx = y * width_ + x;
@@ -246,9 +375,9 @@ void World::RecomputeScentFields() {
     }
   };
 
-  relaxField(baseFood_, foodScent_);
-  relaxField(baseWater_, waterScent_);
-  relaxField(baseFire_, fireRisk_);
+  relaxField(baseFood_, foodScent_, kScentIters);
+  relaxField(baseWater_, waterScent_, kWaterScentIters);
+  relaxField(baseFire_, fireRisk_, kScentIters);
 }
 
 void World::RecomputeHomeField(const SettlementManager& settlements) {

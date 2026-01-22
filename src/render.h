@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "humans.h"
+#include "overlays.h"
 #include "world.h"
 
 class FactionManager;
@@ -38,7 +39,7 @@ class Renderer {
               const SettlementManager& settlements, const FactionManager& factions,
               const Camera& camera, int windowWidth, int windowHeight,
               const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
-              bool hoverValid, int brushSize, bool showTerritoryOverlay);
+              bool hoverValid, int brushSize, OverlayMode overlayMode);
 
  private:
   void DestroyTerrainCache();
