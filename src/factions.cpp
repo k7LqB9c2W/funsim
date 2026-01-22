@@ -1,5 +1,6 @@
 #include "factions.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "humans.h"
@@ -9,6 +10,10 @@
 namespace {
 constexpr int kRelationAllyThreshold = 30;
 constexpr int kRelationHostileThreshold = -30;
+constexpr int kWarBorderPressureThreshold = 4;
+constexpr int kWarMinDays = 30;
+constexpr float kWarExhaustionGain = 0.02f;
+constexpr float kWarExhaustionRecover = 0.015f;
 
 const FactionColor kFactionPalette[] = {
     {230, 83, 77},   {242, 164, 68}, {248, 207, 92}, {120, 196, 109},
@@ -110,6 +115,63 @@ int RelationBiasFromTraits(const FactionTraits& traits) {
   bias -= traits.aggressionBias * 25.0f;
   return static_cast<int>(std::round(bias));
 }
+
+float ClampInfluence(float value) {
+  if (value > 0.5f) return 0.5f;
+  if (value < -0.5f) return -0.5f;
+  return value;
+}
+
+float ClampFloat(float value, float min_value, float max_value) {
+  if (value < min_value) return min_value;
+  if (value > max_value) return max_value;
+  return value;
+}
+
+LeaderInfluence InfluenceFromHuman(const Human& human) {
+  LeaderInfluence influence;
+  if (HumanHasTrait(human.traits, HumanTrait::Wise)) {
+    influence.diplomacy += 0.18f;
+    influence.tech += 0.22f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Brave)) {
+    influence.aggression += 0.18f;
+    influence.stability += 0.08f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Ambitious)) {
+    influence.expansion += 0.18f;
+    influence.aggression += 0.06f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Kind)) {
+    influence.diplomacy += 0.14f;
+    influence.stability += 0.12f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Greedy)) {
+    influence.diplomacy -= 0.12f;
+    influence.expansion += 0.06f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Lazy)) {
+    influence.expansion -= 0.18f;
+    influence.tech -= 0.12f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Curious)) {
+    influence.tech += 0.16f;
+    influence.expansion += 0.08f;
+  }
+  if (human.legendary) {
+    influence.legendary = true;
+    influence.expansion += 0.12f;
+    influence.tech += 0.18f;
+    influence.stability += 0.12f;
+  }
+
+  influence.expansion = ClampInfluence(influence.expansion);
+  influence.aggression = ClampInfluence(influence.aggression);
+  influence.diplomacy = ClampInfluence(influence.diplomacy);
+  influence.stability = ClampInfluence(influence.stability);
+  influence.tech = ClampInfluence(influence.tech);
+  return influence;
+}
 }  // namespace
 
 const char* FactionTemperamentName(FactionTemperament temperament) {
@@ -188,6 +250,7 @@ int FactionManager::CreateFaction(Random& rng) {
 
   factions_.push_back(faction);
   EnsureRelationsForNewFaction(rng);
+  EnsureWarsForNewFaction();
   return faction.id;
 }
 
@@ -223,9 +286,32 @@ void FactionManager::EnsureRelationsForNewFaction(Random& rng) {
   relations_.swap(next);
 }
 
+void FactionManager::EnsureWarsForNewFaction() {
+  int count = static_cast<int>(factions_.size());
+  if (count == 0) return;
+
+  int oldCount = count - 1;
+  std::vector<uint8_t> nextWars(count * count, 0);
+  std::vector<int> nextDays(count * count, 0);
+  for (int y = 0; y < oldCount; ++y) {
+    for (int x = 0; x < oldCount; ++x) {
+      nextWars[y * count + x] = wars_.empty() ? 0 : wars_[y * oldCount + x];
+      nextDays[y * count + x] = warDays_.empty() ? 0 : warDays_[y * oldCount + x];
+    }
+  }
+  for (int i = 0; i < count; ++i) {
+    nextWars[i * count + i] = 0;
+    nextDays[i * count + i] = 0;
+  }
+  wars_.swap(nextWars);
+  warDays_.swap(nextDays);
+}
+
 void FactionManager::ResetStats() {
   for (auto& faction : factions_) {
     faction.stats = FactionStats{};
+    faction.techTier = 0;
+    faction.stability = 0;
   }
 }
 
@@ -249,14 +335,30 @@ void FactionManager::UpdateTerritory(const SettlementManager& settlements) {
 
 void FactionManager::UpdateStats(const SettlementManager& settlements) {
   ResetStats();
+  std::vector<int> stabilityCounts(factions_.size(), 0);
   for (const auto& settlement : settlements.Settlements()) {
     if (settlement.factionId <= 0) continue;
     Faction* faction = GetMutable(settlement.factionId);
     if (!faction) continue;
+    int index = IndexForId(settlement.factionId);
+    if (index >= 0 && index < static_cast<int>(stabilityCounts.size())) {
+      faction->stability += settlement.stability;
+      stabilityCounts[index]++;
+    }
     faction->stats.settlements++;
     faction->stats.population += settlement.population;
     faction->stats.stockFood += settlement.stockFood;
     faction->stats.stockWood += settlement.stockWood;
+    faction->techTier = std::max(faction->techTier, settlement.techTier);
+  }
+  for (size_t i = 0; i < factions_.size(); ++i) {
+    if (stabilityCounts[i] > 0) {
+      factions_[i].stability =
+          static_cast<int>(std::round(static_cast<float>(factions_[i].stability) /
+                                      static_cast<float>(stabilityCounts[i])));
+    } else {
+      factions_[i].stability = 100;
+    }
   }
   UpdateTerritory(settlements);
 }
@@ -265,9 +367,10 @@ void FactionManager::UpdateLeaders(const SettlementManager& settlements, const H
   if (factions_.empty()) return;
 
   std::vector<int> bestAge(factions_.size(), -1);
-  std::vector<int> bestId(factions_.size(), -1);
+  std::vector<int> bestIndex(factions_.size(), -1);
 
-  for (const auto& human : humans.Humans()) {
+  for (int i = 0; i < static_cast<int>(humans.Humans().size()); ++i) {
+    const auto& human = humans.Humans()[i];
     if (!human.alive) continue;
     if (human.settlementId <= 0) continue;
     const Settlement* settlement = settlements.Get(human.settlementId);
@@ -277,20 +380,159 @@ void FactionManager::UpdateLeaders(const SettlementManager& settlements, const H
     if (index < 0) continue;
     if (human.ageDays > bestAge[index]) {
       bestAge[index] = human.ageDays;
-      bestId[index] = human.id;
+      bestIndex[index] = i;
     }
   }
 
   for (size_t i = 0; i < factions_.size(); ++i) {
     Faction& faction = factions_[i];
-    if (bestId[i] > 0) {
-      faction.leaderId = bestId[i];
-      faction.leaderName = MakeLeaderNameFromId(bestId[i]);
-    } else if (faction.leaderName.empty() || faction.leaderName == "Unassigned") {
-      faction.leaderId = -1;
-      faction.leaderName = "Council";
+    if (bestIndex[i] >= 0) {
+      const auto& human = humans.Humans()[bestIndex[i]];
+      faction.leaderId = human.id;
+      faction.leaderName = MakeLeaderNameFromId(human.id);
+      faction.leaderInfluence = InfluenceFromHuman(human);
+    } else {
+      if (faction.leaderName.empty() || faction.leaderName == "Unassigned") {
+        faction.leaderId = -1;
+        faction.leaderName = "Council";
+      }
+      faction.leaderInfluence = LeaderInfluence{};
     }
   }
+}
+
+void FactionManager::UpdateDiplomacy(const SettlementManager& settlements, Random& rng, int dayCount) {
+  (void)dayCount;
+  int count = static_cast<int>(factions_.size());
+  if (count == 0) return;
+
+  if (static_cast<int>(relations_.size()) != count * count) {
+    relations_.assign(count * count, 0);
+    for (int i = 0; i < count; ++i) {
+      relations_[i * count + i] = 100;
+    }
+  }
+  if (static_cast<int>(wars_.size()) != count * count) {
+    EnsureWarsForNewFaction();
+  }
+
+  std::vector<int> borderPressure(count * count, 0);
+  int zonesX = settlements.ZonesX();
+  int zonesY = settlements.ZonesY();
+  if (zonesX > 0 && zonesY > 0) {
+    for (int zy = 0; zy < zonesY; ++zy) {
+      for (int zx = 0; zx < zonesX; ++zx) {
+        int ownerId = settlements.ZoneOwnerAt(zx, zy);
+        if (ownerId <= 0) continue;
+        const Settlement* ownerSettlement = settlements.Get(ownerId);
+        if (!ownerSettlement || ownerSettlement->factionId <= 0) continue;
+        int factionA = ownerSettlement->factionId;
+        int indexA = IndexForId(factionA);
+        if (indexA < 0) continue;
+
+        auto handleNeighbor = [&](int nx, int ny) {
+          if (nx < 0 || ny < 0 || nx >= zonesX || ny >= zonesY) return;
+          int neighborOwner = settlements.ZoneOwnerAt(nx, ny);
+          if (neighborOwner <= 0 || neighborOwner == ownerId) return;
+          const Settlement* neighborSettlement = settlements.Get(neighborOwner);
+          if (!neighborSettlement || neighborSettlement->factionId <= 0) return;
+          int factionB = neighborSettlement->factionId;
+          if (factionA == factionB) return;
+          int indexB = IndexForId(factionB);
+          if (indexB < 0) return;
+          borderPressure[indexA * count + indexB]++;
+          borderPressure[indexB * count + indexA]++;
+        };
+
+        handleNeighbor(zx + 1, zy);
+        handleNeighbor(zx, zy + 1);
+      }
+    }
+  }
+
+  std::vector<float> stress(count, 0.0f);
+  for (int i = 0; i < count; ++i) {
+    const Faction& faction = factions_[i];
+    int pop = faction.stats.population;
+    float foodRatio =
+        (pop > 0) ? static_cast<float>(faction.stats.stockFood) /
+                         static_cast<float>(std::max(1, pop * 30))
+                  : 1.0f;
+    float woodRatio =
+        (pop > 0) ? static_cast<float>(faction.stats.stockWood) /
+                         static_cast<float>(std::max(1, pop * 4))
+                  : 1.0f;
+    float supply = (foodRatio + woodRatio) * 0.5f;
+    supply = ClampFloat(supply, 0.0f, 1.2f);
+    float value = 1.0f - (supply / 1.2f);
+    if (faction.warExhaustion > 0.4f) {
+      value += 0.1f;
+    }
+    stress[i] = ClampFloat(value, 0.0f, 1.5f);
+  }
+
+  for (int i = 0; i < count; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      int idx = i * count + j;
+      int score = relations_[idx];
+      int border = borderPressure[idx];
+      int delta = 0;
+      if (border > 0) {
+        delta -= std::min(border, 6);
+      } else {
+        delta += 1;
+      }
+      if (stress[i] > 0.7f || stress[j] > 0.7f) {
+        delta -= 2;
+      }
+
+      float dipBias = factions_[i].leaderInfluence.diplomacy + factions_[j].leaderInfluence.diplomacy;
+      float aggrBias =
+          factions_[i].leaderInfluence.aggression + factions_[j].leaderInfluence.aggression;
+      delta += static_cast<int>(std::round(dipBias * 4.0f));
+      delta -= static_cast<int>(std::round(aggrBias * 4.0f));
+
+      bool atWar = IsAtWar(factions_[i].id, factions_[j].id);
+      if (atWar) {
+        delta -= 1;
+      }
+
+      score = ClampRelation(score + delta);
+      relations_[idx] = score;
+      relations_[j * count + i] = score;
+
+      if (atWar) {
+        warDays_[idx]++;
+        warDays_[j * count + i] = warDays_[idx];
+      } else {
+        warDays_[idx] = 0;
+        warDays_[j * count + i] = 0;
+      }
+
+      if (!atWar) {
+        float aggression = (factions_[i].traits.aggressionBias + factions_[j].traits.aggressionBias) * 0.5f;
+        aggression += (factions_[i].leaderInfluence.aggression + factions_[j].leaderInfluence.aggression) * 0.5f;
+        bool pressure = border >= kWarBorderPressureThreshold;
+        bool stressTrigger = (stress[i] > 0.75f || stress[j] > 0.75f);
+        if (score <= kRelationHostileThreshold - 5 && (pressure || stressTrigger) &&
+            (aggression >= 0.55f || rng.Chance(0.06f))) {
+          SetWar(factions_[i].id, factions_[j].id, true);
+        }
+      } else {
+        int daysAtWar = warDays_[idx];
+        float peaceChance = 0.02f +
+                            (factions_[i].leaderInfluence.diplomacy +
+                             factions_[j].leaderInfluence.diplomacy) *
+                                0.03f;
+        peaceChance = ClampFloat(peaceChance, 0.01f, 0.12f);
+        if (daysAtWar > kWarMinDays && score > -20 && rng.Chance(peaceChance)) {
+          SetWar(factions_[i].id, factions_[j].id, false);
+        }
+      }
+    }
+  }
+
+  UpdateWarExhaustion();
 }
 
 int FactionManager::RelationScore(int factionA, int factionB) const {
@@ -309,17 +551,92 @@ FactionRelation FactionManager::RelationType(int factionA, int factionB) const {
   return FactionRelation::Neutral;
 }
 
+bool FactionManager::IsAtWar(int factionA, int factionB) const {
+  if (!warEnabled_) return false;
+  if (factionA == factionB && factionA > 0) return false;
+  int indexA = IndexForId(factionA);
+  int indexB = IndexForId(factionB);
+  if (indexA < 0 || indexB < 0) return false;
+  int count = static_cast<int>(factions_.size());
+  return wars_.empty() ? false : wars_[indexA * count + indexB] != 0;
+}
+
+int FactionManager::WarCount() const {
+  int count = static_cast<int>(factions_.size());
+  int total = 0;
+  for (int i = 0; i < count; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      if (IsAtWar(factions_[i].id, factions_[j].id)) {
+        total++;
+      }
+    }
+  }
+  return total;
+}
+
+void FactionManager::SetWar(int factionA, int factionB, bool atWar) {
+  if (factionA == factionB || factionA <= 0 || factionB <= 0) return;
+  if (!warEnabled_ && atWar) return;
+  int indexA = IndexForId(factionA);
+  int indexB = IndexForId(factionB);
+  if (indexA < 0 || indexB < 0) return;
+  int count = static_cast<int>(factions_.size());
+  if (static_cast<int>(wars_.size()) != count * count) {
+    EnsureWarsForNewFaction();
+  }
+  wars_[indexA * count + indexB] = atWar ? 1u : 0u;
+  wars_[indexB * count + indexA] = atWar ? 1u : 0u;
+  int dayValue = atWar ? 1 : 0;
+  warDays_[indexA * count + indexB] = dayValue;
+  warDays_[indexB * count + indexA] = dayValue;
+  if (atWar) {
+    relations_[indexA * count + indexB] = std::min(relations_[indexA * count + indexB], -40);
+    relations_[indexB * count + indexA] = std::min(relations_[indexB * count + indexA], -40);
+  }
+}
+
+void FactionManager::SetWarEnabled(bool enabled) {
+  if (warEnabled_ == enabled) return;
+  warEnabled_ = enabled;
+  if (!warEnabled_) {
+    std::fill(wars_.begin(), wars_.end(), 0);
+    std::fill(warDays_.begin(), warDays_.end(), 0);
+  }
+}
+
 bool FactionManager::CanExpandInto(int sourceFactionId, int targetFactionId,
                                    bool resourceStress) const {
   if (sourceFactionId <= 0 || targetFactionId <= 0) return true;
   if (sourceFactionId == targetFactionId) return true;
+  if (IsAtWar(sourceFactionId, targetFactionId)) return true;
 
   FactionRelation relation = RelationType(sourceFactionId, targetFactionId);
   if (relation != FactionRelation::Hostile) return true;
 
   const Faction* source = Get(sourceFactionId);
   if (!source) return false;
-  if (source->traits.aggressionBias >= 0.9f) return true;
-  if (resourceStress && source->traits.aggressionBias >= 0.65f) return true;
+  float aggression = source->traits.aggressionBias + source->leaderInfluence.aggression;
+  if (aggression >= 0.9f) return true;
+  if (resourceStress && aggression >= 0.65f) return true;
   return false;
+}
+
+void FactionManager::UpdateWarExhaustion() {
+  int count = static_cast<int>(factions_.size());
+  for (int i = 0; i < count; ++i) {
+    bool atWar = false;
+    for (int j = 0; j < count; ++j) {
+      if (i == j) continue;
+      if (IsAtWar(factions_[i].id, factions_[j].id)) {
+        atWar = true;
+        break;
+      }
+    }
+    if (atWar) {
+      factions_[i].warExhaustion = ClampFloat(factions_[i].warExhaustion + kWarExhaustionGain, 0.0f, 1.0f);
+    } else {
+      factions_[i].warExhaustion =
+          ClampFloat(factions_[i].warExhaustion - kWarExhaustionRecover, 0.0f, 1.0f);
+    }
+  }
 }

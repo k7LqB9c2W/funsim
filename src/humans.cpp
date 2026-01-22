@@ -1,8 +1,11 @@
 #include "humans.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 
 #include "settlements.h"
@@ -11,6 +14,7 @@ namespace {
 constexpr int kAdultAgeDays = 18 * 365;
 constexpr int kGestationDays = 90;
 constexpr int kCrowdPenalty = 25;
+constexpr float kSeekWaterCrowdPenaltyScale = 0.1f;
 constexpr int kMateRadius = 4;
 constexpr int kMateCooldownDays = 30;
 constexpr float kMateBaseChance = 0.01f;
@@ -27,6 +31,7 @@ constexpr int kCarryFoodEmergencyDays = 3;
 constexpr int kMateFoodReservePerPop = 10;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGathererWanderRadius = 18;
+constexpr int kScoutWanderRadius = 26;
 
 constexpr int kMacroBins = 6;
 constexpr int kMacroBinDays[kMacroBins] = {365, 4 * 365, 13 * 365, 22 * 365, 20 * 365, 200 * 365};
@@ -187,9 +192,31 @@ int BuildWoodCost(BuildingType type) {
       return Settlement::kFarmWoodCost;
     case BuildingType::Granary:
       return Settlement::kGranaryWoodCost;
+    case BuildingType::Well:
+      return Settlement::kWellWoodCost;
     default:
       return 0;
   }
+}
+
+uint16_t RollTraits(Random& rng) {
+  uint16_t traits = 0;
+  if (rng.Chance(0.12f)) traits |= static_cast<uint16_t>(HumanTrait::Brave);
+  if (rng.Chance(0.10f)) traits |= static_cast<uint16_t>(HumanTrait::Lazy);
+  if (rng.Chance(0.11f)) traits |= static_cast<uint16_t>(HumanTrait::Wise);
+  if (rng.Chance(0.10f)) traits |= static_cast<uint16_t>(HumanTrait::Greedy);
+  if (rng.Chance(0.08f)) traits |= static_cast<uint16_t>(HumanTrait::Ambitious);
+  if (rng.Chance(0.10f)) traits |= static_cast<uint16_t>(HumanTrait::Kind);
+  if (rng.Chance(0.09f)) traits |= static_cast<uint16_t>(HumanTrait::Curious);
+  return traits;
+}
+
+void ApplyLegendaryBoost(Human& human, Random& rng) {
+  human.legendary = true;
+  human.legendPower = static_cast<uint8_t>(rng.RangeInt(2, 5));
+  human.traits |= static_cast<uint16_t>(HumanTrait::Brave);
+  human.traits |= static_cast<uint16_t>(HumanTrait::Wise);
+  human.traits |= static_cast<uint16_t>(HumanTrait::Ambitious);
 }
 }  // namespace
 
@@ -199,8 +226,62 @@ const char* DeathReasonName(DeathReason reason) {
       return "starvation";
     case DeathReason::Dehydration:
       return "dehydration";
+    case DeathReason::War:
+      return "war";
     default:
       return "unknown";
+  }
+}
+
+const char* HumanTraitName(HumanTrait trait) {
+  switch (trait) {
+    case HumanTrait::Brave:
+      return "brave";
+    case HumanTrait::Lazy:
+      return "lazy";
+    case HumanTrait::Wise:
+      return "wise";
+    case HumanTrait::Greedy:
+      return "greedy";
+    case HumanTrait::Ambitious:
+      return "ambitious";
+    case HumanTrait::Kind:
+      return "kind";
+    case HumanTrait::Curious:
+      return "curious";
+    default:
+      return "unknown";
+  }
+}
+
+bool HumanHasTrait(uint16_t traits, HumanTrait trait) {
+  return (traits & static_cast<uint16_t>(trait)) != 0;
+}
+
+void HumanTraitsToString(char* buffer, size_t size, uint16_t traits, bool legendary) {
+  if (!buffer || size == 0) return;
+  buffer[0] = '\0';
+  bool first = true;
+  auto append = [&](const char* word) {
+    if (!word || word[0] == '\0') return;
+    if (!first) {
+      std::snprintf(buffer + std::strlen(buffer), size - std::strlen(buffer), ", ");
+    }
+    std::snprintf(buffer + std::strlen(buffer), size - std::strlen(buffer), "%s", word);
+    first = false;
+  };
+  if (legendary) {
+    append("legendary");
+  }
+  if (HumanHasTrait(traits, HumanTrait::Brave)) append(HumanTraitName(HumanTrait::Brave));
+  if (HumanHasTrait(traits, HumanTrait::Lazy)) append(HumanTraitName(HumanTrait::Lazy));
+  if (HumanHasTrait(traits, HumanTrait::Wise)) append(HumanTraitName(HumanTrait::Wise));
+  if (HumanHasTrait(traits, HumanTrait::Greedy)) append(HumanTraitName(HumanTrait::Greedy));
+  if (HumanHasTrait(traits, HumanTrait::Ambitious)) append(HumanTraitName(HumanTrait::Ambitious));
+  if (HumanHasTrait(traits, HumanTrait::Kind)) append(HumanTraitName(HumanTrait::Kind));
+  if (HumanHasTrait(traits, HumanTrait::Curious)) append(HumanTraitName(HumanTrait::Curious));
+  if (first) {
+    std::snprintf(buffer, size, "none");
   }
 }
 
@@ -241,6 +322,10 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.bravery = static_cast<uint8_t>(rng.RangeInt(0, 255));
   human.greed = static_cast<uint8_t>(rng.RangeInt(0, 255));
   human.wanderlust = static_cast<uint8_t>(rng.RangeInt(0, 255));
+  human.traits = RollTraits(rng);
+  if (rng.Chance(0.0015f)) {
+    ApplyLegendaryBoost(human, rng);
+  }
   human.parentIdMother = -1;
   human.parentIdFather = -1;
   human.moveAccum = 0.0f;
@@ -278,6 +363,9 @@ void HumanManager::RecordDeath(int humanId, int day, DeathReason reason) {
       break;
     case DeathReason::Dehydration:
       deathSummary_.dehydration++;
+      break;
+    case DeathReason::War:
+      deathSummary_.war++;
       break;
   }
 }
@@ -412,9 +500,16 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
       }
     }
     if (!canMate) {
+      int wanderBias = human.wanderlust;
+      if (HumanHasTrait(human.traits, HumanTrait::Lazy)) {
+        wanderBias = std::max(0, wanderBias - 80);
+      }
+      if (HumanHasTrait(human.traits, HumanTrait::Curious)) {
+        wanderBias = std::min(255, wanderBias + 60);
+      }
       if (human.settlementId != -1 &&
-          (human.wanderlust < 100 || human.role == Role::Guard || human.role == Role::Builder ||
-           human.role == Role::Farmer)) {
+          (wanderBias < 100 || human.role == Role::Guard || human.role == Role::Builder ||
+           human.role == Role::Farmer || human.role == Role::Soldier)) {
         human.goal = Goal::StayHome;
       } else {
         human.goal = Goal::Wander;
@@ -428,7 +523,12 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
   } else if (human.goal == Goal::Wander) {
     uint32_t hash = HashNoise(static_cast<uint32_t>(human.id),
                               static_cast<uint32_t>(tickCount), 0xA5u, 0x5Au);
-    int radius = (human.role == Role::Gatherer) ? kGathererWanderRadius : 10;
+    int radius = 10;
+    if (human.role == Role::Gatherer) {
+      radius = kGathererWanderRadius;
+    } else if (human.role == Role::Scout) {
+      radius = kScoutWanderRadius;
+    }
     int dx = static_cast<int>(hash % (radius * 2 + 1)) - radius;
     int dy = static_cast<int>((hash >> 8) % (radius * 2 + 1)) - radius;
     int tx = ClampInt(human.x + dx, 0, world.width() - 1);
@@ -447,8 +547,20 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     minTicks = ticksPerDay / 3;
     maxTicks = ticksPerDay;
   }
+  float cooldownScale = 1.0f;
+  if (HumanHasTrait(human.traits, HumanTrait::Lazy)) {
+    cooldownScale = 1.35f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Curious)) {
+    cooldownScale *= 0.85f;
+  }
+  if (HumanHasTrait(human.traits, HumanTrait::Wise)) {
+    cooldownScale *= 0.92f;
+  }
   minTicks = std::max(1, minTicks);
   maxTicks = std::max(minTicks, maxTicks);
+  minTicks = std::max(1, static_cast<int>(std::round(minTicks * cooldownScale)));
+  maxTicks = std::max(minTicks, static_cast<int>(std::round(maxTicks * cooldownScale)));
   human.rethinkCooldownTicks = rng.RangeInt(minTicks, maxTicks);
 }
 
@@ -601,7 +713,13 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     int score = 0;
 
     if (!popCounts_.empty()) {
-      score -= popCounts_[idx] * kCrowdPenalty;
+      int crowdPenalty = kCrowdPenalty;
+      if (human.goal == Goal::SeekWater) {
+        crowdPenalty = std::max(
+            1, static_cast<int>(std::round(static_cast<float>(kCrowdPenalty) *
+                                           kSeekWaterCrowdPenaltyScale)));
+      }
+      score -= popCounts_[idx] * crowdPenalty;
     }
     if (world.At(nx, ny).burning) {
       score -= 200000;
@@ -648,16 +766,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     }
 
-    if (human.role == Role::Gatherer) {
+    if (human.role == Role::Gatherer || human.role == Role::Scout) {
       score += static_cast<int>(world.FoodScentAt(nx, ny)) / 4;
     } else if (human.role == Role::Guard || human.role == Role::Builder ||
-               human.role == Role::Farmer) {
+               human.role == Role::Farmer || human.role == Role::Soldier) {
       int dist = Manhattan(nx, ny, human.homeX, human.homeY);
       score -= dist * 40;
     }
 
     if (human.settlementId != -1 && human.goal != Goal::SeekWater) {
-      bool wanderHeavy = (human.goal == Goal::Wander || human.role == Role::Gatherer);
+      bool wanderHeavy =
+          (human.goal == Goal::Wander || human.role == Role::Gatherer || human.role == Role::Scout);
       if (!wanderHeavy) {
         float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
         int homeScore = static_cast<int>(static_cast<float>(world.HomeScentAt(nx, ny)) *
@@ -714,8 +833,10 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       if (human.x == human.taskX && human.y == human.taskY) {
         Tile& tile = world.At(human.x, human.y);
         if (tile.trees > 0) {
-          tile.trees = std::max(0, tile.trees - 1);
-          human.carryWood += 1;
+          int take = std::max(1, human.taskAmount);
+          if (take > tile.trees) take = tile.trees;
+          tile.trees = std::max(0, tile.trees - take);
+          human.carryWood += take;
           human.carrying = true;
           human.taskType = TaskType::HaulWoodToStockpile;
           human.taskX = human.homeX;
@@ -841,7 +962,22 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       human.rethinkCooldownTicks--;
     }
 
-    human.moveAccum += stepsPerTick;
+    int stride = 1;
+    float speedScale = 1.0f;
+    if (human.role == Role::Idle) {
+      stride = 3;
+      speedScale = 0.6f;
+    } else if (human.role == Role::Builder) {
+      stride = 2;
+      speedScale = 0.8f;
+    } else if (human.role == Role::Guard || human.role == Role::Soldier) {
+      stride = 2;
+      speedScale = 0.9f;
+    }
+    human.moveAccum += stepsPerTick * speedScale;
+    if ((tickCount + human.id) % stride != 0) {
+      continue;
+    }
     int steps = 0;
     while (human.moveAccum >= 1.0f && steps < 4) {
       human.moveAccum -= 1.0f;
@@ -849,6 +985,19 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       steps++;
     }
   }
+}
+
+void HumanManager::MarkDeadByIndex(int index, int day, DeathReason reason) {
+  if (index < 0 || index >= static_cast<int>(humans_.size())) return;
+  Human& human = humans_[index];
+  if (!human.alive) return;
+  RecordDeath(human.id, day, reason);
+  human.alive = false;
+}
+
+void HumanManager::RecordWarDeaths(int count) {
+  if (count <= 0) return;
+  deathSummary_.war += count;
 }
 
 void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng,
@@ -979,6 +1128,12 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         if (tile.building == BuildingType::Farm &&
             tile.farmStage >= Settlement::kFarmReadyStage && canUseOwnedFarm) {
           int yield = Settlement::kFarmYield;
+          if (tile.buildingOwnerId > 0) {
+            const Settlement* owner = settlements.Get(tile.buildingOwnerId);
+            if (owner) {
+              yield = FarmYieldForTier(owner->techTier);
+            }
+          }
           int remaining = std::max(0, yield - 1);
           if (remaining > 0) {
             human.carryFood += remaining;
@@ -1002,6 +1157,12 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             if (neighbor.building == BuildingType::Farm &&
                 neighbor.farmStage >= Settlement::kFarmReadyStage && canUseNeighborFarm) {
               int yield = Settlement::kFarmYield;
+              if (neighbor.buildingOwnerId > 0) {
+                const Settlement* owner = settlements.Get(neighbor.buildingOwnerId);
+                if (owner) {
+                  yield = FarmYieldForTier(owner->techTier);
+                }
+              }
               int remaining = std::max(0, yield - 1);
               if (remaining > 0) {
                 human.carryFood += remaining;
@@ -1037,10 +1198,36 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       }
     }
 
-    if (tile.type == TileType::FreshWater) {
+    auto findDrinkableWater = [&](int cx, int cy, int& outX, int& outY) {
+      const Tile& here = world.At(cx, cy);
+      if (here.type == TileType::FreshWater ||
+          (here.building == BuildingType::Well && world.WellRadiusAt(cx, cy) > 0)) {
+        outX = cx;
+        outY = cy;
+        return true;
+      }
+      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (const auto& d : dirs) {
+        int nx = cx + d[0];
+        int ny = cy + d[1];
+        if (!world.InBounds(nx, ny)) continue;
+        const Tile& neighbor = world.At(nx, ny);
+        if (neighbor.type == TileType::FreshWater ||
+            (neighbor.building == BuildingType::Well && world.WellRadiusAt(nx, ny) > 0)) {
+          outX = nx;
+          outY = ny;
+          return true;
+        }
+      }
+      return false;
+    };
+
+    int drinkX = human.x;
+    int drinkY = human.y;
+    if (findDrinkableWater(human.x, human.y, drinkX, drinkY)) {
       human.daysWithoutWater = 0;
-      human.lastWaterX = human.x;
-      human.lastWaterY = human.y;
+      human.lastWaterX = drinkX;
+      human.lastWaterY = drinkY;
     } else if (settlement) {
       int dist = Manhattan(human.x, human.y, human.homeX, human.homeY);
       if (world.WaterScentAt(human.homeX, human.homeY) > 20000 && dist <= 12) {
@@ -1084,15 +1271,19 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       }
     }
 
-    if (human.daysWithoutFood > kFoodGraceDays) {
-      if (human.daysWithoutFood >= kFoodMaxDays) {
+    int foodMaxDays = kFoodMaxDays + (human.legendary ? 5 : 0);
+    if (allowStarvationDeath_ && human.daysWithoutFood > kFoodGraceDays) {
+      if (human.daysWithoutFood >= foodMaxDays) {
         RecordDeath(human.id, dayCount, DeathReason::Starvation);
         human.alive = false;
         deathsToday++;
         continue;
       }
       float chance = static_cast<float>(human.daysWithoutFood - kFoodGraceDays) /
-                     static_cast<float>(kFoodMaxDays - kFoodGraceDays);
+                     static_cast<float>(foodMaxDays - kFoodGraceDays);
+      if (human.legendary) {
+        chance *= 0.5f;
+      }
       if (rng.Chance(chance)) {
         RecordDeath(human.id, dayCount, DeathReason::Starvation);
         human.alive = false;
@@ -1101,15 +1292,19 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       }
     }
 
-    if (human.daysWithoutWater > kWaterGraceDays) {
-      if (human.daysWithoutWater >= kWaterMaxDays) {
+    int waterMaxDays = kWaterMaxDays + (human.legendary ? 2 : 0);
+    if (allowDehydrationDeath_ && human.daysWithoutWater > kWaterGraceDays) {
+      if (human.daysWithoutWater >= waterMaxDays) {
         RecordDeath(human.id, dayCount, DeathReason::Dehydration);
         human.alive = false;
         deathsToday++;
         continue;
       }
       float chance = static_cast<float>(human.daysWithoutWater - kWaterGraceDays) /
-                     static_cast<float>(kWaterMaxDays - kWaterGraceDays);
+                     static_cast<float>(waterMaxDays - kWaterGraceDays);
+      if (human.legendary) {
+        chance *= 0.6f;
+      }
       if (rng.Chance(chance)) {
         RecordDeath(human.id, dayCount, DeathReason::Dehydration);
         human.alive = false;
@@ -1289,7 +1484,8 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
 
       if (settlement.farms > 0) {
         float dailyFarmFood =
-            static_cast<float>(settlement.farms) * (static_cast<float>(Settlement::kFarmYield) / 3.0f);
+            static_cast<float>(settlement.farms) *
+            (static_cast<float>(FarmYieldForTier(settlement.techTier)) / 3.0f);
         settlement.macroFarmFoodAccum += dailyFarmFood;
         int farmFood = static_cast<int>(settlement.macroFarmFoodAccum);
         if (farmFood > 0) {
@@ -1357,7 +1553,8 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
       float fireFactor = static_cast<float>(world.FireRiskAt(settlement.centerX,
                                                              settlement.centerY)) /
                          60000.0f;
-      float starvationRate = (settlement.stockFood == 0) ? 0.002f : 0.0f;
+      float starvationRate =
+          (allowStarvationDeath_ && settlement.stockFood == 0) ? 0.002f : 0.0f;
       for (int bin = 0; bin < kMacroBins; ++bin) {
         int baseDeathsM = ApplyRate(settlement.macroPopM[bin], kMacroDeathRate[bin], rng);
         int baseDeathsF = ApplyRate(settlement.macroPopF[bin], kMacroDeathRate[bin], rng);

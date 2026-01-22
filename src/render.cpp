@@ -208,6 +208,21 @@ bool SameColor(const SDL_Color& a, const SDL_Color& b) {
   return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
 }
 
+float Clamp01(float value) {
+  if (value < 0.0f) return 0.0f;
+  if (value > 1.0f) return 1.0f;
+  return value;
+}
+
+SDL_Color HeatColor(float t) {
+  t = Clamp01(t);
+  Uint8 r = static_cast<Uint8>(50 + 205 * t);
+  float mid = 1.0f - std::abs(t - 0.5f) * 2.0f;
+  Uint8 g = static_cast<Uint8>(60 + 140 * Clamp01(mid));
+  Uint8 b = static_cast<Uint8>(200 - 170 * t);
+  return SDL_Color{r, g, b, 180};
+}
+
 }  // namespace
 
 bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
@@ -685,7 +700,7 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
                       const SettlementManager& settlements, const FactionManager& factions,
                       const Camera& camera, int windowWidth, int windowHeight,
                       const std::vector<VillageMarker>& villageMarkers, int hoverTileX,
-                      int hoverTileY, bool hoverValid, int brushSize, bool showTerritoryOverlay) {
+                      int hoverTileY, bool hoverValid, int brushSize, OverlayMode overlayMode) {
   const float tileSize = static_cast<float>(kTilePx);
   const float invZoom = 1.0f / camera.zoom;
 
@@ -713,35 +728,100 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
     SDL_RenderCopyF(renderer, chunk.texture, nullptr, &dst);
   }
 
-  if (showTerritoryOverlay) {
-    int zoneSize = settlements.ZoneSize();
-    int zonesX = settlements.ZonesX();
-    int zonesY = settlements.ZonesY();
-    if (zoneSize > 0 && zonesX > 0 && zonesY > 0) {
-      int minZoneX = std::max(0, minX / zoneSize);
-      int minZoneY = std::max(0, minY / zoneSize);
-      int maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
-      int maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
-      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  int zoneSize = settlements.ZoneSize();
+  int zonesX = settlements.ZonesX();
+  int zonesY = settlements.ZonesY();
+  if (overlayMode != OverlayMode::None && zoneSize > 0 && zonesX > 0 && zonesY > 0) {
+    int minZoneX = std::max(0, minX / zoneSize);
+    int minZoneY = std::max(0, minY / zoneSize);
+    int maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
+    int maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    int maxPop = 1;
+    if (overlayMode == OverlayMode::PopulationHeat) {
       for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
         for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
-          int ownerId = settlements.ZoneOwnerAt(zx, zy);
-          if (ownerId <= 0) continue;
-          const Settlement* settlement = settlements.Get(ownerId);
-          if (!settlement) continue;
-          const Faction* faction = factions.Get(settlement->factionId);
+          maxPop = std::max(maxPop, settlements.ZonePopAt(zx, zy));
+        }
+      }
+    }
+
+    for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
+      for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
+        int ownerId = settlements.ZoneOwnerAt(zx, zy);
+        const Settlement* settlement = (ownerId > 0) ? settlements.Get(ownerId) : nullptr;
+        const Faction* faction = (settlement && settlement->factionId > 0)
+                                     ? factions.Get(settlement->factionId)
+                                     : nullptr;
+
+        int tilesWide = std::min(zoneSize, world.width() - zx * zoneSize);
+        int tilesHigh = std::min(zoneSize, world.height() - zy * zoneSize);
+        float worldX = static_cast<float>(zx * zoneSize) * tileSize;
+        float worldY = static_cast<float>(zy * zoneSize) * tileSize;
+        float width = static_cast<float>(tilesWide) * tileSize;
+        float height = static_cast<float>(tilesHigh) * tileSize;
+        SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
+
+        if (overlayMode == OverlayMode::FactionTerritory) {
           if (!faction) continue;
-
-          int tilesWide = std::min(zoneSize, world.width() - zx * zoneSize);
-          int tilesHigh = std::min(zoneSize, world.height() - zy * zoneSize);
-          float worldX = static_cast<float>(zx * zoneSize) * tileSize;
-          float worldY = static_cast<float>(zy * zoneSize) * tileSize;
-          float width = static_cast<float>(tilesWide) * tileSize;
-          float height = static_cast<float>(tilesHigh) * tileSize;
-
           SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, 70);
-          SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
           SDL_RenderFillRectF(renderer, &dst);
+        } else if (overlayMode == OverlayMode::SettlementInfluence) {
+          if (!faction || !settlement) continue;
+          int zoneCenterX = zx * zoneSize + zoneSize / 2;
+          int zoneCenterY = zy * zoneSize + zoneSize / 2;
+          int dx = zoneCenterX - settlement->centerX;
+          int dy = zoneCenterY - settlement->centerY;
+          int distSq = dx * dx + dy * dy;
+          int radius = std::max(1, settlement->influenceRadius);
+          int radiusSq = radius * radius;
+          float t = 1.0f - static_cast<float>(distSq) / static_cast<float>(radiusSq);
+          t = Clamp01(t);
+          Uint8 alpha = static_cast<Uint8>(40 + 90 * t);
+          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, alpha);
+          SDL_RenderFillRectF(renderer, &dst);
+        } else if (overlayMode == OverlayMode::PopulationHeat) {
+          int pop = settlements.ZonePopAt(zx, zy);
+          float t = (maxPop > 0) ? static_cast<float>(pop) / static_cast<float>(maxPop) : 0.0f;
+          SDL_Color color = HeatColor(t);
+          SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+          SDL_RenderFillRectF(renderer, &dst);
+        } else if (overlayMode == OverlayMode::Conflict) {
+          int intensity = settlements.ZoneConflictAt(zx, zy);
+          if (intensity <= 0) continue;
+          Uint8 alpha = static_cast<Uint8>(std::min(200, intensity));
+          SDL_SetRenderDrawColor(renderer, 220, 70, 60, alpha);
+          SDL_RenderFillRectF(renderer, &dst);
+        }
+
+        if (overlayMode == OverlayMode::FactionTerritory ||
+            overlayMode == OverlayMode::SettlementInfluence) {
+          int rightOwner = (zx + 1 <= maxZoneX) ? settlements.ZoneOwnerAt(zx + 1, zy) : ownerId;
+          int downOwner = (zy + 1 <= maxZoneY) ? settlements.ZoneOwnerAt(zx, zy + 1) : ownerId;
+          int ownerKey = ownerId;
+          int rightKey = rightOwner;
+          int downKey = downOwner;
+          if (overlayMode == OverlayMode::FactionTerritory) {
+            const Settlement* rightSettlement = (rightOwner > 0) ? settlements.Get(rightOwner) : nullptr;
+            const Settlement* downSettlement = (downOwner > 0) ? settlements.Get(downOwner) : nullptr;
+            ownerKey = (settlement && settlement->factionId > 0) ? settlement->factionId : -1;
+            rightKey =
+                (rightSettlement && rightSettlement->factionId > 0) ? rightSettlement->factionId : -1;
+            downKey =
+                (downSettlement && downSettlement->factionId > 0) ? downSettlement->factionId : -1;
+          }
+          SDL_SetRenderDrawColor(renderer, 0, 0, 0, 90);
+          if (rightKey != ownerKey && zx + 1 <= maxZoneX) {
+            float x = worldX + width;
+            SDL_FRect line = MakeDstRect(x - 1.0f, worldY, 2.0f, height, camera);
+            SDL_RenderFillRectF(renderer, &line);
+          }
+          if (downKey != ownerKey && zy + 1 <= maxZoneY) {
+            float y = worldY + height;
+            SDL_FRect line = MakeDstRect(worldX, y - 1.0f, width, 2.0f, camera);
+            SDL_RenderFillRectF(renderer, &line);
+          }
         }
       }
     }
@@ -767,6 +847,9 @@ void Renderer::Render(SDL_Renderer* renderer, const World& world, const HumanMan
             break;
           case BuildingType::Granary:
             coord = AtlasCoord{1, 2};
+            break;
+          case BuildingType::Well:
+            coord = AtlasCoord{1, 1};
             break;
           default:
             coord = AtlasCoord{0, 0};

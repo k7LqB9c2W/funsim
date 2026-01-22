@@ -32,6 +32,15 @@ struct FactionStats {
   int stockWood = 0;
 };
 
+struct LeaderInfluence {
+  float expansion = 0.0f;
+  float aggression = 0.0f;
+  float diplomacy = 0.0f;
+  float stability = 0.0f;
+  float tech = 0.0f;
+  bool legendary = false;
+};
+
 struct FactionColor {
   uint8_t r = 255;
   uint8_t g = 255;
@@ -48,6 +57,11 @@ struct Faction {
   std::string ideology;
   FactionTraits traits;
   FactionStats stats;
+  int techTier = 0;
+  float techProgress = 0.0f;
+  float warExhaustion = 0.0f;
+  int stability = 100;
+  LeaderInfluence leaderInfluence;
 };
 
 class FactionManager {
@@ -60,17 +74,28 @@ class FactionManager {
   int CreateFaction(Random& rng);
   void UpdateStats(const SettlementManager& settlements);
   void UpdateLeaders(const SettlementManager& settlements, const HumanManager& humans);
+  void UpdateDiplomacy(const SettlementManager& settlements, Random& rng, int dayCount);
 
   int RelationScore(int factionA, int factionB) const;
   FactionRelation RelationType(int factionA, int factionB) const;
+  bool IsAtWar(int factionA, int factionB) const;
+  int WarCount() const;
   bool CanExpandInto(int sourceFactionId, int targetFactionId, bool resourceStress) const;
+  void SetWar(int factionA, int factionB, bool atWar);
+  void SetWarEnabled(bool enabled);
+  bool WarEnabled() const { return warEnabled_; }
 
  private:
   int IndexForId(int id) const;
   void EnsureRelationsForNewFaction(Random& rng);
+  void EnsureWarsForNewFaction();
   void ResetStats();
   void UpdateTerritory(const SettlementManager& settlements);
+  void UpdateWarExhaustion();
 
   std::vector<Faction> factions_;
   std::vector<int> relations_;
+  std::vector<uint8_t> wars_;
+  std::vector<int> warDays_;
+  bool warEnabled_ = true;
 };
