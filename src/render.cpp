@@ -797,17 +797,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           SDL_RenderFillRectF(renderer, &dst);
         } else if (overlayMode == OverlayMode::SettlementInfluence) {
           if (!faction || !settlement) continue;
-          int zoneCenterX = zx * zoneSize + zoneSize / 2;
-          int zoneCenterY = zy * zoneSize + zoneSize / 2;
-          int dx = zoneCenterX - settlement->centerX;
-          int dy = zoneCenterY - settlement->centerY;
-          int distSq = dx * dx + dy * dy;
-          int radius = std::max(1, settlement->influenceRadius);
-          int radiusSq = radius * radius;
-          float t = 1.0f - static_cast<float>(distSq) / static_cast<float>(radiusSq);
-          t = Clamp01(t);
-          Uint8 alpha = static_cast<Uint8>(40 + 90 * t);
-          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, alpha);
+          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, 70);
           SDL_RenderFillRectF(renderer, &dst);
         } else if (overlayMode == OverlayMode::PopulationHeat) {
           int pop = settlements.ZonePopAt(zx, zy);

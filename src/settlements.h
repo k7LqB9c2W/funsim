@@ -180,9 +180,15 @@ class SettlementManager {
   void ApplyConflictImpactMacro(World& world, Random& rng, int dayCount,
                                 FactionManager& factions);
   void UpdateBorderPressure(const FactionManager& factions);
-  void GenerateTasks(World& world, Random& rng);
+ void GenerateTasks(World& world, Random& rng);
   void RunSettlementEconomy(World& world, Random& rng);
   void EnsureSettlementFactions(FactionManager& factions, Random& rng);
+
+  struct ClaimSource {
+    int x = 0;
+    int y = 0;
+    int radius = 0;
+  };
 
   int nextId_ = 1;
   std::vector<Settlement> settlements_;
@@ -199,6 +205,7 @@ class SettlementManager {
   std::vector<int> memberOffsets_;
   std::vector<int> memberIndices_;
   std::vector<int> idToIndex_;
+  std::vector<std::vector<ClaimSource>> claimSources_;
   int warDeathsPending_ = 0;
   bool homeFieldDirty_ = true;
 };
