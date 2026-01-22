@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 #include "factions.h"
 #include "settlements.h"
@@ -395,13 +396,12 @@ void Renderer::DestroyTerrainCache() {
     }
   }
   chunks_.clear();
-  landMask_.clear();
-  waterDistance_.clear();
   worldWidth_ = 0;
   worldHeight_ = 0;
   chunksX_ = 0;
   chunksY_ = 0;
   terrainDirty_ = true;
+  frameCounter_ = 0;
 }
 
 void Renderer::ClearLabelCache() {
@@ -522,6 +522,7 @@ void Renderer::UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager&
 }
 
 void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight) {
+  (void)renderer;
   chunksX_ = (worldWidth + chunkTiles_ - 1) / chunkTiles_;
   chunksY_ = (worldHeight + chunkTiles_ - 1) / chunkTiles_;
   chunks_.assign(chunksX_ * chunksY_, TerrainChunk{});
@@ -534,17 +535,9 @@ void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeig
       chunk.tilesWide = std::min(chunkTiles_, worldWidth - chunk.originX);
       chunk.tilesHigh = std::min(chunkTiles_, worldHeight - chunk.originY);
       chunk.dirty = true;
-
-      int texW = chunk.tilesWide * kTilePx;
-      int texH = chunk.tilesHigh * kTilePx;
-      chunk.texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
-                                        texW, texH);
-      if (!chunk.texture) {
-        SDL_Log("Failed to create chunk texture: %s", SDL_GetError());
-        continue;
-      }
-      SDL_SetTextureBlendMode(chunk.texture, SDL_BLENDMODE_BLEND);
-      SDL_SetTextureScaleMode(chunk.texture, SDL_ScaleModeNearest);
+      chunk.texture = nullptr;
+      chunk.lastUsedFrame = 0;
+      chunk.usedThisFrame = false;
     }
   }
 }
@@ -555,7 +548,6 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
     DestroyTerrainCache();
     worldWidth_ = world.width();
     worldHeight_ = world.height();
-    landMask_.assign(worldWidth_ * worldHeight_, 0);
     BuildChunks(renderer, worldWidth_, worldHeight_);
     fullRebuild = true;
     terrainDirty_ = true;
@@ -590,22 +582,6 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
 
   if (dirtyMinX > dirtyMaxX || dirtyMinY > dirtyMaxY) return;
 
-  if (fullRebuild) {
-    for (int y = 0; y < worldHeight_; ++y) {
-      for (int x = 0; x < worldWidth_; ++x) {
-        int idx = y * worldWidth_ + x;
-        landMask_[idx] = (world.At(x, y).type == TileType::Land) ? 1u : 0u;
-      }
-    }
-  } else {
-    for (int y = dirtyMinY; y <= dirtyMaxY; ++y) {
-      for (int x = dirtyMinX; x <= dirtyMaxX; ++x) {
-        int idx = y * worldWidth_ + x;
-        landMask_[idx] = (world.At(x, y).type == TileType::Land) ? 1u : 0u;
-      }
-    }
-  }
-
   constexpr int kTerrainPadding = 6;
   int paddedMinX = std::max(0, dirtyMinX - kTerrainPadding);
   int paddedMinY = std::max(0, dirtyMinY - kTerrainPadding);
@@ -623,21 +599,24 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
       }
     }
   }
-
-  RebuildTerrainCache(renderer, world);
 }
 
-void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
-  (void)world;
+void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY,
+                                  int maxX, int maxY) {
   if (chunks_.empty()) {
     BuildChunks(renderer, worldWidth_, worldHeight_);
   }
   assert(world.width() == worldWidth_);
   assert(world.height() == worldHeight_);
 
+  frameCounter_++;
+  for (auto& chunk : chunks_) {
+    chunk.usedThisFrame = false;
+  }
+
   auto isLand = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= worldWidth_ || y >= worldHeight_) return false;
-    return landMask_[y * worldWidth_ + x] != 0u;
+    return world.At(x, y).type == TileType::Land;
   };
 
   auto coastDistance = [&](int x, int y) -> int {
@@ -660,10 +639,32 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
     return kMaxLandDist + 1;
   };
 
+  auto ensureChunkTexture = [&](TerrainChunk& chunk) {
+    if (chunk.texture) return true;
+    int texW = chunk.tilesWide * kTilePx;
+    int texH = chunk.tilesHigh * kTilePx;
+    chunk.texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET,
+                                      texW, texH);
+    if (!chunk.texture) {
+      SDL_Log("Failed to create chunk texture: %s", SDL_GetError());
+      return false;
+    }
+    SDL_SetTextureBlendMode(chunk.texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(chunk.texture, SDL_ScaleModeNearest);
+    chunk.dirty = true;
+    return true;
+  };
+
   SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
 
   for (auto& chunk : chunks_) {
-    if (!chunk.dirty || !chunk.texture) continue;
+    if (chunk.originX > maxX || chunk.originX + chunk.tilesWide - 1 < minX) continue;
+    if (chunk.originY > maxY || chunk.originY + chunk.tilesHigh - 1 < minY) continue;
+
+    chunk.usedThisFrame = true;
+    chunk.lastUsedFrame = frameCounter_;
+    if (!ensureChunkTexture(chunk)) continue;
+    if (!chunk.dirty) continue;
     chunk.dirty = false;
 
     SDL_SetRenderTarget(renderer, chunk.texture);
@@ -672,8 +673,7 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
 
     for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
       for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-        int idx = y * worldWidth_ + x;
-        if (landMask_[idx] != 0u) continue;
+        if (isLand(x, y)) continue;
 
         int distToLand = coastDistance(x, y);
         int coastDist = std::max(0, distToLand - 1);
@@ -698,7 +698,6 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
         if (isLand(x + 1, y)) mask |= 2u;
         if (isLand(x, y + 1)) mask |= 4u;
         if (isLand(x - 1, y)) mask |= 8u;
-
         if (mask != 0u) {
           SDL_Rect foam = FoamRect(mask);
           SDL_RenderCopy(renderer, terrainOverlayTexture_, &foam, &dst);
@@ -708,8 +707,7 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
 
     for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
       for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-        int idx = y * worldWidth_ + x;
-        if (landMask_[idx] == 0u) continue;
+        if (!isLand(x, y)) continue;
 
         bool beach = !isLand(x, y - 1) || !isLand(x + 1, y) || !isLand(x, y + 1) || !isLand(x - 1, y);
         uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
@@ -722,6 +720,29 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world) {
   }
 
   SDL_SetRenderTarget(renderer, previousTarget);
+
+  // Evict old textures (world can be enormous; keep cache bounded).
+  int textureCount = 0;
+  for (const auto& chunk : chunks_) {
+    if (chunk.texture) textureCount++;
+  }
+  while (textureCount > maxTerrainTextures_) {
+    uint64_t oldest = std::numeric_limits<uint64_t>::max();
+    int oldestIdx = -1;
+    for (int i = 0; i < static_cast<int>(chunks_.size()); ++i) {
+      const auto& chunk = chunks_[i];
+      if (!chunk.texture) continue;
+      if (chunk.usedThisFrame) continue;
+      if (chunk.lastUsedFrame < oldest) {
+        oldest = chunk.lastUsedFrame;
+        oldestIdx = i;
+      }
+    }
+    if (oldestIdx < 0) break;
+    SDL_DestroyTexture(chunks_[oldestIdx].texture);
+    chunks_[oldestIdx].texture = nullptr;
+    textureCount--;
+  }
 }
 
 void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
@@ -743,6 +764,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   int maxY = std::min(world.height() - 1, static_cast<int>(worldBottom / tileSize) + 1);
 
   EnsureTerrainCache(renderer, world);
+  RebuildTerrainCache(renderer, world, minX, minY, maxX, maxY);
 
   for (const auto& chunk : chunks_) {
     if (!chunk.texture) continue;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include "render.h"
@@ -157,6 +158,15 @@ class SettlementManager {
   int ZonesY() const { return zonesY_; }
 
  private:
+  static uint64_t PackZone(int zx, int zy) {
+    return (static_cast<uint64_t>(static_cast<uint32_t>(zx)) << 32) |
+           static_cast<uint64_t>(static_cast<uint32_t>(zy));
+  }
+  static void UnpackZone(uint64_t key, int& zx, int& zy) {
+    zx = static_cast<int>(static_cast<uint32_t>(key >> 32));
+    zy = static_cast<int>(static_cast<uint32_t>(key & 0xffffffffu));
+  }
+
   void EnsureZoneBuffers(const World& world);
   void RecomputeZonePop(const World& world, const HumanManager& humans);
   void RecomputeZonePopMacro();
@@ -197,10 +207,10 @@ class SettlementManager {
   int zonesX_ = 0;
   int zonesY_ = 0;
 
-  std::vector<int> zonePop_;
-  std::vector<int> zoneDenseDays_;
-  std::vector<int> zoneOwner_;
-  std::vector<int> zoneConflict_;
+  std::unordered_map<uint64_t, int> zonePopByKey_;
+  std::unordered_map<uint64_t, int> zoneDenseDaysByKey_;
+  std::unordered_map<uint64_t, int> zoneOwnerByKey_;
+  std::unordered_map<uint64_t, int> zoneConflictByKey_;
   std::vector<int> memberCounts_;
   std::vector<int> memberOffsets_;
   std::vector<int> memberIndices_;

@@ -398,8 +398,6 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
   CrashContextSetNote("ApplyToolAt");
   int radius = ui_.brushSize / 2;
   bool spawned = false;
-  int64_t foodDelta = 0;
-  int64_t treeDelta = 0;
 
   for (int dy = -radius; dy <= radius; ++dy) {
     for (int dx = -radius; dx <= radius; ++dx) {
@@ -407,101 +405,87 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
       int y = tileY + dy;
       if (!world_.InBounds(x, y)) continue;
 
-      Tile& tile = world_.At(x, y);
-      TileType oldType = tile.type;
-      int oldFood = tile.food;
-      int oldTrees = tile.trees;
-
       if (erase) {
         world_.EraseAt(x, y);
       } else {
         switch (ui_.tool) {
           case ToolType::PlaceLand:
-            tile.type = TileType::Land;
+            world_.SetTileType(x, y, TileType::Land);
             break;
           case ToolType::PlaceFreshWater:
-            tile.type = TileType::FreshWater;
-            tile.trees = 0;
-            tile.food = 0;
-            tile.burning = false;
-            tile.burnDaysRemaining = 0;
-            if (tile.building != BuildingType::None) {
-              world_.MarkBuildingDirty();
-            }
-            tile.building = BuildingType::None;
-            tile.farmStage = 0;
-            tile.buildingOwnerId = -1;
+            world_.EditTile(x, y, [&](Tile& tile) {
+              tile.type = TileType::FreshWater;
+              tile.trees = 0;
+              tile.food = 0;
+              tile.burning = false;
+              tile.burnDaysRemaining = 0;
+              tile.building = BuildingType::None;
+              tile.farmStage = 0;
+              tile.buildingOwnerId = -1;
+            });
+            world_.MarkBuildingDirty();
             break;
           case ToolType::AddTrees:
-            if (tile.type == TileType::Land) {
-              tile.trees = std::min(20, tile.trees + 5);
-            }
+            world_.EditTile(x, y, [&](Tile& tile) {
+              if (tile.type != TileType::Land) return;
+              int trees = static_cast<int>(tile.trees);
+              trees = std::min(20, trees + 5);
+              tile.trees = static_cast<uint8_t>(trees);
+            });
             break;
           case ToolType::AddFood:
-            if (tile.type == TileType::Land) {
-              tile.food = std::min(50, tile.food + 10);
-            }
+            world_.EditTile(x, y, [&](Tile& tile) {
+              if (tile.type != TileType::Land) return;
+              int food = static_cast<int>(tile.food);
+              food = std::min(50, food + 10);
+              tile.food = static_cast<uint8_t>(food);
+            });
             break;
           case ToolType::SpawnMale:
-            if (tile.type != TileType::Ocean) {
+            if (world_.At(x, y).type != TileType::Ocean) {
               humans_.Spawn(x, y, false, rng_);
               CrashContextSetNote("ApplyToolAt: SpawnMale");
               spawned = true;
             }
             break;
           case ToolType::SpawnFemale:
-            if (tile.type != TileType::Ocean) {
+            if (world_.At(x, y).type != TileType::Ocean) {
               humans_.Spawn(x, y, true, rng_);
               CrashContextSetNote("ApplyToolAt: SpawnFemale");
               spawned = true;
             }
             break;
           case ToolType::Fire:
-            if (tile.type == TileType::Land && tile.trees > 0) {
-              tile.burning = true;
-              tile.burnDaysRemaining = 4;
+            if (world_.At(x, y).type == TileType::Land && world_.At(x, y).trees > 0) {
+              world_.SetBurning(x, y, true, 4);
             }
             break;
           case ToolType::Meteor:
-            tile.type = TileType::Ocean;
-            tile.trees = 0;
-            tile.food = 0;
-            tile.burning = false;
-            tile.burnDaysRemaining = 0;
-            if (tile.building != BuildingType::None) {
-              world_.MarkBuildingDirty();
-            }
-            tile.building = BuildingType::None;
-            tile.farmStage = 0;
-            tile.buildingOwnerId = -1;
+            world_.EditTile(x, y, [&](Tile& tile) {
+              tile.type = TileType::Ocean;
+              tile.trees = 0;
+              tile.food = 0;
+              tile.burning = false;
+              tile.burnDaysRemaining = 0;
+              tile.building = BuildingType::None;
+              tile.farmStage = 0;
+              tile.buildingOwnerId = -1;
+            });
+            world_.MarkBuildingDirty();
             break;
           case ToolType::GiftFood:
-            if (tile.type == TileType::Land) {
+            world_.EditTile(x, y, [&](Tile& tile) {
+              if (tile.type != TileType::Land) return;
               tile.food = 50;
-            }
+            });
             break;
         }
       }
-
-      if (!erase) {
-        bool oldLand = (oldType == TileType::Land);
-        bool newLand = (tile.type == TileType::Land);
-        if (oldLand != newLand) {
-          world_.MarkTerrainDirty(x, y);
-        }
-      }
-
-      foodDelta += static_cast<int64_t>(tile.food) - static_cast<int64_t>(oldFood);
-      treeDelta += static_cast<int64_t>(tile.trees) - static_cast<int64_t>(oldTrees);
     }
   }
 
-  if (foodDelta != 0) {
-    stats_.totalFood += foodDelta;
-  }
-  if (treeDelta != 0) {
-    stats_.totalTrees += treeDelta;
-  }
+  stats_.totalFood = world_.TotalFood();
+  stats_.totalTrees = world_.TotalTrees();
   if (spawned) {
     stats_.totalPop = macroActive_ ? humans_.MacroPopulation(settlements_) : humans_.CountAlive();
   }
