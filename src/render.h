@@ -44,7 +44,8 @@ class Renderer {
  private:
   void DestroyTerrainCache();
   void EnsureTerrainCache(SDL_Renderer* renderer, World& world);
-  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world);
+  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY, int maxX,
+                           int maxY);
   void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
   void ClearLabelCache();
   void UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
@@ -57,6 +58,8 @@ class Renderer {
     int tilesWide = 0;
     int tilesHigh = 0;
     bool dirty = true;
+    uint64_t lastUsedFrame = 0;
+    bool usedThisFrame = false;
   };
 
   SDL_Texture* humansTexture_ = nullptr;
@@ -79,8 +82,8 @@ class Renderer {
   int chunksY_ = 0;
   bool terrainDirty_ = true;
   std::vector<TerrainChunk> chunks_;
-  std::vector<uint8_t> landMask_;
-  std::vector<int> waterDistance_;
+  uint64_t frameCounter_ = 0;
+  int maxTerrainTextures_ = 256;
 
   struct LabelCacheEntry {
     int settlementId = -1;

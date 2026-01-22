@@ -2,12 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
-#include <condition_variable>
 #include <cstring>
 #include <fstream>
 #include <limits>
-#include <mutex>
-#include <thread>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -22,8 +20,6 @@ constexpr int kWellRadiusStrong = 12;
 constexpr int kWellRadiusMedium = 6;
 constexpr int kWellRadiusWeak = 3;
 constexpr int kWellRadiusTiny = 1;
-constexpr int kScentIters = 6;
-constexpr int kWaterScentIters = 10;
 
 constexpr char kMapMagic[8] = {'F', 'S', 'M', 'A', 'P', '0', '1', '\0'};
 
@@ -33,121 +29,14 @@ struct MapHeader {
   uint32_t height = 0;
 };
 
-class ThreadBarrier {
- public:
-  explicit ThreadBarrier(int count) : threshold_(count), count_(count), generation_(0) {}
-
-  void Wait() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    int gen = generation_;
-    if (--count_ == 0) {
-      generation_++;
-      count_ = threshold_;
-      cv_.notify_all();
-    } else {
-      cv_.wait(lock, [&] { return gen != generation_; });
-    }
-  }
-
- private:
-  int threshold_ = 0;
-  int count_ = 0;
-  int generation_ = 0;
-  std::mutex mutex_;
-  std::condition_variable cv_;
-};
-
-int ThreadCountForRows(int rows) {
-  if (rows < 64) return 1;
-  unsigned int count = std::thread::hardware_concurrency();
-  if (count == 0) count = 4;
-  count = std::min(count, 8u);
-  count = std::min<unsigned int>(count, static_cast<unsigned int>(rows));
-  return static_cast<int>(count);
-}
-
-void RelaxField(const std::vector<uint16_t>& base, std::vector<uint16_t>& field,
-                std::vector<uint16_t>& scratch, int width, int height, int iters) {
-  field = base;
-  if (iters <= 0) return;
-
-  int threads = ThreadCountForRows(height);
-  if (threads <= 1) {
-    for (int iter = 0; iter < iters; ++iter) {
-      for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-          int idx = y * width + x;
-          uint16_t best = base[idx];
-          uint16_t maxNeighbor = 0;
-          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
-          if (x + 1 < width) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
-          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width]);
-          if (y + 1 < height) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width]);
-          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
-          if (decayed > best) best = decayed;
-          scratch[idx] = best;
-        }
-      }
-      field.swap(scratch);
-    }
-    return;
-  }
-
-  ThreadBarrier barrier(threads);
-  int rowsPerThread = (height + threads - 1) / threads;
-
-  auto worker = [&](int tid) {
-    int yStart = tid * rowsPerThread;
-    int yEnd = std::min(height, yStart + rowsPerThread);
-    for (int iter = 0; iter < iters; ++iter) {
-      for (int y = yStart; y < yEnd; ++y) {
-        for (int x = 0; x < width; ++x) {
-          int idx = y * width + x;
-          uint16_t best = base[idx];
-          uint16_t maxNeighbor = 0;
-          if (x > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - 1]);
-          if (x + 1 < width) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + 1]);
-          if (y > 0) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx - width]);
-          if (y + 1 < height) maxNeighbor = std::max<uint16_t>(maxNeighbor, field[idx + width]);
-          uint16_t decayed = static_cast<uint16_t>((maxNeighbor * 19) / 20);
-          if (decayed > best) best = decayed;
-          scratch[idx] = best;
-        }
-      }
-      barrier.Wait();
-      if (tid == 0) {
-        field.swap(scratch);
-      }
-      barrier.Wait();
-    }
-  };
-
-  std::vector<std::thread> workers;
-  workers.reserve(threads - 1);
-  for (int tid = 1; tid < threads; ++tid) {
-    workers.emplace_back(worker, tid);
-  }
-  worker(0);
-  for (auto& thread : workers) {
-    thread.join();
-  }
+uint8_t ClampU8(int value) {
+  if (value < 0) return 0;
+  if (value > 255) return 255;
+  return static_cast<uint8_t>(value);
 }
 }  // namespace
 
-World::World(int width, int height)
-    : width_(width),
-      height_(height),
-      tiles_(width * height),
-      foodScent_(width * height, 0),
-      waterScent_(width * height, 0),
-      fireRisk_(width * height, 0),
-      homeScent_(width * height, 0),
-      baseFood_(width * height, 0),
-      baseWater_(width * height, 0),
-      baseFire_(width * height, 0),
-      baseHome_(width * height, 0),
-      scentScratch_(width * height, 0),
-      wellRadius_(width * height, 0) {
+World::World(int width, int height) : width_(width), height_(height) {
   MarkTerrainDirtyAll();
 }
 
@@ -155,200 +44,115 @@ bool World::InBounds(int x, int y) const {
   return x >= 0 && y >= 0 && x < width_ && y < height_;
 }
 
-Tile& World::At(int x, int y) { return tiles_[y * width_ + x]; }
-const Tile& World::At(int x, int y) const { return tiles_[y * width_ + x]; }
+uint64_t World::ChunkKeyFor(int x, int y) const {
+  int cx = x / kChunkTiles;
+  int cy = y / kChunkTiles;
+  return PackCoord(cx, cy);
+}
 
-void World::UpdateDaily(Random& rng) {
-  CrashContextSetStage("World::UpdateDaily");
-  std::vector<int> ignitions;
-  ignitions.reserve(128);
-  RecomputeWellRadius();
+World::Chunk& World::GetOrCreateChunkFor(int x, int y) {
+  uint64_t key = ChunkKeyFor(x, y);
+  return chunks_[key];
+}
 
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      Tile& tile = At(x, y);
+const World::Chunk* World::FindChunkFor(int x, int y) const {
+  uint64_t key = ChunkKeyFor(x, y);
+  auto it = chunks_.find(key);
+  if (it == chunks_.end()) return nullptr;
+  return &it->second;
+}
 
-      if (tile.type != TileType::Land) {
-        tile.trees = 0;
-        tile.food = 0;
-        tile.burning = false;
-        tile.burnDaysRemaining = 0;
-        if (tile.building != BuildingType::None) {
-          tile.building = BuildingType::None;
-          MarkBuildingDirty();
-        } else {
-          tile.building = BuildingType::None;
-        }
-        tile.farmStage = 0;
-        tile.buildingOwnerId = -1;
-        continue;
-      }
+Tile& World::AtUnchecked(int x, int y) {
+  Chunk& chunk = GetOrCreateChunkFor(x, y);
+  int lx = x % kChunkTiles;
+  int ly = y % kChunkTiles;
+  return chunk.tiles[ly * kChunkTiles + lx];
+}
 
-      if (tile.burning) {
-        if (tile.building != BuildingType::None) {
-          tile.building = BuildingType::None;
-          tile.farmStage = 0;
-          tile.buildingOwnerId = -1;
-          MarkBuildingDirty();
-        }
-        if (tile.trees > 0) {
-          tile.trees = std::max(0, tile.trees - 2);
-        }
-        tile.burnDaysRemaining--;
+const Tile& World::AtUnchecked(int x, int y) const {
+  const Chunk* chunk = FindChunkFor(x, y);
+  if (!chunk) {
+    static const Tile kDefault{};
+    return kDefault;
+  }
+  int lx = x % kChunkTiles;
+  int ly = y % kChunkTiles;
+  return chunk->tiles[ly * kChunkTiles + lx];
+}
 
-        if (tile.trees <= 0 || tile.burnDaysRemaining <= 0) {
-          tile.burning = false;
-          tile.burnDaysRemaining = 0;
-        } else {
-          const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-          for (const auto& d : dirs) {
-            int nx = x + d[0];
-            int ny = y + d[1];
-            if (!InBounds(nx, ny)) continue;
-            Tile& neighbor = At(nx, ny);
-            if (neighbor.type != TileType::Land) continue;
-            if (neighbor.burning) continue;
-            if (neighbor.trees <= 0) continue;
-            if (rng.Chance(0.12f)) {
-              ignitions.push_back(ny * width_ + nx);
-            }
-          }
-        }
-        continue;
-      }
-      if (tile.building == BuildingType::Farm && tile.farmStage > 0 &&
-          tile.farmStage < Settlement::kFarmReadyStage) {
-        int waterAdj = 0;
-        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-        for (const auto& d : dirs) {
-          int nx = x + d[0];
-          int ny = y + d[1];
-          if (!InBounds(nx, ny)) continue;
-          if (At(nx, ny).type == TileType::FreshWater) {
-            waterAdj++;
-          }
-        }
-        if (waterAdj == 0) {
-          bool hasWellWater = false;
-          for (int dy = -kWellRadiusStrong; dy <= kWellRadiusStrong && !hasWellWater; ++dy) {
-            int wy = y + dy;
-            if (wy < 0 || wy >= height_) continue;
-            for (int dx = -kWellRadiusStrong; dx <= kWellRadiusStrong; ++dx) {
-              int wx = x + dx;
-              if (wx < 0 || wx >= width_) continue;
-              int dist = std::abs(dx) + std::abs(dy);
-              if (dist > kWellRadiusStrong) continue;
-              uint8_t radius = wellRadius_[wy * width_ + wx];
-              if (radius > 0 && dist <= radius) {
-                hasWellWater = true;
-                break;
-              }
-            }
-          }
-          if (hasWellWater) {
-            waterAdj = 4;
-          }
-        }
-        float waterFactor = static_cast<float>(waterAdj) / 4.0f;
-        float chance = kFarmGrowBaseChance + waterFactor * kFarmGrowWaterBonus;
-        if (chance > 0.95f) chance = 0.95f;
-        if (rng.Chance(chance)) {
-          tile.farmStage++;
-          if (tile.farmStage > Settlement::kFarmReadyStage) {
-            tile.farmStage = Settlement::kFarmReadyStage;
-          }
-        }
-      }
-      if (tile.building != BuildingType::Farm && tile.farmStage != 0) {
-        tile.farmStage = 0;
-      }
+const Tile& World::At(int x, int y) const { return AtUnchecked(x, y); }
+
+void World::ApplyTotalsDelta(const Tile& before, const Tile& after) {
+  totalTrees_ += static_cast<int64_t>(after.trees) - static_cast<int64_t>(before.trees);
+  totalFood_ += static_cast<int64_t>(after.food) - static_cast<int64_t>(before.food);
+}
+
+void World::UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& after) {
+  uint64_t key = PackCoord(x, y);
+
+  if (before.burning != after.burning) {
+    if (after.burning) {
+      burningTiles_.insert(key);
+    } else {
+      burningTiles_.erase(key);
     }
   }
 
-  for (int idx : ignitions) {
-    Tile& tile = tiles_[idx];
-    if (!tile.burning) {
-      tile.burning = true;
-      tile.burnDaysRemaining = kFireDuration;
+  auto beforeHasBuilding = before.building != BuildingType::None;
+  auto afterHasBuilding = after.building != BuildingType::None;
+  if (beforeHasBuilding != afterHasBuilding) {
+    if (afterHasBuilding) {
+      buildingTiles_.insert(key);
+    } else {
+      buildingTiles_.erase(key);
     }
   }
 
-  RecomputeScentFields();
-}
-
-void World::EraseAt(int x, int y) {
-  if (!InBounds(x, y)) return;
-  Tile& tile = At(x, y);
-  TileType oldType = tile.type;
-  if (tile.type == TileType::Land) {
-    tile.type = TileType::Ocean;
-  } else if (tile.type == TileType::FreshWater) {
-    tile.type = TileType::Land;
+  auto beforeWell = before.building == BuildingType::Well;
+  auto afterWell = after.building == BuildingType::Well;
+  if (beforeWell != afterWell) {
+    if (afterWell) {
+      wellTiles_.insert(key);
+    } else {
+      wellTiles_.erase(key);
+      wellRadiusByTile_.erase(key);
+    }
+    wellRadiusDirty_ = true;
   }
-  if ((oldType == TileType::Land) != (tile.type == TileType::Land)) {
-    MarkTerrainDirty(x, y);
+
+  auto needsFarmGrow = [&](const Tile& t) {
+    return t.building == BuildingType::Farm && t.farmStage > 0 &&
+           t.farmStage < Settlement::kFarmReadyStage;
+  };
+  bool beforeGrow = needsFarmGrow(before);
+  bool afterGrow = needsFarmGrow(after);
+  if (beforeGrow != afterGrow) {
+    if (afterGrow) {
+      farmGrowTiles_.insert(key);
+    } else {
+      farmGrowTiles_.erase(key);
+    }
   }
-  if (tile.building != BuildingType::None) {
-    MarkBuildingDirty();
+
+  if (before.type != after.type) {
+    bool beforeLand = before.type == TileType::Land;
+    bool afterLand = after.type == TileType::Land;
+    if (beforeLand != afterLand) {
+      MarkTerrainDirty(x, y);
+    }
+    if (before.type == TileType::FreshWater || after.type == TileType::FreshWater) {
+      wellRadiusDirty_ = true;
+    }
   }
-  tile.trees = 0;
-  tile.food = 0;
-  tile.burning = false;
-  tile.burnDaysRemaining = 0;
-  tile.building = BuildingType::None;
-  tile.farmStage = 0;
-  tile.buildingOwnerId = -1;
-}
-
-int World::TotalTrees() const {
-  int total = 0;
-  for (const auto& tile : tiles_) {
-    total += tile.trees;
-  }
-  return total;
-}
-
-int World::TotalFood() const {
-  int total = 0;
-  for (const auto& tile : tiles_) {
-    total += tile.food;
-  }
-  return total;
-}
-
-uint16_t World::FoodScentAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  return foodScent_[y * width_ + x];
-}
-
-uint16_t World::WaterScentAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  return waterScent_[y * width_ + x];
-}
-
-uint16_t World::FireRiskAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  return fireRisk_[y * width_ + x];
-}
-
-uint16_t World::HomeScentAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  return homeScent_[y * width_ + x];
-}
-
-uint8_t World::WellRadiusAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  return wellRadius_[y * width_ + x];
 }
 
 bool World::ConsumeBuildingDirty() {
-  bool dirty = buildingDirty_;
+  bool was = buildingDirty_;
   buildingDirty_ = false;
-  return dirty;
+  return was;
 }
 
 void World::MarkTerrainDirty(int x, int y) {
-  if (!InBounds(x, y)) return;
   if (!terrainDirty_) {
     terrainDirty_ = true;
     terrainMinX_ = x;
@@ -381,157 +185,384 @@ bool World::ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY) {
   return true;
 }
 
-void World::RecomputeWellRadius() {
-  const int size = width_ * height_;
-  if (static_cast<int>(wellRadius_.size()) != size) {
-    wellRadius_.assign(size, 0);
-  } else {
-    std::fill(wellRadius_.begin(), wellRadius_.end(), 0);
+void World::EraseAt(int x, int y) {
+  if (!InBounds(x, y)) return;
+  EditTile(x, y, [&](Tile& tile) {
+    tile = Tile{};
+  });
+  MarkBuildingDirty();
+  MarkTerrainDirty(x, y);
+}
+
+int World::TotalTrees() const { return static_cast<int>(std::max<int64_t>(0, totalTrees_)); }
+int World::TotalFood() const { return static_cast<int>(std::max<int64_t>(0, totalFood_)); }
+
+uint16_t World::Decay(uint16_t value, int dist) {
+  uint16_t out = value;
+  for (int i = 0; i < dist && out > 0; ++i) {
+    out = static_cast<uint16_t>((static_cast<uint32_t>(out) * 19u) / 20u);
   }
+  return out;
+}
 
-  struct WellPos {
-    int x = 0;
-    int y = 0;
-    int idx = 0;
-  };
-  std::vector<WellPos> wells;
-  wells.reserve(128);
+uint16_t World::BaseFoodAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  const Tile& tile = AtUnchecked(x, y);
+  if (tile.type != TileType::Land || tile.burning) return 0;
 
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      int idx = y * width_ + x;
-      if (tiles_[idx].building == BuildingType::Well) {
-        wells.push_back(WellPos{x, y, idx});
-      }
+  int value = static_cast<int>(tile.food) * 120 + static_cast<int>(tile.trees) * 8;
+  if (tile.building == BuildingType::Farm && tile.farmStage >= Settlement::kFarmReadyStage) {
+    value += 600;
+  }
+  value = std::max(0, std::min(60000, value));
+  return static_cast<uint16_t>(value);
+}
+
+uint16_t World::BaseFireAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  const Tile& tile = AtUnchecked(x, y);
+  return tile.burning ? 60000u : 0u;
+}
+
+uint16_t World::BaseWaterAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  const Tile& tile = AtUnchecked(x, y);
+  uint16_t base = (tile.type == TileType::FreshWater) ? 60000u : 0u;
+  if (tile.building == BuildingType::Well) {
+    uint8_t radius = WellRadiusAt(x, y);
+    if (radius > 0) {
+      int value = (static_cast<int>(radius) * 60000) / kWellRadiusStrong;
+      value = std::max(value, 12000);
+      base = std::max<uint16_t>(base, static_cast<uint16_t>(std::min(60000, value)));
     }
   }
+  return base;
+}
+
+uint16_t World::FoodScentAt(int x, int y) const {
+  uint16_t best = BaseFoodAt(x, y);
+  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
+    int ny = y + dy;
+    if (ny < 0 || ny >= height_) continue;
+    int rem = kScentIters - std::abs(dy);
+    for (int dx = -rem; dx <= rem; ++dx) {
+      int nx = x + dx;
+      if (nx < 0 || nx >= width_) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      uint16_t base = BaseFoodAt(nx, ny);
+      uint16_t val = Decay(base, dist);
+      if (val > best) best = val;
+    }
+  }
+  return best;
+}
+
+uint16_t World::WaterScentAt(int x, int y) const {
+  uint16_t best = BaseWaterAt(x, y);
+  for (int dy = -kWaterScentIters; dy <= kWaterScentIters; ++dy) {
+    int ny = y + dy;
+    if (ny < 0 || ny >= height_) continue;
+    int rem = kWaterScentIters - std::abs(dy);
+    for (int dx = -rem; dx <= rem; ++dx) {
+      int nx = x + dx;
+      if (nx < 0 || nx >= width_) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      uint16_t base = BaseWaterAt(nx, ny);
+      uint16_t val = Decay(base, dist);
+      if (val > best) best = val;
+    }
+  }
+  return best;
+}
+
+uint16_t World::FireRiskAt(int x, int y) const {
+  uint16_t best = BaseFireAt(x, y);
+  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
+    int ny = y + dy;
+    if (ny < 0 || ny >= height_) continue;
+    int rem = kScentIters - std::abs(dy);
+    for (int dx = -rem; dx <= rem; ++dx) {
+      int nx = x + dx;
+      if (nx < 0 || nx >= width_) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      uint16_t base = BaseFireAt(nx, ny);
+      uint16_t val = Decay(base, dist);
+      if (val > best) best = val;
+    }
+  }
+  return best;
+}
+
+uint16_t World::HomeScentAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  uint16_t best = 0;
+  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
+    int ny = y + dy;
+    if (ny < 0 || ny >= height_) continue;
+    int rem = kScentIters - std::abs(dy);
+    for (int dx = -rem; dx <= rem; ++dx) {
+      int nx = x + dx;
+      if (nx < 0 || nx >= width_) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      if (homeSourceTiles_.find(PackCoord(nx, ny)) == homeSourceTiles_.end()) continue;
+      uint16_t val = Decay(60000u, dist);
+      if (val > best) best = val;
+    }
+  }
+  return best;
+}
+
+uint8_t World::WellRadiusAt(int x, int y) const {
+  if (!InBounds(x, y)) return 0;
+  const Tile& tile = AtUnchecked(x, y);
+  if (tile.building != BuildingType::Well) return 0;
+  EnsureWellRadius();
+  uint64_t key = PackCoord(x, y);
+  auto it = wellRadiusByTile_.find(key);
+  if (it == wellRadiusByTile_.end()) return 0;
+  return it->second;
+}
+
+void World::EnsureWellRadius() const {
+  if (!wellRadiusDirty_) return;
+  const_cast<World*>(this)->RecomputeWellRadius();
+  wellRadiusDirty_ = false;
+}
+
+void World::RecomputeWellRadius() {
+  wellRadiusByTile_.clear();
+  wellRadiusDirty_ = false;
+  if (wellTiles_.empty()) return;
+
+  std::unordered_set<uint64_t> strong;
+  std::unordered_set<uint64_t> medium;
+  std::unordered_set<uint64_t> weak;
 
   auto hasFreshWaterWithin = [&](int cx, int cy, int radius) {
     for (int dy = -radius; dy <= radius; ++dy) {
       int y = cy + dy;
       if (y < 0 || y >= height_) continue;
-      for (int dx = -radius; dx <= radius; ++dx) {
+      int rem = radius - std::abs(dy);
+      for (int dx = -rem; dx <= rem; ++dx) {
         int x = cx + dx;
         if (x < 0 || x >= width_) continue;
-        int dist = std::abs(dx) + std::abs(dy);
-        if (dist > radius) continue;
-        if (tiles_[y * width_ + x].type == TileType::FreshWater) return true;
+        if (AtUnchecked(x, y).type == TileType::FreshWater) return true;
       }
     }
     return false;
   };
 
-  auto hasWellWithin = [&](int cx, int cy, int radius, int requiredRadius) {
+  auto hasWellInSetWithin = [&](int cx, int cy, int radius, const std::unordered_set<uint64_t>& set) {
     for (int dy = -radius; dy <= radius; ++dy) {
       int y = cy + dy;
       if (y < 0 || y >= height_) continue;
-      for (int dx = -radius; dx <= radius; ++dx) {
+      int rem = radius - std::abs(dy);
+      for (int dx = -rem; dx <= rem; ++dx) {
         int x = cx + dx;
         if (x < 0 || x >= width_) continue;
-        int dist = std::abs(dx) + std::abs(dy);
-        if (dist > radius) continue;
-        if (wellRadius_[y * width_ + x] == requiredRadius) return true;
+        if (set.find(PackCoord(x, y)) != set.end()) return true;
       }
     }
     return false;
   };
 
-  for (const auto& well : wells) {
-    if (hasFreshWaterWithin(well.x, well.y, kWellSourceRadius)) {
-      wellRadius_[well.idx] = kWellRadiusStrong;
+  for (uint64_t key : wellTiles_) {
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (hasFreshWaterWithin(x, y, kWellSourceRadius)) {
+      strong.insert(key);
+      wellRadiusByTile_[key] = static_cast<uint8_t>(kWellRadiusStrong);
     }
   }
-  for (const auto& well : wells) {
-    if (wellRadius_[well.idx] == 0 &&
-        hasWellWithin(well.x, well.y, kWellRadiusStrong, kWellRadiusStrong)) {
-      wellRadius_[well.idx] = kWellRadiusMedium;
+
+  for (uint64_t key : wellTiles_) {
+    if (strong.find(key) != strong.end()) continue;
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (hasWellInSetWithin(x, y, kWellRadiusStrong, strong)) {
+      medium.insert(key);
+      wellRadiusByTile_[key] = static_cast<uint8_t>(kWellRadiusMedium);
     }
   }
-  for (const auto& well : wells) {
-    if (wellRadius_[well.idx] == 0 &&
-        hasWellWithin(well.x, well.y, kWellRadiusMedium, kWellRadiusMedium)) {
-      wellRadius_[well.idx] = kWellRadiusWeak;
+
+  for (uint64_t key : wellTiles_) {
+    if (strong.find(key) != strong.end() || medium.find(key) != medium.end()) continue;
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (hasWellInSetWithin(x, y, kWellRadiusMedium, medium)) {
+      weak.insert(key);
+      wellRadiusByTile_[key] = static_cast<uint8_t>(kWellRadiusWeak);
     }
   }
-  for (const auto& well : wells) {
-    if (wellRadius_[well.idx] == 0 &&
-        hasWellWithin(well.x, well.y, kWellRadiusWeak, kWellRadiusWeak)) {
-      wellRadius_[well.idx] = kWellRadiusTiny;
+
+  for (uint64_t key : wellTiles_) {
+    if (strong.find(key) != strong.end() || medium.find(key) != medium.end() ||
+        weak.find(key) != weak.end()) {
+      continue;
+    }
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (hasWellInSetWithin(x, y, kWellRadiusWeak, weak)) {
+      wellRadiusByTile_[key] = static_cast<uint8_t>(kWellRadiusTiny);
+    }
+  }
+}
+
+void World::UpdateDaily(Random& rng) {
+  CrashContextSetStage("World::UpdateDaily");
+  RecomputeWellRadius();
+
+  std::vector<uint64_t> ignite;
+  ignite.reserve(128);
+
+  std::vector<uint64_t> burningSnapshot;
+  burningSnapshot.reserve(burningTiles_.size());
+  for (uint64_t key : burningTiles_) {
+    burningSnapshot.push_back(key);
+  }
+
+  for (uint64_t key : burningSnapshot) {
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (!InBounds(x, y)) continue;
+    const Tile& cur = AtUnchecked(x, y);
+    if (!cur.burning) {
+      burningTiles_.erase(key);
+      continue;
+    }
+
+    EditTile(x, y, [&](Tile& tile) {
+      if (tile.building != BuildingType::None) {
+        tile.building = BuildingType::None;
+        tile.buildingOwnerId = -1;
+        tile.farmStage = 0;
+        MarkBuildingDirty();
+      }
+
+      int trees = static_cast<int>(tile.trees);
+      if (trees > 0) {
+        trees = std::max(0, trees - 2);
+        tile.trees = static_cast<uint8_t>(trees);
+      }
+      int burn = static_cast<int>(tile.burnDaysRemaining);
+      burn = std::max(0, burn - 1);
+      tile.burnDaysRemaining = static_cast<uint8_t>(burn);
+
+      if (trees <= 0 || burn <= 0) {
+        tile.burning = false;
+        tile.burnDaysRemaining = 0;
+      }
+    });
+
+    const Tile& after = AtUnchecked(x, y);
+    if (!after.burning) continue;
+
+    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& d : dirs) {
+      int nx = x + d[0];
+      int ny = y + d[1];
+      if (!InBounds(nx, ny)) continue;
+      const Tile& neighbor = AtUnchecked(nx, ny);
+      if (neighbor.type != TileType::Land) continue;
+      if (neighbor.burning) continue;
+      if (neighbor.trees == 0) continue;
+      if (rng.Chance(0.12f)) {
+        ignite.push_back(PackCoord(nx, ny));
+      }
+    }
+  }
+
+  for (uint64_t key : ignite) {
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (!InBounds(x, y)) continue;
+    const Tile& tile = AtUnchecked(x, y);
+    if (tile.burning) continue;
+    if (tile.type != TileType::Land) continue;
+    if (tile.trees == 0) continue;
+    SetBurning(x, y, true, kFireDuration);
+  }
+
+  std::vector<uint64_t> farmsSnapshot;
+  farmsSnapshot.reserve(farmGrowTiles_.size());
+  for (uint64_t key : farmGrowTiles_) {
+    farmsSnapshot.push_back(key);
+  }
+
+  for (uint64_t key : farmsSnapshot) {
+    int x = 0;
+    int y = 0;
+    UnpackCoord(key, x, y);
+    if (!InBounds(x, y)) continue;
+    const Tile& tile = AtUnchecked(x, y);
+    if (tile.building != BuildingType::Farm || tile.farmStage == 0 ||
+        tile.farmStage >= Settlement::kFarmReadyStage) {
+      farmGrowTiles_.erase(key);
+      continue;
+    }
+
+    int waterAdj = 0;
+    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& d : dirs) {
+      int nx = x + d[0];
+      int ny = y + d[1];
+      if (!InBounds(nx, ny)) continue;
+      if (AtUnchecked(nx, ny).type == TileType::FreshWater) {
+        waterAdj++;
+      }
+    }
+
+    if (waterAdj == 0) {
+      bool hasWellWater = false;
+      for (int dy = -kWellRadiusStrong; dy <= kWellRadiusStrong && !hasWellWater; ++dy) {
+        int wy = y + dy;
+        if (wy < 0 || wy >= height_) continue;
+        int rem = kWellRadiusStrong - std::abs(dy);
+        for (int dx = -rem; dx <= rem; ++dx) {
+          int wx = x + dx;
+          if (wx < 0 || wx >= width_) continue;
+          int dist = std::abs(dx) + std::abs(dy);
+          uint8_t radius = WellRadiusAt(wx, wy);
+          if (radius > 0 && dist <= radius) {
+            hasWellWater = true;
+            break;
+          }
+        }
+      }
+      if (hasWellWater) {
+        waterAdj = 4;
+      }
+    }
+
+    float waterFactor = static_cast<float>(waterAdj) / 4.0f;
+    float chance = kFarmGrowBaseChance + waterFactor * kFarmGrowWaterBonus;
+    if (chance > 0.95f) chance = 0.95f;
+    if (rng.Chance(chance)) {
+      EditTile(x, y, [&](Tile& t) {
+        int stage = static_cast<int>(t.farmStage);
+        stage = std::min(stage + 1, Settlement::kFarmReadyStage);
+        t.farmStage = static_cast<uint8_t>(stage);
+      });
     }
   }
 }
 
 void World::RecomputeScentFields() {
-  const int size = width_ * height_;
-  if (static_cast<int>(foodScent_.size()) != size) {
-    foodScent_.assign(size, 0);
-    waterScent_.assign(size, 0);
-    fireRisk_.assign(size, 0);
-    homeScent_.assign(size, 0);
-    baseFood_.assign(size, 0);
-    baseWater_.assign(size, 0);
-    baseFire_.assign(size, 0);
-    baseHome_.assign(size, 0);
-    scentScratch_.assign(size, 0);
-  }
-
-  RecomputeWellRadius();
-
-  auto wellStrength = [&](uint8_t radius) -> uint16_t {
-    if (radius <= 0) return 0;
-    int value = (static_cast<int>(radius) * 60000) / kWellRadiusStrong;
-    if (value < 12000) value = 12000;
-    return static_cast<uint16_t>(value);
-  };
-
-  for (int y = 0; y < height_; ++y) {
-    for (int x = 0; x < width_; ++x) {
-      int idx = y * width_ + x;
-      const Tile& tile = tiles_[idx];
-
-      uint16_t food = 0;
-      if (tile.type == TileType::Land && !tile.burning) {
-        int value = tile.food * 120 + tile.trees * 8;
-        if (tile.building == BuildingType::Farm &&
-            tile.farmStage >= Settlement::kFarmReadyStage) {
-          value += 600;
-        }
-        if (value > 60000) value = 60000;
-        if (value < 0) value = 0;
-        food = static_cast<uint16_t>(value);
-      }
-      baseFood_[idx] = food;
-
-      uint16_t water = (tile.type == TileType::FreshWater) ? 60000u : 0u;
-      if (tile.building == BuildingType::Well && wellRadius_[idx] > 0) {
-        water = std::max(water, wellStrength(wellRadius_[idx]));
-      }
-      baseWater_[idx] = water;
-      baseFire_[idx] = tile.burning ? 60000u : 0u;
-    }
-  }
-
-  RelaxField(baseFood_, foodScent_, scentScratch_, width_, height_, kScentIters);
-  RelaxField(baseWater_, waterScent_, scentScratch_, width_, height_, kWaterScentIters);
-  RelaxField(baseFire_, fireRisk_, scentScratch_, width_, height_, kScentIters);
+  // Intentionally a no-op: scent values are computed on-demand locally (bounded by kScentIters).
 }
 
 void World::RecomputeHomeField(const SettlementManager& settlements) {
-  const int size = width_ * height_;
-  if (static_cast<int>(homeScent_.size()) != size) {
-    homeScent_.assign(size, 0);
-    baseHome_.assign(size, 0);
-    scentScratch_.assign(size, 0);
-  } else {
-    std::fill(homeScent_.begin(), homeScent_.end(), 0);
-    std::fill(baseHome_.begin(), baseHome_.end(), 0);
-  }
-
+  homeSourceTiles_.clear();
   for (const auto& settlement : settlements.Settlements()) {
     if (!InBounds(settlement.centerX, settlement.centerY)) continue;
-    baseHome_[settlement.centerY * width_ + settlement.centerX] = 60000u;
+    homeSourceTiles_.insert(PackCoord(settlement.centerX, settlement.centerY));
   }
-  RelaxField(baseHome_, homeScent_, scentScratch_, width_, height_, kScentIters);
 }
 
 bool World::SaveMap(const std::string& path) const {
@@ -549,15 +580,18 @@ bool World::SaveMap(const std::string& path) const {
     return false;
   }
 
-  for (const auto& tile : tiles_) {
-    uint8_t type = static_cast<uint8_t>(tile.type);
-    uint8_t trees = static_cast<uint8_t>(std::min(tile.trees, 255));
-    uint8_t food = static_cast<uint8_t>(std::min(tile.food, 255));
-    out.write(reinterpret_cast<const char*>(&type), sizeof(type));
-    out.write(reinterpret_cast<const char*>(&trees), sizeof(trees));
-    out.write(reinterpret_cast<const char*>(&food), sizeof(food));
-    if (!out.good()) {
-      return false;
+  for (int y = 0; y < height_; ++y) {
+    for (int x = 0; x < width_; ++x) {
+      const Tile& tile = AtUnchecked(x, y);
+      uint8_t type = static_cast<uint8_t>(tile.type);
+      uint8_t trees = tile.trees;
+      uint8_t food = tile.food;
+      out.write(reinterpret_cast<const char*>(&type), sizeof(type));
+      out.write(reinterpret_cast<const char*>(&trees), sizeof(trees));
+      out.write(reinterpret_cast<const char*>(&food), sizeof(food));
+      if (!out.good()) {
+        return false;
+      }
     }
   }
 
@@ -585,42 +619,52 @@ bool World::LoadMap(const std::string& path) {
     return false;
   }
 
-  World loaded(static_cast<int>(header.width), static_cast<int>(header.height));
+  width_ = static_cast<int>(header.width);
+  height_ = static_cast<int>(header.height);
+  chunks_.clear();
+  burningTiles_.clear();
+  buildingTiles_.clear();
+  farmGrowTiles_.clear();
+  wellTiles_.clear();
+  homeSourceTiles_.clear();
+  wellRadiusByTile_.clear();
+  totalTrees_ = 0;
+  totalFood_ = 0;
+  buildingDirty_ = true;
+  MarkTerrainDirtyAll();
+
   const size_t total = static_cast<size_t>(header.width) * static_cast<size_t>(header.height);
   for (size_t i = 0; i < total; ++i) {
-    uint8_t type = 0;
+    uint8_t typeRaw = 0;
     uint8_t trees = 0;
     uint8_t food = 0;
-    in.read(reinterpret_cast<char*>(&type), sizeof(type));
+    in.read(reinterpret_cast<char*>(&typeRaw), sizeof(typeRaw));
     in.read(reinterpret_cast<char*>(&trees), sizeof(trees));
     in.read(reinterpret_cast<char*>(&food), sizeof(food));
     if (!in.good()) {
       return false;
     }
 
-    Tile& tile = loaded.tiles_[i];
-    if (type <= static_cast<uint8_t>(TileType::FreshWater)) {
-      tile.type = static_cast<TileType>(type);
+    int x = static_cast<int>(i % header.width);
+    int y = static_cast<int>(i / header.width);
+    Tile tile{};
+    if (typeRaw <= static_cast<uint8_t>(TileType::FreshWater)) {
+      tile.type = static_cast<TileType>(typeRaw);
     } else {
       tile.type = TileType::Ocean;
     }
-
     if (tile.type == TileType::Land) {
       tile.trees = trees;
       tile.food = food;
-    } else {
-      tile.trees = 0;
-      tile.food = 0;
     }
-    tile.burning = false;
-    tile.burnDaysRemaining = 0;
-    tile.building = BuildingType::None;
-    tile.farmStage = 0;
-    tile.buildingOwnerId = -1;
+
+    if (tile.type != TileType::Ocean || tile.trees != 0 || tile.food != 0) {
+      Tile& dst = AtUnchecked(x, y);
+      dst = tile;
+      totalTrees_ += dst.trees;
+      totalFood_ += dst.food;
+    }
   }
 
-  loaded.RecomputeScentFields();
-  *this = std::move(loaded);
-  MarkTerrainDirtyAll();
   return true;
 }

@@ -381,8 +381,22 @@ bool HumanManager::GetHumanById(int id, int& outX, int& outY) const {
   return true;
 }
 
+int HumanManager::PopCountAt(int x, int y) const {
+  auto it = popCountsByTile_.find(PackCoord(x, y));
+  return (it == popCountsByTile_.end()) ? 0 : it->second;
+}
+
+int HumanManager::AdultMaleCountAt(int x, int y) const {
+  auto it = adultMaleCountsByTile_.find(PackCoord(x, y));
+  return (it == adultMaleCountsByTile_.end()) ? 0 : it->second;
+}
+
+int HumanManager::AdultMaleSampleIdAt(int x, int y) const {
+  auto it = adultMaleSampleIdByTile_.find(PackCoord(x, y));
+  return (it == adultMaleSampleIdByTile_.end()) ? -1 : it->second;
+}
+
 int HumanManager::FindMateTargetId(const Human& human, const World& world, Random& rng) const {
-  if (adultMaleCounts_.empty() || adultMaleSampleId_.empty()) return -1;
   const int w = world.width();
   const int h = world.height();
   int total = 0;
@@ -394,11 +408,10 @@ int HumanManager::FindMateTargetId(const Human& human, const World& world, Rando
     for (int dx = -kMateRadius; dx <= kMateRadius; ++dx) {
       int nx = human.x + dx;
       if (nx < 0 || nx >= w) continue;
-      int idx = ny * w + nx;
-      int count = adultMaleCounts_[idx];
+      int count = AdultMaleCountAt(nx, ny);
       if (count <= 0) continue;
       total += count;
-      int sampleId = adultMaleSampleId_[idx];
+      int sampleId = AdultMaleSampleIdAt(nx, ny);
       if (sampleId != -1 && rng.RangeInt(0, total - 1) < count) {
         selected = sampleId;
       }
@@ -709,17 +722,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     if (!world.InBounds(nx, ny)) continue;
     if ((d[0] != 0 || d[1] != 0) && !IsWalkable(world.At(nx, ny))) continue;
 
-    int idx = ny * w + nx;
     int score = 0;
 
-    if (!popCounts_.empty()) {
-      int crowdPenalty = kCrowdPenalty;
-      if (human.goal == Goal::SeekWater) {
-        crowdPenalty = std::max(
-            1, static_cast<int>(std::round(static_cast<float>(kCrowdPenalty) *
-                                           kSeekWaterCrowdPenaltyScale)));
-      }
-      score -= popCounts_[idx] * crowdPenalty;
+    int crowdPenalty = kCrowdPenalty;
+    if (human.goal == Goal::SeekWater) {
+      crowdPenalty =
+          std::max(1, static_cast<int>(std::round(static_cast<float>(kCrowdPenalty) *
+                                                 kSeekWaterCrowdPenaltyScale)));
+    }
+    int crowdCount = PopCountAt(nx, ny);
+    if (crowdCount > 0) {
+      score -= crowdCount * crowdPenalty;
     }
     if (world.At(nx, ny).burning) {
       score -= 200000;
@@ -814,11 +827,15 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
   if (human.hasTask) {
     if (human.taskType == TaskType::CollectFood) {
       if (human.x == human.taskX && human.y == human.taskY) {
-        Tile& tile = world.At(human.x, human.y);
+        const Tile& tile = world.At(human.x, human.y);
         if (tile.food > 0) {
           int take = std::max(1, human.taskAmount);
-          if (take > tile.food) take = tile.food;
-          tile.food -= take;
+	          take = world.TakeFood(human.x, human.y, take);
+	          if (take <= 0) {
+	            human.hasTask = false;
+	            human.forceReplan = true;
+	            // Fall through; replan will happen below.
+	          }
           human.carryFood += take;
           human.carrying = true;
           human.taskType = TaskType::HaulToStockpile;
@@ -831,11 +848,15 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     } else if (human.taskType == TaskType::CollectWood) {
       if (human.x == human.taskX && human.y == human.taskY) {
-        Tile& tile = world.At(human.x, human.y);
+        const Tile& tile = world.At(human.x, human.y);
         if (tile.trees > 0) {
           int take = std::max(1, human.taskAmount);
-          if (take > tile.trees) take = tile.trees;
-          tile.trees = std::max(0, tile.trees - take);
+	          take = world.TakeTrees(human.x, human.y, take);
+	          if (take <= 0) {
+	            human.hasTask = false;
+	            human.forceReplan = true;
+	            // Fall through; replan will happen below.
+	          }
           human.carryWood += take;
           human.carrying = true;
           human.taskType = TaskType::HaulWoodToStockpile;
@@ -850,13 +871,13 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     } else if (human.taskType == TaskType::HarvestFarm) {
       if (human.x == human.taskX && human.y == human.taskY) {
-        Tile& tile = world.At(human.x, human.y);
+        const Tile& tile = world.At(human.x, human.y);
         if (tile.building == BuildingType::Farm && tile.buildingOwnerId == human.taskSettlementId &&
             tile.farmStage >= Settlement::kFarmReadyStage) {
           int yield = (human.taskAmount > 0) ? human.taskAmount : Settlement::kFarmYield;
           human.carryFood += yield;
           human.carrying = true;
-          tile.farmStage = 0;
+          world.EditTile(human.x, human.y, [&](Tile& t) { t.farmStage = 0; });
           human.taskType = TaskType::HaulToStockpile;
           SelectFoodDropoffTarget(human, world, settlements, human.x, human.y);
           human.goal = Goal::StayHome;
@@ -867,30 +888,24 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     } else if (human.taskType == TaskType::PlantFarm) {
       if (human.x == human.taskX && human.y == human.taskY) {
-        Tile& tile = world.At(human.x, human.y);
+        const Tile& tile = world.At(human.x, human.y);
         if (tile.building == BuildingType::Farm && tile.buildingOwnerId == human.taskSettlementId &&
             tile.farmStage == 0) {
-          tile.farmStage = 1;
+          world.EditTile(human.x, human.y, [&](Tile& t) { t.farmStage = 1; });
         }
         human.hasTask = false;
         human.forceReplan = true;
       }
     } else if (human.taskType == TaskType::BuildStructure) {
       if (human.x == human.taskX && human.y == human.taskY) {
-        Tile& tile = world.At(human.x, human.y);
+        const Tile& tile = world.At(human.x, human.y);
         Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
         int cost = BuildWoodCost(human.taskBuildType);
         if (settlement && tile.type == TileType::Land && !tile.burning &&
             tile.building == BuildingType::None && settlement->stockWood >= cost) {
           settlement->stockWood = std::max(0, settlement->stockWood - cost);
-          tile.building = human.taskBuildType;
-          tile.buildingOwnerId = settlement->id;
-          tile.farmStage = (human.taskBuildType == BuildingType::Farm) ? 1 : 0;
-          tile.trees = 0;
-          tile.food = 0;
-          tile.burning = false;
-          tile.burnDaysRemaining = 0;
-          world.MarkBuildingDirty();
+          uint8_t farmStage = (human.taskBuildType == BuildingType::Farm) ? 1u : 0u;
+          world.PlaceBuilding(human.x, human.y, human.taskBuildType, settlement->id, farmStage);
         }
         human.hasTask = false;
         human.forceReplan = true;
@@ -1011,21 +1026,13 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 
   const int w = world.width();
   const int h = world.height();
-  const int size = w * h;
 
-  if (static_cast<int>(adultMaleCounts_.size()) != size) {
-    adultMaleCounts_.assign(size, 0);
-    adultMaleSampleId_.assign(size, -1);
-  } else {
-    std::fill(adultMaleCounts_.begin(), adultMaleCounts_.end(), 0);
-    std::fill(adultMaleSampleId_.begin(), adultMaleSampleId_.end(), -1);
-  }
-
-  if (static_cast<int>(popCounts_.size()) != size) {
-    popCounts_.assign(size, 0);
-  } else {
-    std::fill(popCounts_.begin(), popCounts_.end(), 0);
-  }
+  popCountsByTile_.clear();
+  adultMaleCountsByTile_.clear();
+  adultMaleSampleIdByTile_.clear();
+  popCountsByTile_.reserve(humans_.size());
+  adultMaleCountsByTile_.reserve(humans_.size());
+  adultMaleSampleIdByTile_.reserve(humans_.size());
 
   CrashContextSetStage("Humans::UpdateDailyCoarse count");
   for (const auto& human : humans_) {
@@ -1034,12 +1041,14 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         static_cast<unsigned>(human.y) >= static_cast<unsigned>(h)) {
       continue;
     }
-    int idx = human.y * w + human.x;
-    popCounts_[idx]++;
+    uint64_t key = PackCoord(human.x, human.y);
+    popCountsByTile_[key]++;
     if (!human.female && human.ageDays >= kAdultAgeDays) {
-      int count = ++adultMaleCounts_[idx];
-      if (adultMaleSampleId_[idx] == -1 || rng.RangeInt(0, count - 1) == 0) {
-        adultMaleSampleId_[idx] = human.id;
+      int count = ++adultMaleCountsByTile_[key];
+      auto it = adultMaleSampleIdByTile_.find(key);
+      int currentSample = (it == adultMaleSampleIdByTile_.end()) ? -1 : it->second;
+      if (currentSample == -1 || rng.RangeInt(0, count - 1) == 0) {
+        adultMaleSampleIdByTile_[key] = human.id;
       }
     }
   }
@@ -1086,7 +1095,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       settlement = settlements.GetMutable(human.settlementId);
     }
 
-    Tile& tile = world.At(human.x, human.y);
+    const Tile& tile = world.At(human.x, human.y);
     if (human.foodCooldownDays > 0) {
       human.foodCooldownDays--;
       human.daysWithoutFood = 0;
@@ -1102,17 +1111,16 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 
       if (!ate) {
         if (tile.food > 0) {
-          tile.food--;
-          ate = true;
+          ate = (world.TakeFood(human.x, human.y, 1) > 0);
         } else {
           const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
           for (const auto& d : dirs) {
             int nx = human.x + d[0];
             int ny = human.y + d[1];
             if (!world.InBounds(nx, ny)) continue;
-            Tile& neighbor = world.At(nx, ny);
+            const Tile& neighbor = world.At(nx, ny);
             if (neighbor.food > 0) {
-              neighbor.food--;
+              if (world.TakeFood(nx, ny, 1) <= 0) continue;
               ate = true;
               eatX = nx;
               eatY = ny;
@@ -1143,7 +1151,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             human.taskType = TaskType::HaulToStockpile;
             SelectFoodDropoffTarget(human, world, settlements, human.x, human.y);
           }
-          tile.farmStage = 0;
+          world.EditTile(human.x, human.y, [&](Tile& t) { t.farmStage = 0; });
           ate = true;
         } else {
           const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
@@ -1151,7 +1159,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             int nx = human.x + d[0];
             int ny = human.y + d[1];
             if (!world.InBounds(nx, ny)) continue;
-            Tile& neighbor = world.At(nx, ny);
+            const Tile& neighbor = world.At(nx, ny);
             bool canUseNeighborFarm =
                 (human.settlementId == -1 ||
                  IsFriendlyOwner(settlements, human.settlementId, neighbor.buildingOwnerId));
@@ -1172,7 +1180,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
                 human.taskType = TaskType::HaulToStockpile;
                 SelectFoodDropoffTarget(human, world, settlements, nx, ny);
               }
-              neighbor.farmStage = 0;
+              world.EditTile(nx, ny, [&](Tile& t) { t.farmStage = 0; });
               ate = true;
               eatX = nx;
               eatY = ny;
@@ -1257,7 +1265,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             int mx = human.x + dx;
             int my = human.y + dy;
             if (mx < 0 || my < 0 || mx >= w || my >= h) continue;
-            maleCount += adultMaleCounts_[my * w + mx];
+            maleCount += AdultMaleCountAt(mx, my);
           }
         }
         if (maleCount > 0) {

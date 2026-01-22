@@ -187,26 +187,28 @@ int SettlementManager::ZoneOwnerForTile(int x, int y) const {
   int zx = x / zoneSize_;
   int zy = y / zoneSize_;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return -1;
-  return zoneOwner_[zy * zonesX_ + zx];
+  return ZoneOwnerAt(zx, zy);
 }
 
 int SettlementManager::ZoneOwnerAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return -1;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return -1;
-  return zoneOwner_[zy * zonesX_ + zx];
+  auto it = zoneOwnerByKey_.find(PackZone(zx, zy));
+  return (it == zoneOwnerByKey_.end()) ? -1 : it->second;
 }
 
 int SettlementManager::ZonePopAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return 0;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
-  return zonePop_[zy * zonesX_ + zx];
+  auto it = zonePopByKey_.find(PackZone(zx, zy));
+  return (it == zonePopByKey_.end()) ? 0 : it->second;
 }
 
 int SettlementManager::ZoneConflictAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return 0;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
-  if (zoneConflict_.empty()) return 0;
-  return zoneConflict_[zy * zonesX_ + zx];
+  auto it = zoneConflictByKey_.find(PackZone(zx, zy));
+  return (it == zoneConflictByKey_.end()) ? 0 : it->second;
 }
 
 int SettlementManager::ConsumeWarDeaths() {
@@ -222,50 +224,58 @@ void SettlementManager::EnsureZoneBuffers(const World& world) {
 
   zonesX_ = neededZonesX;
   zonesY_ = neededZonesY;
-  zonePop_.assign(zonesX_ * zonesY_, 0);
-  zoneDenseDays_.assign(zonesX_ * zonesY_, 0);
-  zoneOwner_.assign(zonesX_ * zonesY_, -1);
-  zoneConflict_.assign(zonesX_ * zonesY_, 0);
+  zonePopByKey_.clear();
+  zoneDenseDaysByKey_.clear();
+  zoneOwnerByKey_.clear();
+  zoneConflictByKey_.clear();
 }
 
 void SettlementManager::RecomputeZonePop(const World& world, const HumanManager& humans) {
-  std::fill(zonePop_.begin(), zonePop_.end(), 0);
+  zonePopByKey_.clear();
+  zonePopByKey_.reserve(humans.Humans().size());
 
   for (const auto& human : humans.Humans()) {
     if (!human.alive) continue;
     int zx = human.x / zoneSize_;
     int zy = human.y / zoneSize_;
     if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) continue;
-    zonePop_[zy * zonesX_ + zx]++;
+    zonePopByKey_[PackZone(zx, zy)]++;
   }
 
-  for (int i = 0; i < static_cast<int>(zonePop_.size()); ++i) {
-    if (zonePop_[i] >= kZonePopThreshold) {
-      zoneDenseDays_[i]++;
-    } else {
-      zoneDenseDays_[i] = 0;
-    }
+  std::unordered_map<uint64_t, int> newDense;
+  newDense.reserve(zonePopByKey_.size());
+  for (const auto& [key, pop] : zonePopByKey_) {
+    if (pop < kZonePopThreshold) continue;
+    int prev = 0;
+    auto it = zoneDenseDaysByKey_.find(key);
+    if (it != zoneDenseDaysByKey_.end()) prev = it->second;
+    newDense[key] = prev + 1;
   }
+  zoneDenseDaysByKey_.swap(newDense);
   (void)world;
 }
 
 void SettlementManager::RecomputeZonePopMacro() {
-  std::fill(zonePop_.begin(), zonePop_.end(), 0);
+  zonePopByKey_.clear();
+  zonePopByKey_.reserve(settlements_.size());
 
   for (const auto& settlement : settlements_) {
     int zx = settlement.centerX / zoneSize_;
     int zy = settlement.centerY / zoneSize_;
     if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) continue;
-    zonePop_[zy * zonesX_ + zx] += settlement.population;
+    zonePopByKey_[PackZone(zx, zy)] += settlement.population;
   }
 
-  for (int i = 0; i < static_cast<int>(zonePop_.size()); ++i) {
-    if (zonePop_[i] >= kZonePopThreshold) {
-      zoneDenseDays_[i]++;
-    } else {
-      zoneDenseDays_[i] = 0;
-    }
+  std::unordered_map<uint64_t, int> newDense;
+  newDense.reserve(zonePopByKey_.size());
+  for (const auto& [key, pop] : zonePopByKey_) {
+    if (pop < kZonePopThreshold) continue;
+    int prev = 0;
+    auto it = zoneDenseDaysByKey_.find(key);
+    if (it != zoneDenseDaysByKey_.end()) prev = it->second;
+    newDense[key] = prev + 1;
   }
+  zoneDenseDaysByKey_.swap(newDense);
 }
 
 void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int dayCount,
@@ -273,9 +283,12 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
                                                FactionManager& factions) {
   const int minDistSq = kMinVillageDistTiles * kMinVillageDistTiles;
 
-  for (int zoneIndex = 0; zoneIndex < static_cast<int>(zoneDenseDays_.size()); ++zoneIndex) {
-    int zx = zoneIndex % zonesX_;
-    int zy = zoneIndex / zonesX_;
+  for (auto it = zoneDenseDaysByKey_.begin(); it != zoneDenseDaysByKey_.end();) {
+    uint64_t zoneKey = it->first;
+    int denseDays = it->second;
+    int zx = 0;
+    int zy = 0;
+    UnpackZone(zoneKey, zx, zy);
     int startX = zx * zoneSize_;
     int startY = zy * zoneSize_;
     int endX = std::min(world.width(), startX + zoneSize_);
@@ -297,9 +310,12 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
         break;
       }
     }
-    if (tooClose) continue;
+    if (tooClose) {
+      ++it;
+      continue;
+    }
 
-    int zonePop = zonePop_[zoneIndex];
+    int zonePop = ZonePopAt(zx, zy);
     int sourceFactionId = 0;
     const Settlement* nearestSettlement = Get(nearestId);
     if (nearestSettlement) {
@@ -311,10 +327,16 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     expansionBias = std::max(0.6f, std::min(1.6f, expansionBias));
     int popThreshold = std::max(6, static_cast<int>(std::round(kZonePopThreshold / expansionBias)));
     int requiredDays = std::max(2, static_cast<int>(std::round(kZoneRequiredDays / expansionBias)));
-    if (zonePop < popThreshold) continue;
-    if (zoneDenseDays_[zoneIndex] < requiredDays) continue;
+    if (zonePop < popThreshold) {
+      ++it;
+      continue;
+    }
+    if (denseDays < requiredDays) {
+      ++it;
+      continue;
+    }
 
-    int ownerId = zoneOwner_[zoneIndex];
+    int ownerId = ZoneOwnerAt(zx, zy);
     if (ownerId != -1 && sourceFactionId > 0) {
       const Settlement* ownerSettlement = Get(ownerId);
       if (ownerSettlement && ownerSettlement->factionId > 0 &&
@@ -326,6 +348,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
                            (nearestSettlement->stockWood < pop);
         }
         if (!factions.CanExpandInto(sourceFactionId, ownerSettlement->factionId, resourceStress)) {
+          ++it;
           continue;
         }
       }
@@ -352,21 +375,17 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
       }
     }
 
-    if (bestX == -1 || bestY == -1) continue;
+    if (bestX == -1 || bestY == -1) {
+      ++it;
+      continue;
+    }
 
-    Tile& centerTile = world.At(bestX, bestY);
-    int starterFood = centerTile.food;
-    centerTile.building = BuildingType::TownHall;
-    centerTile.buildingOwnerId = nextId_;
-    centerTile.farmStage = 0;
-    centerTile.trees = 0;
-    centerTile.food = 0;
-    centerTile.burning = false;
-    centerTile.burnDaysRemaining = 0;
-    world.MarkBuildingDirty();
+    int starterFood = static_cast<int>(world.At(bestX, bestY).food);
+    int settlementId = nextId_++;
+    world.PlaceBuilding(bestX, bestY, BuildingType::TownHall, settlementId, 0);
 
     Settlement settlement;
-    settlement.id = nextId_++;
+    settlement.id = settlementId;
     settlement.centerX = bestX;
     settlement.centerY = bestY;
     settlement.factionId = 0;
@@ -402,21 +421,21 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     homeFieldDirty_ = true;
 
     markers.push_back(VillageMarker{bestX, bestY, 25});
-    zoneDenseDays_[zoneIndex] = 0;
-
+    it = zoneDenseDaysByKey_.erase(it);
+    continue;
   }
   (void)dayCount;
 }
 
 void SettlementManager::RecomputeZoneOwners(const World& world) {
+  zoneOwnerByKey_.clear();
   if (settlements_.empty()) {
-    std::fill(zoneOwner_.begin(), zoneOwner_.end(), -1);
     return;
   }
-  if (zonesX_ <= 0 || zonesY_ <= 0 || zoneOwner_.empty()) return;
+  if (zonesX_ <= 0 || zonesY_ <= 0) return;
 
-  std::fill(zoneOwner_.begin(), zoneOwner_.end(), -1);
-  std::vector<int> bestDist(zoneOwner_.size(), std::numeric_limits<int>::max());
+  std::unordered_map<uint64_t, int> bestDistSq;
+  bestDistSq.reserve(4096);
 
   for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
     const Settlement& settlement = settlements_[i];
@@ -442,10 +461,11 @@ void SettlementManager::RecomputeZoneOwners(const World& world) {
           int dy = source.y - centerY;
           int dist = dx * dx + dy * dy;
           if (dist > radiusSq) continue;
-          int zoneIndex = zy * zonesX_ + zx;
-          if (dist < bestDist[zoneIndex]) {
-            bestDist[zoneIndex] = dist;
-            zoneOwner_[zoneIndex] = settlement.id;
+          uint64_t key = PackZone(zx, zy);
+          auto itBest = bestDistSq.find(key);
+          if (itBest == bestDistSq.end() || dist < itBest->second) {
+            bestDistSq[key] = dist;
+            zoneOwnerByKey_[key] = settlement.id;
           }
         }
       }
@@ -462,64 +482,61 @@ void SettlementManager::UpdateBorderPressure(const FactionManager& factions) {
     settlement.borderPressure = 0;
     settlement.warPressure = 0;
   }
-  if (zonesX_ <= 0 || zonesY_ <= 0 || zoneOwner_.empty()) return;
+  if (zonesX_ <= 0 || zonesY_ <= 0 || zoneOwnerByKey_.empty()) return;
   const bool warEnabled = factions.WarEnabled();
+  zoneConflictByKey_.clear();
 
-  if (zoneConflict_.size() != zoneOwner_.size()) {
-    zoneConflict_.assign(zoneOwner_.size(), 0);
-  } else {
-    std::fill(zoneConflict_.begin(), zoneConflict_.end(), 0);
-  }
-
-  auto bumpConflict = [&](int zoneIndex, int amount) {
-    if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zoneConflict_.size())) return;
-    if (amount > zoneConflict_[zoneIndex]) {
-      zoneConflict_[zoneIndex] = amount;
+  auto bumpConflict = [&](uint64_t key, int amount) {
+    if (amount <= 0) return;
+    auto it = zoneConflictByKey_.find(key);
+    if (it == zoneConflictByKey_.end() || amount > it->second) {
+      zoneConflictByKey_[key] = amount;
     }
   };
 
-  for (int zy = 0; zy < zonesY_; ++zy) {
-    for (int zx = 0; zx < zonesX_; ++zx) {
-      int zoneIndex = zy * zonesX_ + zx;
-      int ownerId = zoneOwner_[zoneIndex];
-      if (ownerId <= 0) continue;
-      Settlement* ownerSettlement = GetMutable(ownerId);
-      if (!ownerSettlement) continue;
-      int factionA = ownerSettlement->factionId;
-      if (factionA <= 0) continue;
+  for (const auto& [key, ownerId] : zoneOwnerByKey_) {
+    if (ownerId <= 0) continue;
+    int zx = 0;
+    int zy = 0;
+    UnpackZone(key, zx, zy);
+    Settlement* ownerSettlement = GetMutable(ownerId);
+    if (!ownerSettlement) continue;
+    int factionA = ownerSettlement->factionId;
+    if (factionA <= 0) continue;
 
-      auto handleNeighbor = [&](int nx, int ny) {
-        if (nx < 0 || ny < 0 || nx >= zonesX_ || ny >= zonesY_) return;
-        int neighborIndex = ny * zonesX_ + nx;
-        int neighborOwner = zoneOwner_[neighborIndex];
-        if (neighborOwner <= 0 || neighborOwner == ownerId) return;
-        Settlement* neighborSettlement = GetMutable(neighborOwner);
-        if (!neighborSettlement) return;
-        int factionB = neighborSettlement->factionId;
-        if (factionB <= 0 || factionA == factionB) return;
+    auto handleNeighbor = [&](int nx, int ny) {
+      if (nx < 0 || ny < 0 || nx >= zonesX_ || ny >= zonesY_) return;
+      uint64_t neighborKey = PackZone(nx, ny);
+      auto itNeighbor = zoneOwnerByKey_.find(neighborKey);
+      if (itNeighbor == zoneOwnerByKey_.end()) return;
+      int neighborOwner = itNeighbor->second;
+      if (neighborOwner <= 0 || neighborOwner == ownerId) return;
+      Settlement* neighborSettlement = GetMutable(neighborOwner);
+      if (!neighborSettlement) return;
+      int factionB = neighborSettlement->factionId;
+      if (factionB <= 0 || factionA == factionB) return;
 
-        ownerSettlement->borderPressure++;
-        neighborSettlement->borderPressure++;
+      ownerSettlement->borderPressure++;
+      neighborSettlement->borderPressure++;
 
-        if (!warEnabled) return;
-        bool atWar = factions.IsAtWar(factionA, factionB);
-        bool hostile = (factions.RelationType(factionA, factionB) == FactionRelation::Hostile);
-        if (atWar) {
-          ownerSettlement->warPressure += 2;
-          neighborSettlement->warPressure += 2;
-          bumpConflict(zoneIndex, 200);
-          bumpConflict(neighborIndex, 200);
-        } else if (hostile) {
-          ownerSettlement->warPressure += 1;
-          neighborSettlement->warPressure += 1;
-          bumpConflict(zoneIndex, 120);
-          bumpConflict(neighborIndex, 120);
-        }
-      };
+      if (!warEnabled) return;
+      bool atWar = factions.IsAtWar(factionA, factionB);
+      bool hostile = (factions.RelationType(factionA, factionB) == FactionRelation::Hostile);
+      if (atWar) {
+        ownerSettlement->warPressure += 2;
+        neighborSettlement->warPressure += 2;
+        bumpConflict(key, 200);
+        bumpConflict(neighborKey, 200);
+      } else if (hostile) {
+        ownerSettlement->warPressure += 1;
+        neighborSettlement->warPressure += 1;
+        bumpConflict(key, 120);
+        bumpConflict(neighborKey, 120);
+      }
+    };
 
-      handleNeighbor(zx + 1, zy);
-      handleNeighbor(zx, zy + 1);
-    }
+    handleNeighbor(zx + 1, zy);
+    handleNeighbor(zx, zy + 1);
   }
 }
 
@@ -609,45 +626,45 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
     settlement.influenceRadius = 0;
   }
 
-  for (int y = 0; y < world.height(); ++y) {
-    for (int x = 0; x < world.width(); ++x) {
-      const Tile& tile = world.At(x, y);
-      if (tile.building == BuildingType::None) continue;
-      int ownerId = tile.buildingOwnerId;
-      if (ownerId < 0 || ownerId >= static_cast<int>(idToIndex_.size())) continue;
-      int idx = idToIndex_[ownerId];
-      if (idx < 0 || idx >= static_cast<int>(settlements_.size())) continue;
-      Settlement& settlement = settlements_[idx];
-      switch (tile.building) {
-        case BuildingType::House:
-          settlement.houses++;
-          break;
-        case BuildingType::Farm:
-          settlement.farms++;
-          if (tile.farmStage > 0) {
-            settlement.farmsPlanted++;
-          }
-          if (tile.farmStage >= Settlement::kFarmReadyStage) {
-            settlement.farmsReady++;
-          }
-          break;
-        case BuildingType::Granary:
-          settlement.granaries++;
-          break;
-        case BuildingType::Well:
-          settlement.wells++;
-          break;
-        case BuildingType::TownHall:
-          settlement.townHalls++;
-          break;
-        default:
-          break;
-      }
-      int radius = ClaimRadiusForBuilding(tile.building);
-      if (radius > 0) {
-        claimSources_[idx].push_back(ClaimSource{x, y, radius});
-        settlement.influenceRadius = std::max(settlement.influenceRadius, radius);
-      }
+  for (uint64_t coord : world.BuildingTiles()) {
+    int x = static_cast<int>(static_cast<uint32_t>(coord >> 32));
+    int y = static_cast<int>(static_cast<uint32_t>(coord & 0xffffffffu));
+    const Tile& tile = world.At(x, y);
+    if (tile.building == BuildingType::None) continue;
+    int ownerId = tile.buildingOwnerId;
+    if (ownerId < 0 || ownerId >= static_cast<int>(idToIndex_.size())) continue;
+    int idx = idToIndex_[ownerId];
+    if (idx < 0 || idx >= static_cast<int>(settlements_.size())) continue;
+    Settlement& settlement = settlements_[idx];
+    switch (tile.building) {
+      case BuildingType::House:
+        settlement.houses++;
+        break;
+      case BuildingType::Farm:
+        settlement.farms++;
+        if (tile.farmStage > 0) {
+          settlement.farmsPlanted++;
+        }
+        if (tile.farmStage >= Settlement::kFarmReadyStage) {
+          settlement.farmsReady++;
+        }
+        break;
+      case BuildingType::Granary:
+        settlement.granaries++;
+        break;
+      case BuildingType::Well:
+        settlement.wells++;
+        break;
+      case BuildingType::TownHall:
+        settlement.townHalls++;
+        break;
+      default:
+        break;
+    }
+    int radius = ClaimRadiusForBuilding(tile.building);
+    if (radius > 0) {
+      claimSources_[idx].push_back(ClaimSource{x, y, radius});
+      settlement.influenceRadius = std::max(settlement.influenceRadius, radius);
     }
   }
 
@@ -1833,12 +1850,16 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng) {
         int x = settlement.centerX + dx;
         int y = settlement.centerY + dy;
         if (!world.InBounds(x, y)) continue;
-        Tile& tile = world.At(x, y);
+        const Tile& tile = world.At(x, y);
         if (tile.type != TileType::Land || tile.burning) continue;
         if (tile.building != BuildingType::None) continue;
         if (tile.trees >= 12) continue;
         if (rng.Chance(0.25f)) {
-          tile.trees++;
+          world.EditTile(x, y, [&](Tile& t) {
+            int trees = static_cast<int>(t.trees);
+            trees = std::min(255, trees + 1);
+            t.trees = static_cast<uint8_t>(trees);
+          });
         }
       }
     }
@@ -1930,15 +1951,8 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
       }
     }
     if (bestX == -1 || bestY == -1) return false;
-    Tile& tile = world.At(bestX, bestY);
-    tile.building = type;
-    tile.buildingOwnerId = settlement.id;
-    tile.farmStage = (type == BuildingType::Farm) ? 1 : 0;
-    tile.trees = 0;
-    tile.food = 0;
-    tile.burning = false;
-    tile.burnDaysRemaining = 0;
-    world.MarkBuildingDirty();
+    uint8_t farmStage = (type == BuildingType::Farm) ? 1u : 0u;
+    world.PlaceBuilding(bestX, bestY, type, settlement.id, farmStage);
     return true;
   };
 
@@ -1974,12 +1988,12 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     }
   }
 
-  for (int y = 0; y < world.height(); ++y) {
-    for (int x = 0; x < world.width(); ++x) {
-      Tile& tile = world.At(x, y);
-      if (tile.building == BuildingType::Farm && tile.farmStage == 0) {
-        tile.farmStage = 1;
-      }
+  for (uint64_t coord : world.BuildingTiles()) {
+    int x = static_cast<int>(static_cast<uint32_t>(coord >> 32));
+    int y = static_cast<int>(static_cast<uint32_t>(coord & 0xffffffffu));
+    const Tile& tile = world.At(x, y);
+    if (tile.building == BuildingType::Farm && tile.farmStage == 0) {
+      world.EditTile(x, y, [&](Tile& t) { t.farmStage = 1; });
     }
   }
 
