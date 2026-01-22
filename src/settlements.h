@@ -200,6 +200,7 @@ class SettlementManager {
   std::vector<int> memberIndices_;
   std::vector<int> idToIndex_;
   int warDeathsPending_ = 0;
+  bool homeFieldDirty_ = true;
 };
 
 const char* SettlementTierName(SettlementTier tier);

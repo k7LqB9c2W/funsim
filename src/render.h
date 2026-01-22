@@ -35,7 +35,7 @@ class Renderer {
             const std::string& objectsPath, const std::string& buildingsPath,
             const std::string& labelFontPath, int labelFontSize);
   void Shutdown();
-  void Render(SDL_Renderer* renderer, const World& world, const HumanManager& humans,
+  void Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
               const SettlementManager& settlements, const FactionManager& factions,
               const Camera& camera, int windowWidth, int windowHeight,
               const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
@@ -43,7 +43,7 @@ class Renderer {
 
  private:
   void DestroyTerrainCache();
-  void EnsureTerrainCache(SDL_Renderer* renderer, const World& world);
+  void EnsureTerrainCache(SDL_Renderer* renderer, World& world);
   void RebuildTerrainCache(SDL_Renderer* renderer, const World& world);
   void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
   void ClearLabelCache();
