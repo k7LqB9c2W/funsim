@@ -29,14 +29,84 @@ struct MapHeader {
   uint32_t height = 0;
 };
 
+struct Offset {
+  int8_t dx = 0;
+  int8_t dy = 0;
+  uint8_t dist = 0;
+};
+
+std::vector<Offset> BuildDiamondOffsets(int radius) {
+  std::vector<Offset> offsets;
+  offsets.reserve(1 + 2 * radius * (radius + 1));
+  for (int dy = -radius; dy <= radius; ++dy) {
+    int rem = radius - std::abs(dy);
+    for (int dx = -rem; dx <= rem; ++dx) {
+      if (dx == 0 && dy == 0) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      offsets.push_back(Offset{static_cast<int8_t>(dx), static_cast<int8_t>(dy),
+                               static_cast<uint8_t>(dist)});
+    }
+  }
+  return offsets;
+}
+
+const std::vector<Offset>& OffsetsR6() {
+  static const std::vector<Offset> offsets = BuildDiamondOffsets(World::kScentIters);
+  return offsets;
+}
+
+const std::vector<Offset>& OffsetsR10() {
+  static const std::vector<Offset> offsets = BuildDiamondOffsets(World::kWaterScentIters);
+  return offsets;
+}
+
+constexpr int kDecayMaxBase = 60000;
+constexpr int kDecayStride = kDecayMaxBase + 1;
+constexpr int kDecayMaxDist = World::kWaterScentIters;
+
+const std::vector<uint16_t>& DecayTable() {
+  static const std::vector<uint16_t> table = [] {
+    std::vector<uint16_t> out;
+    out.resize((kDecayMaxDist + 1) * kDecayStride);
+    for (int dist = 0; dist <= kDecayMaxDist; ++dist) {
+      for (int base = 0; base <= kDecayMaxBase; ++base) {
+        uint16_t v = static_cast<uint16_t>(base);
+        for (int i = 0; i < dist && v > 0; ++i) {
+          v = static_cast<uint16_t>((static_cast<uint32_t>(v) * 19u) / 20u);
+        }
+        out[dist * kDecayStride + base] = v;
+      }
+    }
+    return out;
+  }();
+  return table;
+}
+
+uint16_t DecayLut(uint16_t base, int dist) {
+  if (dist <= 0) return base;
+  if (dist > kDecayMaxDist) dist = kDecayMaxDist;
+  if (base > kDecayMaxBase) base = kDecayMaxBase;
+  return DecayTable()[dist * kDecayStride + base];
+}
+
 uint8_t ClampU8(int value) {
   if (value < 0) return 0;
   if (value > 255) return 255;
   return static_cast<uint8_t>(value);
 }
+
+inline uint16_t BaseFoodFromTile(const Tile& tile) {
+  if (tile.type != TileType::Land || tile.burning) return 0;
+  int value = static_cast<int>(tile.food) * 120 + static_cast<int>(tile.trees) * 8;
+  if (tile.building == BuildingType::Farm && tile.farmStage >= Settlement::kFarmReadyStage) {
+    value += 600;
+  }
+  return static_cast<uint16_t>(value);
+}
 }  // namespace
 
 World::World(int width, int height) : width_(width), height_(height) {
+  ResizeStorage();
   MarkTerrainDirtyAll();
 }
 
@@ -44,43 +114,44 @@ bool World::InBounds(int x, int y) const {
   return x >= 0 && y >= 0 && x < width_ && y < height_;
 }
 
-uint64_t World::ChunkKeyFor(int x, int y) const {
-  int cx = x / kChunkTiles;
-  int cy = y / kChunkTiles;
-  return PackCoord(cx, cy);
-}
-
-World::Chunk& World::GetOrCreateChunkFor(int x, int y) {
-  uint64_t key = ChunkKeyFor(x, y);
-  return chunks_[key];
-}
-
-const World::Chunk* World::FindChunkFor(int x, int y) const {
-  uint64_t key = ChunkKeyFor(x, y);
-  auto it = chunks_.find(key);
-  if (it == chunks_.end()) return nullptr;
-  return &it->second;
+void World::ResizeStorage() {
+  chunksX_ = (width_ + kChunkTiles - 1) / kChunkTiles;
+  chunksY_ = (height_ + kChunkTiles - 1) / kChunkTiles;
+  if (chunksX_ < 0) chunksX_ = 0;
+  if (chunksY_ < 0) chunksY_ = 0;
+  chunks_.assign(static_cast<size_t>(std::max(0, chunksX_ * chunksY_)), Chunk{});
+  homeSourceStampByTile_.assign(
+      static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_)), 0u);
+  homeSourceGeneration_ = 1;
 }
 
 Tile& World::AtUnchecked(int x, int y) {
-  Chunk& chunk = GetOrCreateChunkFor(x, y);
-  int lx = x % kChunkTiles;
-  int ly = y % kChunkTiles;
+  int cx = x / kChunkTiles;
+  int cy = y / kChunkTiles;
+  int idx = cy * chunksX_ + cx;
+  Chunk& chunk = chunks_[static_cast<size_t>(idx)];
+  int lx = x - cx * kChunkTiles;
+  int ly = y - cy * kChunkTiles;
   return chunk.tiles[ly * kChunkTiles + lx];
 }
 
 const Tile& World::AtUnchecked(int x, int y) const {
-  const Chunk* chunk = FindChunkFor(x, y);
-  if (!chunk) {
+  int cx = x / kChunkTiles;
+  int cy = y / kChunkTiles;
+  int idx = cy * chunksX_ + cx;
+  const Chunk& chunk = chunks_[static_cast<size_t>(idx)];
+  int lx = x - cx * kChunkTiles;
+  int ly = y - cy * kChunkTiles;
+  return chunk.tiles[ly * kChunkTiles + lx];
+}
+
+const Tile& World::At(int x, int y) const {
+  if (!InBounds(x, y)) {
     static const Tile kDefault{};
     return kDefault;
   }
-  int lx = x % kChunkTiles;
-  int ly = y % kChunkTiles;
-  return chunk->tiles[ly * kChunkTiles + lx];
+  return AtUnchecked(x, y);
 }
-
-const Tile& World::At(int x, int y) const { return AtUnchecked(x, y); }
 
 void World::ApplyTotalsDelta(const Tile& before, const Tile& after) {
   totalTrees_ += static_cast<int64_t>(after.trees) - static_cast<int64_t>(before.trees);
@@ -206,16 +277,11 @@ uint16_t World::Decay(uint16_t value, int dist) {
 }
 
 uint16_t World::BaseFoodAt(int x, int y) const {
-  if (!InBounds(x, y)) return 0;
-  const Tile& tile = AtUnchecked(x, y);
-  if (tile.type != TileType::Land || tile.burning) return 0;
-
-  int value = static_cast<int>(tile.food) * 120 + static_cast<int>(tile.trees) * 8;
-  if (tile.building == BuildingType::Farm && tile.farmStage >= Settlement::kFarmReadyStage) {
-    value += 600;
+  if (static_cast<unsigned>(x) >= static_cast<unsigned>(width_) ||
+      static_cast<unsigned>(y) >= static_cast<unsigned>(height_)) {
+    return 0;
   }
-  value = std::max(0, std::min(60000, value));
-  return static_cast<uint16_t>(value);
+  return BaseFoodFromTile(AtUnchecked(x, y));
 }
 
 uint16_t World::BaseFireAt(int x, int y) const {
@@ -240,74 +306,89 @@ uint16_t World::BaseWaterAt(int x, int y) const {
 }
 
 uint16_t World::FoodScentAt(int x, int y) const {
-  uint16_t best = BaseFoodAt(x, y);
-  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
-    int ny = y + dy;
-    if (ny < 0 || ny >= height_) continue;
-    int rem = kScentIters - std::abs(dy);
-    for (int dx = -rem; dx <= rem; ++dx) {
-      int nx = x + dx;
-      if (nx < 0 || nx >= width_) continue;
-      int dist = std::abs(dx) + std::abs(dy);
-      uint16_t base = BaseFoodAt(nx, ny);
-      uint16_t val = Decay(base, dist);
-      if (val > best) best = val;
+  uint16_t best = 0;
+  if (static_cast<unsigned>(x) < static_cast<unsigned>(width_) &&
+      static_cast<unsigned>(y) < static_cast<unsigned>(height_)) {
+    best = BaseFoodFromTile(AtUnchecked(x, y));
+  }
+  for (const auto& off : OffsetsR6()) {
+    int nx = x + off.dx;
+    int ny = y + off.dy;
+    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
+        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
+      continue;
     }
+    uint16_t base = BaseFoodFromTile(AtUnchecked(nx, ny));
+    uint16_t val = DecayLut(base, off.dist);
+    if (val > best) best = val;
   }
   return best;
 }
 
 uint16_t World::WaterScentAt(int x, int y) const {
   uint16_t best = BaseWaterAt(x, y);
-  for (int dy = -kWaterScentIters; dy <= kWaterScentIters; ++dy) {
-    int ny = y + dy;
-    if (ny < 0 || ny >= height_) continue;
-    int rem = kWaterScentIters - std::abs(dy);
-    for (int dx = -rem; dx <= rem; ++dx) {
-      int nx = x + dx;
-      if (nx < 0 || nx >= width_) continue;
-      int dist = std::abs(dx) + std::abs(dy);
-      uint16_t base = BaseWaterAt(nx, ny);
-      uint16_t val = Decay(base, dist);
-      if (val > best) best = val;
+  for (const auto& off : OffsetsR10()) {
+    int nx = x + off.dx;
+    int ny = y + off.dy;
+    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
+        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
+      continue;
     }
+    uint16_t base = BaseWaterAt(nx, ny);
+    uint16_t val = DecayLut(base, off.dist);
+    if (val > best) best = val;
   }
   return best;
 }
 
 uint16_t World::FireRiskAt(int x, int y) const {
   uint16_t best = BaseFireAt(x, y);
-  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
-    int ny = y + dy;
-    if (ny < 0 || ny >= height_) continue;
-    int rem = kScentIters - std::abs(dy);
-    for (int dx = -rem; dx <= rem; ++dx) {
-      int nx = x + dx;
-      if (nx < 0 || nx >= width_) continue;
-      int dist = std::abs(dx) + std::abs(dy);
-      uint16_t base = BaseFireAt(nx, ny);
-      uint16_t val = Decay(base, dist);
-      if (val > best) best = val;
+  for (const auto& off : OffsetsR6()) {
+    int nx = x + off.dx;
+    int ny = y + off.dy;
+    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
+        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
+      continue;
     }
+    uint16_t base = BaseFireAt(nx, ny);
+    uint16_t val = DecayLut(base, off.dist);
+    if (val > best) best = val;
   }
   return best;
 }
 
+void World::EnsureHomeSourceGrid() {
+  const int64_t needed = static_cast<int64_t>(width_) * static_cast<int64_t>(height_);
+  if (needed <= 0) {
+    homeSourceStampByTile_.clear();
+    homeSourceGeneration_ = 1;
+    return;
+  }
+  if (homeSourceStampByTile_.size() != static_cast<size_t>(needed)) {
+    homeSourceStampByTile_.assign(static_cast<size_t>(needed), 0u);
+    homeSourceGeneration_ = 1;
+  }
+}
+
+bool World::IsHomeSourceAt(int x, int y) const {
+  if (!InBounds(x, y)) return false;
+  const int idx = y * width_ + x;
+  return homeSourceStampByTile_[static_cast<size_t>(idx)] == homeSourceGeneration_;
+}
+
 uint16_t World::HomeScentAt(int x, int y) const {
   if (!InBounds(x, y)) return 0;
-  uint16_t best = 0;
-  for (int dy = -kScentIters; dy <= kScentIters; ++dy) {
-    int ny = y + dy;
-    if (ny < 0 || ny >= height_) continue;
-    int rem = kScentIters - std::abs(dy);
-    for (int dx = -rem; dx <= rem; ++dx) {
-      int nx = x + dx;
-      if (nx < 0 || nx >= width_) continue;
-      int dist = std::abs(dx) + std::abs(dy);
-      if (homeSourceTiles_.find(PackCoord(nx, ny)) == homeSourceTiles_.end()) continue;
-      uint16_t val = Decay(60000u, dist);
-      if (val > best) best = val;
+  uint16_t best = IsHomeSourceAt(x, y) ? 60000u : 0u;
+  for (const auto& off : OffsetsR6()) {
+    int nx = x + off.dx;
+    int ny = y + off.dy;
+    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
+        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
+      continue;
     }
+    if (!IsHomeSourceAt(nx, ny)) continue;
+    uint16_t val = DecayLut(60000u, off.dist);
+    if (val > best) best = val;
   }
   return best;
 }
@@ -558,10 +639,19 @@ void World::RecomputeScentFields() {
 }
 
 void World::RecomputeHomeField(const SettlementManager& settlements) {
-  homeSourceTiles_.clear();
+  EnsureHomeSourceGrid();
+  if (homeSourceStampByTile_.empty()) return;
+
+  homeSourceGeneration_++;
+  if (homeSourceGeneration_ == 0) {
+    std::fill(homeSourceStampByTile_.begin(), homeSourceStampByTile_.end(), 0u);
+    homeSourceGeneration_ = 1;
+  }
+
   for (const auto& settlement : settlements.Settlements()) {
     if (!InBounds(settlement.centerX, settlement.centerY)) continue;
-    homeSourceTiles_.insert(PackCoord(settlement.centerX, settlement.centerY));
+    const int idx = settlement.centerY * width_ + settlement.centerX;
+    homeSourceStampByTile_[static_cast<size_t>(idx)] = homeSourceGeneration_;
   }
 }
 
@@ -621,12 +711,14 @@ bool World::LoadMap(const std::string& path) {
 
   width_ = static_cast<int>(header.width);
   height_ = static_cast<int>(header.height);
-  chunks_.clear();
+  ResizeStorage();
   burningTiles_.clear();
   buildingTiles_.clear();
   farmGrowTiles_.clear();
   wellTiles_.clear();
-  homeSourceTiles_.clear();
+  EnsureHomeSourceGrid();
+  std::fill(homeSourceStampByTile_.begin(), homeSourceStampByTile_.end(), 0u);
+  homeSourceGeneration_ = 1;
   wellRadiusByTile_.clear();
   totalTrees_ = 0;
   totalFood_ = 0;

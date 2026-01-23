@@ -59,7 +59,6 @@ class Renderer {
     int tilesHigh = 0;
     bool dirty = true;
     uint64_t lastUsedFrame = 0;
-    bool usedThisFrame = false;
   };
 
   SDL_Texture* humansTexture_ = nullptr;
@@ -82,6 +81,7 @@ class Renderer {
   int chunksY_ = 0;
   bool terrainDirty_ = true;
   std::vector<TerrainChunk> chunks_;
+  std::vector<int> terrainTextureIndices_;
   uint64_t frameCounter_ = 0;
   int maxTerrainTextures_ = 256;
 

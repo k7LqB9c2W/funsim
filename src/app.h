@@ -76,4 +76,7 @@ class App {
   bool imguiInitialized_ = false;
   bool worldDirty_ = false;
   bool wholeMapViewActive_ = false;
+
+  bool prevLeftDown_ = false;
+  bool prevRightDown_ = false;
 };

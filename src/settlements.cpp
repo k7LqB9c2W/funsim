@@ -193,22 +193,31 @@ int SettlementManager::ZoneOwnerForTile(int x, int y) const {
 int SettlementManager::ZoneOwnerAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return -1;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return -1;
-  auto it = zoneOwnerByKey_.find(PackZone(zx, zy));
-  return (it == zoneOwnerByKey_.end()) ? -1 : it->second;
+  int idx = zy * zonesX_ + zx;
+  if (idx < 0 || idx >= static_cast<int>(zoneOwnerStampByIndex_.size())) return -1;
+  return (zoneOwnerStampByIndex_[static_cast<size_t>(idx)] == zoneOwnerGeneration_)
+             ? zoneOwnerByIndex_[static_cast<size_t>(idx)]
+             : -1;
 }
 
 int SettlementManager::ZonePopAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return 0;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
-  auto it = zonePopByKey_.find(PackZone(zx, zy));
-  return (it == zonePopByKey_.end()) ? 0 : it->second;
+  int idx = zy * zonesX_ + zx;
+  if (idx < 0 || idx >= static_cast<int>(zonePopStampByIndex_.size())) return 0;
+  return (zonePopStampByIndex_[static_cast<size_t>(idx)] == zonePopGeneration_)
+             ? zonePopByIndex_[static_cast<size_t>(idx)]
+             : 0;
 }
 
 int SettlementManager::ZoneConflictAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return 0;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
-  auto it = zoneConflictByKey_.find(PackZone(zx, zy));
-  return (it == zoneConflictByKey_.end()) ? 0 : it->second;
+  int idx = zy * zonesX_ + zx;
+  if (idx < 0 || idx >= static_cast<int>(zoneConflictStampByIndex_.size())) return 0;
+  return (zoneConflictStampByIndex_[static_cast<size_t>(idx)] == zoneConflictGeneration_)
+             ? zoneConflictByIndex_[static_cast<size_t>(idx)]
+             : 0;
 }
 
 int SettlementManager::ConsumeWarDeaths() {
@@ -224,58 +233,130 @@ void SettlementManager::EnsureZoneBuffers(const World& world) {
 
   zonesX_ = neededZonesX;
   zonesY_ = neededZonesY;
-  zonePopByKey_.clear();
-  zoneDenseDaysByKey_.clear();
-  zoneOwnerByKey_.clear();
-  zoneConflictByKey_.clear();
+
+  const int totalZones = std::max(0, zonesX_ * zonesY_);
+  zonePopGeneration_ = 1;
+  zonePopStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
+  zonePopByIndex_.assign(static_cast<size_t>(totalZones), 0);
+
+  zoneDenseGeneration_ = 1;
+  zoneDenseStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
+  zoneDenseDaysByIndex_.assign(static_cast<size_t>(totalZones), 0);
+  denseZoneIndices_.clear();
+
+  zoneOwnerGeneration_ = 1;
+  zoneOwnerStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
+  zoneOwnerByIndex_.assign(static_cast<size_t>(totalZones), -1);
+  zoneOwnerBestDistSqByIndex_.assign(static_cast<size_t>(totalZones), 0);
+  ownedZoneIndices_.clear();
+
+  zoneConflictGeneration_ = 1;
+  zoneConflictStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
+  zoneConflictByIndex_.assign(static_cast<size_t>(totalZones), 0);
+  conflictZoneIndices_.clear();
 }
 
 void SettlementManager::RecomputeZonePop(const World& world, const HumanManager& humans) {
-  zonePopByKey_.clear();
-  zonePopByKey_.reserve(humans.Humans().size());
+  std::vector<int> previousDense;
+  previousDense.swap(denseZoneIndices_);
+
+  zonePopGeneration_++;
+  if (zonePopGeneration_ == 0) {
+    std::fill(zonePopStampByIndex_.begin(), zonePopStampByIndex_.end(), 0u);
+    zonePopGeneration_ = 1;
+  }
+
+  zoneDenseGeneration_++;
+  if (zoneDenseGeneration_ == 0) {
+    std::fill(zoneDenseStampByIndex_.begin(), zoneDenseStampByIndex_.end(), 0u);
+    zoneDenseGeneration_ = 1;
+  }
+
+  std::vector<int> touchedZones;
+  touchedZones.reserve(humans.Humans().size());
 
   for (const auto& human : humans.Humans()) {
     if (!human.alive) continue;
     int zx = human.x / zoneSize_;
     int zy = human.y / zoneSize_;
     if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) continue;
-    zonePopByKey_[PackZone(zx, zy)]++;
+    int idx = zy * zonesX_ + zx;
+    if (idx < 0 || idx >= static_cast<int>(zonePopStampByIndex_.size())) continue;
+    if (zonePopStampByIndex_[static_cast<size_t>(idx)] != zonePopGeneration_) {
+      zonePopStampByIndex_[static_cast<size_t>(idx)] = zonePopGeneration_;
+      zonePopByIndex_[static_cast<size_t>(idx)] = 0;
+      touchedZones.push_back(idx);
+    }
+    zonePopByIndex_[static_cast<size_t>(idx)]++;
   }
 
-  std::unordered_map<uint64_t, int> newDense;
-  newDense.reserve(zonePopByKey_.size());
-  for (const auto& [key, pop] : zonePopByKey_) {
+  denseZoneIndices_.reserve(touchedZones.size());
+  for (int idx : touchedZones) {
+    int pop = zonePopByIndex_[static_cast<size_t>(idx)];
     if (pop < kZonePopThreshold) continue;
-    int prev = 0;
-    auto it = zoneDenseDaysByKey_.find(key);
-    if (it != zoneDenseDaysByKey_.end()) prev = it->second;
-    newDense[key] = prev + 1;
+    zoneDenseStampByIndex_[static_cast<size_t>(idx)] = zoneDenseGeneration_;
+    zoneDenseDaysByIndex_[static_cast<size_t>(idx)]++;
+    denseZoneIndices_.push_back(idx);
   }
-  zoneDenseDaysByKey_.swap(newDense);
+
+  for (int idx : previousDense) {
+    if (idx < 0 || idx >= static_cast<int>(zoneDenseStampByIndex_.size())) continue;
+    if (zoneDenseStampByIndex_[static_cast<size_t>(idx)] != zoneDenseGeneration_) {
+      zoneDenseDaysByIndex_[static_cast<size_t>(idx)] = 0;
+    }
+  }
+
   (void)world;
 }
 
 void SettlementManager::RecomputeZonePopMacro() {
-  zonePopByKey_.clear();
-  zonePopByKey_.reserve(settlements_.size());
+  std::vector<int> previousDense;
+  previousDense.swap(denseZoneIndices_);
+
+  zonePopGeneration_++;
+  if (zonePopGeneration_ == 0) {
+    std::fill(zonePopStampByIndex_.begin(), zonePopStampByIndex_.end(), 0u);
+    zonePopGeneration_ = 1;
+  }
+
+  zoneDenseGeneration_++;
+  if (zoneDenseGeneration_ == 0) {
+    std::fill(zoneDenseStampByIndex_.begin(), zoneDenseStampByIndex_.end(), 0u);
+    zoneDenseGeneration_ = 1;
+  }
+
+  std::vector<int> touchedZones;
+  touchedZones.reserve(settlements_.size());
 
   for (const auto& settlement : settlements_) {
     int zx = settlement.centerX / zoneSize_;
     int zy = settlement.centerY / zoneSize_;
     if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) continue;
-    zonePopByKey_[PackZone(zx, zy)] += settlement.population;
+    int idx = zy * zonesX_ + zx;
+    if (idx < 0 || idx >= static_cast<int>(zonePopStampByIndex_.size())) continue;
+    if (zonePopStampByIndex_[static_cast<size_t>(idx)] != zonePopGeneration_) {
+      zonePopStampByIndex_[static_cast<size_t>(idx)] = zonePopGeneration_;
+      zonePopByIndex_[static_cast<size_t>(idx)] = 0;
+      touchedZones.push_back(idx);
+    }
+    zonePopByIndex_[static_cast<size_t>(idx)] += settlement.population;
   }
 
-  std::unordered_map<uint64_t, int> newDense;
-  newDense.reserve(zonePopByKey_.size());
-  for (const auto& [key, pop] : zonePopByKey_) {
+  denseZoneIndices_.reserve(touchedZones.size());
+  for (int idx : touchedZones) {
+    int pop = zonePopByIndex_[static_cast<size_t>(idx)];
     if (pop < kZonePopThreshold) continue;
-    int prev = 0;
-    auto it = zoneDenseDaysByKey_.find(key);
-    if (it != zoneDenseDaysByKey_.end()) prev = it->second;
-    newDense[key] = prev + 1;
+    zoneDenseStampByIndex_[static_cast<size_t>(idx)] = zoneDenseGeneration_;
+    zoneDenseDaysByIndex_[static_cast<size_t>(idx)]++;
+    denseZoneIndices_.push_back(idx);
   }
-  zoneDenseDaysByKey_.swap(newDense);
+
+  for (int idx : previousDense) {
+    if (idx < 0 || idx >= static_cast<int>(zoneDenseStampByIndex_.size())) continue;
+    if (zoneDenseStampByIndex_[static_cast<size_t>(idx)] != zoneDenseGeneration_) {
+      zoneDenseDaysByIndex_[static_cast<size_t>(idx)] = 0;
+    }
+  }
 }
 
 void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int dayCount,
@@ -283,12 +364,15 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
                                                FactionManager& factions) {
   const int minDistSq = kMinVillageDistTiles * kMinVillageDistTiles;
 
-  for (auto it = zoneDenseDaysByKey_.begin(); it != zoneDenseDaysByKey_.end();) {
-    uint64_t zoneKey = it->first;
-    int denseDays = it->second;
-    int zx = 0;
-    int zy = 0;
-    UnpackZone(zoneKey, zx, zy);
+  for (size_t denseIndex = 0; denseIndex < denseZoneIndices_.size();) {
+    int zoneIndex = denseZoneIndices_[denseIndex];
+    if (zoneIndex < 0 || zoneIndex >= zonesX_ * zonesY_) {
+      denseIndex++;
+      continue;
+    }
+    int denseDays = zoneDenseDaysByIndex_[static_cast<size_t>(zoneIndex)];
+    int zx = zoneIndex % zonesX_;
+    int zy = zoneIndex / zonesX_;
     int startX = zx * zoneSize_;
     int startY = zy * zoneSize_;
     int endX = std::min(world.width(), startX + zoneSize_);
@@ -311,7 +395,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
       }
     }
     if (tooClose) {
-      ++it;
+      denseIndex++;
       continue;
     }
 
@@ -328,11 +412,11 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     int popThreshold = std::max(6, static_cast<int>(std::round(kZonePopThreshold / expansionBias)));
     int requiredDays = std::max(2, static_cast<int>(std::round(kZoneRequiredDays / expansionBias)));
     if (zonePop < popThreshold) {
-      ++it;
+      denseIndex++;
       continue;
     }
     if (denseDays < requiredDays) {
-      ++it;
+      denseIndex++;
       continue;
     }
 
@@ -348,7 +432,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
                            (nearestSettlement->stockWood < pop);
         }
         if (!factions.CanExpandInto(sourceFactionId, ownerSettlement->factionId, resourceStress)) {
-          ++it;
+          denseIndex++;
           continue;
         }
       }
@@ -376,7 +460,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     }
 
     if (bestX == -1 || bestY == -1) {
-      ++it;
+      denseIndex++;
       continue;
     }
 
@@ -421,21 +505,25 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     homeFieldDirty_ = true;
 
     markers.push_back(VillageMarker{bestX, bestY, 25});
-    it = zoneDenseDaysByKey_.erase(it);
+    zoneDenseDaysByIndex_[static_cast<size_t>(zoneIndex)] = 0;
+    denseZoneIndices_[denseIndex] = denseZoneIndices_.back();
+    denseZoneIndices_.pop_back();
     continue;
   }
   (void)dayCount;
 }
 
 void SettlementManager::RecomputeZoneOwners(const World& world) {
-  zoneOwnerByKey_.clear();
+  ownedZoneIndices_.clear();
+  zoneOwnerGeneration_++;
+  if (zoneOwnerGeneration_ == 0) {
+    std::fill(zoneOwnerStampByIndex_.begin(), zoneOwnerStampByIndex_.end(), 0u);
+    zoneOwnerGeneration_ = 1;
+  }
   if (settlements_.empty()) {
     return;
   }
   if (zonesX_ <= 0 || zonesY_ <= 0) return;
-
-  std::unordered_map<uint64_t, int> bestDistSq;
-  bestDistSq.reserve(4096);
 
   for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
     const Settlement& settlement = settlements_[i];
@@ -461,11 +549,16 @@ void SettlementManager::RecomputeZoneOwners(const World& world) {
           int dy = source.y - centerY;
           int dist = dx * dx + dy * dy;
           if (dist > radiusSq) continue;
-          uint64_t key = PackZone(zx, zy);
-          auto itBest = bestDistSq.find(key);
-          if (itBest == bestDistSq.end() || dist < itBest->second) {
-            bestDistSq[key] = dist;
-            zoneOwnerByKey_[key] = settlement.id;
+          int idx = zy * zonesX_ + zx;
+          if (idx < 0 || idx >= static_cast<int>(zoneOwnerStampByIndex_.size())) continue;
+          if (zoneOwnerStampByIndex_[static_cast<size_t>(idx)] != zoneOwnerGeneration_) {
+            zoneOwnerStampByIndex_[static_cast<size_t>(idx)] = zoneOwnerGeneration_;
+            zoneOwnerBestDistSqByIndex_[static_cast<size_t>(idx)] = dist;
+            zoneOwnerByIndex_[static_cast<size_t>(idx)] = settlement.id;
+            ownedZoneIndices_.push_back(idx);
+          } else if (dist < zoneOwnerBestDistSqByIndex_[static_cast<size_t>(idx)]) {
+            zoneOwnerBestDistSqByIndex_[static_cast<size_t>(idx)] = dist;
+            zoneOwnerByIndex_[static_cast<size_t>(idx)] = settlement.id;
           }
         }
       }
@@ -482,23 +575,33 @@ void SettlementManager::UpdateBorderPressure(const FactionManager& factions) {
     settlement.borderPressure = 0;
     settlement.warPressure = 0;
   }
-  if (zonesX_ <= 0 || zonesY_ <= 0 || zoneOwnerByKey_.empty()) return;
+  if (zonesX_ <= 0 || zonesY_ <= 0 || ownedZoneIndices_.empty()) return;
   const bool warEnabled = factions.WarEnabled();
-  zoneConflictByKey_.clear();
+  conflictZoneIndices_.clear();
+  zoneConflictGeneration_++;
+  if (zoneConflictGeneration_ == 0) {
+    std::fill(zoneConflictStampByIndex_.begin(), zoneConflictStampByIndex_.end(), 0u);
+    zoneConflictGeneration_ = 1;
+  }
 
-  auto bumpConflict = [&](uint64_t key, int amount) {
+  auto bumpConflict = [&](int zoneIndex, int amount) {
     if (amount <= 0) return;
-    auto it = zoneConflictByKey_.find(key);
-    if (it == zoneConflictByKey_.end() || amount > it->second) {
-      zoneConflictByKey_[key] = amount;
+    if (zoneIndex < 0 || zoneIndex >= static_cast<int>(zoneConflictStampByIndex_.size())) return;
+    if (zoneConflictStampByIndex_[static_cast<size_t>(zoneIndex)] != zoneConflictGeneration_) {
+      zoneConflictStampByIndex_[static_cast<size_t>(zoneIndex)] = zoneConflictGeneration_;
+      zoneConflictByIndex_[static_cast<size_t>(zoneIndex)] = 0;
+      conflictZoneIndices_.push_back(zoneIndex);
     }
+    int& slot = zoneConflictByIndex_[static_cast<size_t>(zoneIndex)];
+    if (amount > slot) slot = amount;
   };
 
-  for (const auto& [key, ownerId] : zoneOwnerByKey_) {
+  for (int zoneIndex : ownedZoneIndices_) {
+    if (zoneIndex < 0 || zoneIndex >= zonesX_ * zonesY_) continue;
+    int zx = zoneIndex % zonesX_;
+    int zy = zoneIndex / zonesX_;
+    int ownerId = ZoneOwnerAt(zx, zy);
     if (ownerId <= 0) continue;
-    int zx = 0;
-    int zy = 0;
-    UnpackZone(key, zx, zy);
     Settlement* ownerSettlement = GetMutable(ownerId);
     if (!ownerSettlement) continue;
     int factionA = ownerSettlement->factionId;
@@ -506,10 +609,7 @@ void SettlementManager::UpdateBorderPressure(const FactionManager& factions) {
 
     auto handleNeighbor = [&](int nx, int ny) {
       if (nx < 0 || ny < 0 || nx >= zonesX_ || ny >= zonesY_) return;
-      uint64_t neighborKey = PackZone(nx, ny);
-      auto itNeighbor = zoneOwnerByKey_.find(neighborKey);
-      if (itNeighbor == zoneOwnerByKey_.end()) return;
-      int neighborOwner = itNeighbor->second;
+      int neighborOwner = ZoneOwnerAt(nx, ny);
       if (neighborOwner <= 0 || neighborOwner == ownerId) return;
       Settlement* neighborSettlement = GetMutable(neighborOwner);
       if (!neighborSettlement) return;
@@ -525,13 +625,13 @@ void SettlementManager::UpdateBorderPressure(const FactionManager& factions) {
       if (atWar) {
         ownerSettlement->warPressure += 2;
         neighborSettlement->warPressure += 2;
-        bumpConflict(key, 200);
-        bumpConflict(neighborKey, 200);
+        bumpConflict(zoneIndex, 200);
+        bumpConflict(ny * zonesX_ + nx, 200);
       } else if (hostile) {
         ownerSettlement->warPressure += 1;
         neighborSettlement->warPressure += 1;
-        bumpConflict(key, 120);
-        bumpConflict(neighborKey, 120);
+        bumpConflict(zoneIndex, 120);
+        bumpConflict(ny * zonesX_ + nx, 120);
       }
     };
 

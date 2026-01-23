@@ -23,6 +23,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Default to an optimized build when the generator supports a single configuration.
+if (NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
+endif()
+
 find_package(SDL2 CONFIG REQUIRED)
 find_package(SDL2_image CONFIG REQUIRED)
 find_package(SDL2_ttf CONFIG QUIET)
@@ -86,6 +92,12 @@ if (MSVC)
   target_compile_options(funsim PRIVATE /W4)
 else()
   target_compile_options(funsim PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if (MSVC)
+  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:/O2>)
+else()
+  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:-O3>)
 endif()
 
 add_custom_command(TARGET funsim POST_BUILD

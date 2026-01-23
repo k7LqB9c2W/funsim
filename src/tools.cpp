@@ -2,6 +2,8 @@
 
 const char* ToolName(ToolType tool) {
   switch (tool) {
+    case ToolType::SelectKingdom:
+      return "Select Kingdom";
     case ToolType::PlaceLand:
       return "Place Land";
     case ToolType::PlaceFreshWater:

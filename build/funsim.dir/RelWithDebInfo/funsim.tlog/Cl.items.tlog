@@ -1,0 +1,16 @@
+C:\funsim\src\main.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\main.obj
+C:\funsim\src\app.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\app.obj
+C:\funsim\src\world.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\world.obj
+C:\funsim\src\humans.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\humans.obj
+C:\funsim\src\tools.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\tools.obj
+C:\funsim\src\render.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\render.obj
+C:\funsim\src\settlements.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\settlements.obj
+C:\funsim\src\factions.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\factions.obj
+C:\funsim\src\ui.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\ui.obj
+C:\funsim\src\util.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\util.obj
+C:\funsim\third_party\imgui\imgui.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui.obj
+C:\funsim\third_party\imgui\imgui_draw.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui_draw.obj
+C:\funsim\third_party\imgui\imgui_tables.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui_tables.obj
+C:\funsim\third_party\imgui\imgui_widgets.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui_widgets.obj
+C:\funsim\third_party\imgui\backends\imgui_impl_sdl2.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui_impl_sdl2.obj
+C:\funsim\third_party\imgui\backends\imgui_impl_sdlrenderer2.cpp;C:\funsim\build\funsim.dir\RelWithDebInfo\imgui_impl_sdlrenderer2.obj

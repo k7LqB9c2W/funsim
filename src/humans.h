@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 #include "util.h"
@@ -127,7 +126,7 @@ class HumanManager {
   void UpdateMoveStep(Human& human, World& world, SettlementManager& settlements, Random& rng,
                       int tickCount, int ticksPerDay);
   void RebuildIdMap();
- void RecordDeath(int humanId, int day, DeathReason reason);
+  void RecordDeath(int humanId, int day, DeathReason reason);
 
   static uint64_t PackCoord(int x, int y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
@@ -137,12 +136,18 @@ class HumanManager {
   int PopCountAt(int x, int y) const;
   int AdultMaleCountAt(int x, int y) const;
   int AdultMaleSampleIdAt(int x, int y) const;
+  void EnsureCrowdGrids(int w, int h);
 
   int nextId_ = 1;
   std::vector<Human> humans_;
-  std::unordered_map<uint64_t, int> popCountsByTile_;
-  std::unordered_map<uint64_t, int> adultMaleCountsByTile_;
-  std::unordered_map<uint64_t, int> adultMaleSampleIdByTile_;
+  int crowdGridW_ = 0;
+  int crowdGridH_ = 0;
+  uint32_t crowdGeneration_ = 1;
+  std::vector<uint32_t> popStampByTile_;
+  std::vector<int> popCountByTile_;
+  std::vector<uint32_t> adultMaleStampByTile_;
+  std::vector<int> adultMaleCountByTile_;
+  std::vector<int> adultMaleSampleIdByTile_;
   std::vector<int> humanIdToIndex_;
   std::vector<Human> newborns_;
   std::vector<DeathRecord> deathLog_;

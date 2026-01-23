@@ -1,8 +1,8 @@
 funsim_death_log
-days=296
-total_births=294
+days=260
+total_births=671
 total_deaths=0
-final_population=2544
+final_population=2071
 starvation=0
 dehydration=0
 war=0
