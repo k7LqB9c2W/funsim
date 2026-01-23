@@ -382,18 +382,62 @@ bool HumanManager::GetHumanById(int id, int& outX, int& outY) const {
 }
 
 int HumanManager::PopCountAt(int x, int y) const {
-  auto it = popCountsByTile_.find(PackCoord(x, y));
-  return (it == popCountsByTile_.end()) ? 0 : it->second;
+  if (crowdGridW_ <= 0 || crowdGridH_ <= 0) return 0;
+  if (static_cast<unsigned>(x) >= static_cast<unsigned>(crowdGridW_) ||
+      static_cast<unsigned>(y) >= static_cast<unsigned>(crowdGridH_)) {
+    return 0;
+  }
+  const int idx = y * crowdGridW_ + x;
+  if (popStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) return 0;
+  return popCountByTile_[static_cast<size_t>(idx)];
 }
 
 int HumanManager::AdultMaleCountAt(int x, int y) const {
-  auto it = adultMaleCountsByTile_.find(PackCoord(x, y));
-  return (it == adultMaleCountsByTile_.end()) ? 0 : it->second;
+  if (crowdGridW_ <= 0 || crowdGridH_ <= 0) return 0;
+  if (static_cast<unsigned>(x) >= static_cast<unsigned>(crowdGridW_) ||
+      static_cast<unsigned>(y) >= static_cast<unsigned>(crowdGridH_)) {
+    return 0;
+  }
+  const int idx = y * crowdGridW_ + x;
+  if (adultMaleStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) return 0;
+  return adultMaleCountByTile_[static_cast<size_t>(idx)];
 }
 
 int HumanManager::AdultMaleSampleIdAt(int x, int y) const {
-  auto it = adultMaleSampleIdByTile_.find(PackCoord(x, y));
-  return (it == adultMaleSampleIdByTile_.end()) ? -1 : it->second;
+  if (crowdGridW_ <= 0 || crowdGridH_ <= 0) return -1;
+  if (static_cast<unsigned>(x) >= static_cast<unsigned>(crowdGridW_) ||
+      static_cast<unsigned>(y) >= static_cast<unsigned>(crowdGridH_)) {
+    return -1;
+  }
+  const int idx = y * crowdGridW_ + x;
+  if (adultMaleStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) return -1;
+  return adultMaleSampleIdByTile_[static_cast<size_t>(idx)];
+}
+
+void HumanManager::EnsureCrowdGrids(int w, int h) {
+  if (w <= 0 || h <= 0) {
+    crowdGridW_ = 0;
+    crowdGridH_ = 0;
+    crowdGeneration_ = 1;
+    popStampByTile_.clear();
+    popCountByTile_.clear();
+    adultMaleStampByTile_.clear();
+    adultMaleCountByTile_.clear();
+    adultMaleSampleIdByTile_.clear();
+    return;
+  }
+
+  if (w == crowdGridW_ && h == crowdGridH_) return;
+
+  crowdGridW_ = w;
+  crowdGridH_ = h;
+  const size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
+  crowdGeneration_ = 1;
+  popStampByTile_.assign(total, 0u);
+  popCountByTile_.assign(total, 0);
+  adultMaleStampByTile_.assign(total, 0u);
+  adultMaleCountByTile_.assign(total, 0);
+  adultMaleSampleIdByTile_.assign(total, -1);
 }
 
 int HumanManager::FindMateTargetId(const Human& human, const World& world, Random& rng) const {
@@ -720,7 +764,8 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     int nx = human.x + d[0];
     int ny = human.y + d[1];
     if (!world.InBounds(nx, ny)) continue;
-    if ((d[0] != 0 || d[1] != 0) && !IsWalkable(world.At(nx, ny))) continue;
+    const Tile& candidate = world.At(nx, ny);
+    if ((d[0] != 0 || d[1] != 0) && !IsWalkable(candidate)) continue;
 
     int score = 0;
 
@@ -734,9 +779,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     if (crowdCount > 0) {
       score -= crowdCount * crowdPenalty;
     }
-    if (world.At(nx, ny).burning) {
+    if (candidate.burning) {
       score -= 200000;
     }
+
+    const bool isGatherOrScout = (human.role == Role::Gatherer || human.role == Role::Scout);
+    const bool isHomeBoundRole = (human.role == Role::Guard || human.role == Role::Builder ||
+                                 human.role == Role::Farmer || human.role == Role::Soldier);
+    bool needFoodScent = false;
+    bool needWaterScent = false;
+    bool needFireRisk = false;
+    bool needHomeScent = false;
 
     switch (human.goal) {
       case Goal::SeekFood:
@@ -744,18 +797,18 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
           int dist = Manhattan(nx, ny, human.targetX, human.targetY);
           score -= dist * 160;
         } else {
-          score += static_cast<int>(world.FoodScentAt(nx, ny)) * 4;
+          needFoodScent = true;
         }
         break;
       case Goal::SeekWater:
-        score += static_cast<int>(world.WaterScentAt(nx, ny)) * 4;
+        needWaterScent = true;
         if (human.targetX != human.x || human.targetY != human.y) {
           int dist = Manhattan(nx, ny, human.targetX, human.targetY);
           score -= dist * 140;
         }
         break;
       case Goal::FleeFire:
-        score -= static_cast<int>(world.FireRiskAt(nx, ny)) * 6;
+        needFireRisk = true;
         break;
       case Goal::StayHome: {
         int dist = Manhattan(nx, ny, stayX, stayY);
@@ -779,23 +832,46 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     }
 
-    if (human.role == Role::Gatherer || human.role == Role::Scout) {
-      score += static_cast<int>(world.FoodScentAt(nx, ny)) / 4;
-    } else if (human.role == Role::Guard || human.role == Role::Builder ||
-               human.role == Role::Farmer || human.role == Role::Soldier) {
+    if (isGatherOrScout) {
+      needFoodScent = true;
+    } else if (isHomeBoundRole) {
       int dist = Manhattan(nx, ny, human.homeX, human.homeY);
       score -= dist * 40;
     }
 
     if (human.settlementId != -1 && human.goal != Goal::SeekWater) {
       bool wanderHeavy =
-          (human.goal == Goal::Wander || human.role == Role::Gatherer || human.role == Role::Scout);
+          (human.goal == Goal::Wander || isGatherOrScout);
       if (!wanderHeavy) {
-        float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
-        int homeScore = static_cast<int>(static_cast<float>(world.HomeScentAt(nx, ny)) *
-                                         0.015f * homeBias);
-        score += homeScore;
+        needHomeScent = true;
       }
+    }
+
+    uint16_t foodScent = 0;
+    uint16_t waterScent = 0;
+    uint16_t fireRisk = 0;
+    uint16_t homeScent = 0;
+    if (needFoodScent) foodScent = world.FoodScentAt(nx, ny);
+    if (needWaterScent) waterScent = world.WaterScentAt(nx, ny);
+    if (needFireRisk) fireRisk = world.FireRiskAt(nx, ny);
+    if (needHomeScent) homeScent = world.HomeScentAt(nx, ny);
+
+    if (human.goal == Goal::SeekFood && !(human.hasTask && TaskTargetsTile(human.taskType))) {
+      score += static_cast<int>(foodScent) * 4;
+    } else if (human.goal == Goal::SeekWater) {
+      score += static_cast<int>(waterScent) * 4;
+    } else if (human.goal == Goal::FleeFire) {
+      score -= static_cast<int>(fireRisk) * 6;
+    }
+
+    if (isGatherOrScout) {
+      score += static_cast<int>(foodScent) / 4;
+    }
+
+    if (needHomeScent) {
+      float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
+      int homeScore = static_cast<int>(static_cast<float>(homeScent) * 0.015f * homeBias);
+      score += homeScore;
     }
 
     uint32_t noise = HashNoise(static_cast<uint32_t>(human.id),
@@ -1027,12 +1103,13 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
   const int w = world.width();
   const int h = world.height();
 
-  popCountsByTile_.clear();
-  adultMaleCountsByTile_.clear();
-  adultMaleSampleIdByTile_.clear();
-  popCountsByTile_.reserve(humans_.size());
-  adultMaleCountsByTile_.reserve(humans_.size());
-  adultMaleSampleIdByTile_.reserve(humans_.size());
+  EnsureCrowdGrids(w, h);
+  crowdGeneration_++;
+  if (crowdGeneration_ == 0) {
+    std::fill(popStampByTile_.begin(), popStampByTile_.end(), 0u);
+    std::fill(adultMaleStampByTile_.begin(), adultMaleStampByTile_.end(), 0u);
+    crowdGeneration_ = 1;
+  }
 
   CrashContextSetStage("Humans::UpdateDailyCoarse count");
   for (const auto& human : humans_) {
@@ -1041,14 +1118,23 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         static_cast<unsigned>(human.y) >= static_cast<unsigned>(h)) {
       continue;
     }
-    uint64_t key = PackCoord(human.x, human.y);
-    popCountsByTile_[key]++;
+    const int idx = human.y * w + human.x;
+    if (popStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) {
+      popStampByTile_[static_cast<size_t>(idx)] = crowdGeneration_;
+      popCountByTile_[static_cast<size_t>(idx)] = 0;
+    }
+    popCountByTile_[static_cast<size_t>(idx)]++;
+
     if (!human.female && human.ageDays >= kAdultAgeDays) {
-      int count = ++adultMaleCountsByTile_[key];
-      auto it = adultMaleSampleIdByTile_.find(key);
-      int currentSample = (it == adultMaleSampleIdByTile_.end()) ? -1 : it->second;
+      if (adultMaleStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) {
+        adultMaleStampByTile_[static_cast<size_t>(idx)] = crowdGeneration_;
+        adultMaleCountByTile_[static_cast<size_t>(idx)] = 0;
+        adultMaleSampleIdByTile_[static_cast<size_t>(idx)] = -1;
+      }
+      int count = ++adultMaleCountByTile_[static_cast<size_t>(idx)];
+      int currentSample = adultMaleSampleIdByTile_[static_cast<size_t>(idx)];
       if (currentSample == -1 || rng.RangeInt(0, count - 1) == 0) {
-        adultMaleSampleIdByTile_[key] = human.id;
+        adultMaleSampleIdByTile_[static_cast<size_t>(idx)] = human.id;
       }
     }
   }

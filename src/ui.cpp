@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include <algorithm>
+#include <cstring>
 #include <cstdlib>
 
 #include <imgui.h>
@@ -9,13 +11,20 @@
 
 namespace {
 const ToolType kToolOrder[] = {
+    ToolType::SelectKingdom,
     ToolType::PlaceLand,     ToolType::PlaceFreshWater, ToolType::AddTrees,
     ToolType::AddFood,       ToolType::SpawnMale,       ToolType::SpawnFemale,
     ToolType::Fire,          ToolType::Meteor,          ToolType::GiftFood,
 };
+
+void CopyToBuf(char* dst, size_t dstSize, const std::string& src) {
+  if (!dst || dstSize == 0) return;
+  std::strncpy(dst, src.c_str(), dstSize - 1);
+  dst[dstSize - 1] = '\0';
+}
 }  // namespace
 
-void DrawUI(UIState& state, const SimStats& stats, const FactionManager& factions,
+void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
             const SettlementManager& settlements, const HoverInfo& hover) {
   state.stepDay = false;
   state.saveMap = false;
@@ -124,8 +133,12 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
               static_cast<long long>(stats.totalWars));
 
   ImGui::Separator();
-  ImGui::Text("Left click: apply tool");
-  ImGui::Text("Right click: erase");
+  if (state.tool == ToolType::SelectKingdom) {
+    ImGui::Text("Left click: select kingdom");
+  } else {
+    ImGui::Text("Left click: apply tool");
+    ImGui::Text("Right click: erase");
+  }
   ImGui::End();
 
   ImGui::Begin("Kingdoms");
@@ -147,6 +160,10 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
                   settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
       if (settlement->isCapital) {
         ImGui::Text("Capital Seat");
+      }
+      if (ImGui::SmallButton("Edit This Kingdom") && faction->id > 0) {
+        state.selectedFactionId = faction->id;
+        state.factionEditorOpen = true;
       }
       ImGui::Separator();
     }
@@ -173,6 +190,10 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
       ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
 
       ImGui::PushID(faction.id);
+      if (ImGui::SmallButton("Edit")) {
+        state.selectedFactionId = faction.id;
+        state.factionEditorOpen = true;
+      }
       if (ImGui::TreeNode("Relations")) {
         for (const auto& other : factions.Factions()) {
           if (other.id == faction.id) continue;
@@ -189,6 +210,83 @@ void DrawUI(UIState& state, const SimStats& stats, const FactionManager& faction
       ImGui::PopID();
     }
     ImGui::End();
+  }
+
+  if (state.factionEditorOpen && state.selectedFactionId > 0) {
+    bool open = true;
+    Faction* faction = factions.GetMutable(state.selectedFactionId);
+    if (!faction) {
+      state.selectedFactionId = -1;
+      state.factionEditorOpen = false;
+      open = false;
+    } else {
+      if (state.lastFactionEditorId != faction->id) {
+        CopyToBuf(state.factionNameBuf, sizeof(state.factionNameBuf), faction->name);
+        CopyToBuf(state.factionIdeologyBuf, sizeof(state.factionIdeologyBuf), faction->ideology);
+        CopyToBuf(state.factionLeaderNameBuf, sizeof(state.factionLeaderNameBuf), faction->leaderName);
+        CopyToBuf(state.factionLeaderTitleBuf, sizeof(state.factionLeaderTitleBuf), faction->leaderTitle);
+        state.lastFactionEditorId = faction->id;
+      }
+
+      ImGui::Begin("Kingdom Editor", &open);
+      ImGui::Text("Editing kingdom #%d", faction->id);
+
+      float color[3] = {faction->color.r / 255.0f, faction->color.g / 255.0f,
+                        faction->color.b / 255.0f};
+      if (ImGui::ColorEdit3("Color", color)) {
+        faction->color.r = static_cast<uint8_t>(std::max(0, std::min(255, static_cast<int>(color[0] * 255.0f))));
+        faction->color.g = static_cast<uint8_t>(std::max(0, std::min(255, static_cast<int>(color[1] * 255.0f))));
+        faction->color.b = static_cast<uint8_t>(std::max(0, std::min(255, static_cast<int>(color[2] * 255.0f))));
+      }
+
+      if (ImGui::InputText("Name", state.factionNameBuf, sizeof(state.factionNameBuf))) {
+        faction->name = state.factionNameBuf;
+      }
+      if (ImGui::InputText("Ideology", state.factionIdeologyBuf, sizeof(state.factionIdeologyBuf))) {
+        faction->ideology = state.factionIdeologyBuf;
+      }
+
+      if (ImGui::InputText("Leader Name", state.factionLeaderNameBuf,
+                           sizeof(state.factionLeaderNameBuf))) {
+        faction->leaderName = state.factionLeaderNameBuf;
+      }
+      if (ImGui::InputText("Leader Title", state.factionLeaderTitleBuf,
+                           sizeof(state.factionLeaderTitleBuf))) {
+        faction->leaderTitle = state.factionLeaderTitleBuf;
+      }
+
+      const char* temperaments[] = {"Pacifist", "Neutral", "Warmonger"};
+      int temperament = static_cast<int>(faction->traits.temperament);
+      if (ImGui::Combo("Temperament", &temperament, temperaments,
+                       static_cast<int>(sizeof(temperaments) / sizeof(temperaments[0])))) {
+        faction->traits.temperament = static_cast<FactionTemperament>(temperament);
+      }
+
+      const char* outlooks[] = {"Isolationist", "Interactive"};
+      int outlook = static_cast<int>(faction->traits.outlook);
+      if (ImGui::Combo("Outlook", &outlook, outlooks,
+                       static_cast<int>(sizeof(outlooks) / sizeof(outlooks[0])))) {
+        faction->traits.outlook = static_cast<FactionOutlook>(outlook);
+      }
+
+      ImGui::SliderFloat("Expansion Bias", &faction->traits.expansionBias, 0.2f, 2.0f, "%.2f");
+      ImGui::SliderFloat("Aggression Bias", &faction->traits.aggressionBias, 0.0f, 1.5f, "%.2f");
+      ImGui::SliderFloat("Diplomacy Bias", &faction->traits.diplomacyBias, 0.0f, 1.5f, "%.2f");
+
+      ImGui::SliderInt("Tech Tier", &faction->techTier, 0, 6);
+      ImGui::SliderInt("Stability", &faction->stability, 0, 100);
+      ImGui::SliderFloat("War Exhaustion", &faction->warExhaustion, 0.0f, 1.0f, "%.2f");
+
+      ImGui::Separator();
+      ImGui::Text("Population: %d | Settlements: %d | Zones: %d", faction->stats.population,
+                  faction->stats.settlements, faction->stats.territoryZones);
+      ImGui::Text("Stock: %d food, %d wood", faction->stats.stockFood, faction->stats.stockWood);
+
+      ImGui::End();
+    }
+    if (!open) {
+      state.factionEditorOpen = false;
+    }
   }
 
   ImGui::Begin("Settlement Economy");

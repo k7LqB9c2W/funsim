@@ -64,6 +64,14 @@ struct UIState {
   bool saveMap = false;
   bool loadMap = false;
   char mapPath[256] = "maps/map.fmap";
+
+  int selectedFactionId = -1;
+  bool factionEditorOpen = false;
+  int lastFactionEditorId = -1;
+  char factionNameBuf[96] = "";
+  char factionIdeologyBuf[96] = "";
+  char factionLeaderNameBuf[96] = "";
+  char factionLeaderTitleBuf[96] = "";
 };
 
 struct HoverInfo {
@@ -74,5 +82,5 @@ struct HoverInfo {
   int factionId = -1;
 };
 
-void DrawUI(UIState& state, const SimStats& stats, const FactionManager& factions,
+void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
             const SettlementManager& settlements, const HoverInfo& hover);

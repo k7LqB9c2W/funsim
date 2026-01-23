@@ -155,9 +155,7 @@ class World {
     y = static_cast<int>(static_cast<uint32_t>(key & 0xffffffffu));
   }
 
-  uint64_t ChunkKeyFor(int x, int y) const;
-  Chunk& GetOrCreateChunkFor(int x, int y);
-  const Chunk* FindChunkFor(int x, int y) const;
+  void ResizeStorage();
   Tile& AtUnchecked(int x, int y);
   const Tile& AtUnchecked(int x, int y) const;
 
@@ -169,17 +167,22 @@ class World {
   uint16_t BaseWaterAt(int x, int y) const;
   uint16_t BaseFireAt(int x, int y) const;
   void EnsureWellRadius() const;
+  void EnsureHomeSourceGrid();
+  bool IsHomeSourceAt(int x, int y) const;
 
   int width_ = 0;
   int height_ = 0;
 
-  std::unordered_map<uint64_t, Chunk> chunks_;
+  int chunksX_ = 0;
+  int chunksY_ = 0;
+  std::vector<Chunk> chunks_;
 
   std::unordered_set<uint64_t> burningTiles_;
   std::unordered_set<uint64_t> buildingTiles_;
   std::unordered_set<uint64_t> farmGrowTiles_;
   std::unordered_set<uint64_t> wellTiles_;
-  std::unordered_set<uint64_t> homeSourceTiles_;
+  std::vector<uint32_t> homeSourceStampByTile_;
+  uint32_t homeSourceGeneration_ = 1;
   mutable std::unordered_map<uint64_t, uint8_t> wellRadiusByTile_;
   mutable bool wellRadiusDirty_ = true;
 

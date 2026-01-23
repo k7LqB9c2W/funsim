@@ -396,6 +396,7 @@ void Renderer::DestroyTerrainCache() {
     }
   }
   chunks_.clear();
+  terrainTextureIndices_.clear();
   worldWidth_ = 0;
   worldHeight_ = 0;
   chunksX_ = 0;
@@ -526,6 +527,7 @@ void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeig
   chunksX_ = (worldWidth + chunkTiles_ - 1) / chunkTiles_;
   chunksY_ = (worldHeight + chunkTiles_ - 1) / chunkTiles_;
   chunks_.assign(chunksX_ * chunksY_, TerrainChunk{});
+  terrainTextureIndices_.clear();
 
   for (int cy = 0; cy < chunksY_; ++cy) {
     for (int cx = 0; cx < chunksX_; ++cx) {
@@ -537,7 +539,6 @@ void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeig
       chunk.dirty = true;
       chunk.texture = nullptr;
       chunk.lastUsedFrame = 0;
-      chunk.usedThisFrame = false;
     }
   }
 }
@@ -610,9 +611,10 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
   assert(world.height() == worldHeight_);
 
   frameCounter_++;
-  for (auto& chunk : chunks_) {
-    chunk.usedThisFrame = false;
-  }
+  const int minChunkX = std::max(0, minX / chunkTiles_);
+  const int minChunkY = std::max(0, minY / chunkTiles_);
+  const int maxChunkX = std::min(chunksX_ - 1, maxX / chunkTiles_);
+  const int maxChunkY = std::min(chunksY_ - 1, maxY / chunkTiles_);
 
   auto isLand = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= worldWidth_ || y >= worldHeight_) return false;
@@ -639,7 +641,7 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
     return kMaxLandDist + 1;
   };
 
-  auto ensureChunkTexture = [&](TerrainChunk& chunk) {
+  auto ensureChunkTexture = [&](int chunkIndex, TerrainChunk& chunk) {
     if (chunk.texture) return true;
     int texW = chunk.tilesWide * kTilePx;
     int texH = chunk.tilesHigh * kTilePx;
@@ -652,69 +654,77 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
     SDL_SetTextureBlendMode(chunk.texture, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(chunk.texture, SDL_ScaleModeNearest);
     chunk.dirty = true;
+    terrainTextureIndices_.push_back(chunkIndex);
     return true;
   };
 
   SDL_Texture* previousTarget = SDL_GetRenderTarget(renderer);
 
-  for (auto& chunk : chunks_) {
-    if (chunk.originX > maxX || chunk.originX + chunk.tilesWide - 1 < minX) continue;
-    if (chunk.originY > maxY || chunk.originY + chunk.tilesHigh - 1 < minY) continue;
+  if (minChunkX <= maxChunkX && minChunkY <= maxChunkY) {
+    for (int cy = minChunkY; cy <= maxChunkY; ++cy) {
+      for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
+        const int chunkIndex = cy * chunksX_ + cx;
+        TerrainChunk& chunk = chunks_[static_cast<size_t>(chunkIndex)];
 
-    chunk.usedThisFrame = true;
-    chunk.lastUsedFrame = frameCounter_;
-    if (!ensureChunkTexture(chunk)) continue;
-    if (!chunk.dirty) continue;
-    chunk.dirty = false;
+        chunk.lastUsedFrame = frameCounter_;
+        if (!ensureChunkTexture(chunkIndex, chunk)) continue;
+        if (!chunk.dirty) continue;
+        chunk.dirty = false;
 
-    SDL_SetRenderTarget(renderer, chunk.texture);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-    SDL_RenderClear(renderer);
+        SDL_SetRenderTarget(renderer, chunk.texture);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
 
-    for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-      for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-        if (isLand(x, y)) continue;
+        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
+          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+            if (isLand(x, y)) continue;
 
-        int distToLand = coastDistance(x, y);
-        int coastDist = std::max(0, distToLand - 1);
-        uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
-                            static_cast<uint32_t>((coastDist <= 1)   ? kShallowSeed
-                                                 : (coastDist <= 4) ? kMidSeed
-                                                                   : kDeepSeed));
-        SDL_Rect src;
-        if (coastDist <= 1) {
-          src = PickTilesVariant(kShallowWaterCoords, h);
-        } else if (coastDist <= 4) {
-          src = PickTilesVariant(kMidWaterCoords, h);
-        } else {
-          src = PickTilesVariant(kDeepWaterCoords, h);
+            int distToLand = coastDistance(x, y);
+            int coastDist = std::max(0, distToLand - 1);
+            uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
+                                static_cast<uint32_t>((coastDist <= 1)   ? kShallowSeed
+                                                     : (coastDist <= 4) ? kMidSeed
+                                                                       : kDeepSeed));
+            SDL_Rect src;
+            if (coastDist <= 1) {
+              src = PickTilesVariant(kShallowWaterCoords, h);
+            } else if (coastDist <= 4) {
+              src = PickTilesVariant(kMidWaterCoords, h);
+            } else {
+              src = PickTilesVariant(kDeepWaterCoords, h);
+            }
+
+            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
+                         kTilePx};
+            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+
+            uint8_t mask = 0;
+            if (isLand(x, y - 1)) mask |= 1u;
+            if (isLand(x + 1, y)) mask |= 2u;
+            if (isLand(x, y + 1)) mask |= 4u;
+            if (isLand(x - 1, y)) mask |= 8u;
+            if (mask != 0u) {
+              SDL_Rect foam = FoamRect(mask);
+              SDL_RenderCopy(renderer, terrainOverlayTexture_, &foam, &dst);
+            }
+          }
         }
 
-        SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx, kTilePx};
-        SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
+          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+            if (!isLand(x, y)) continue;
 
-        uint8_t mask = 0;
-        if (isLand(x, y - 1)) mask |= 1u;
-        if (isLand(x + 1, y)) mask |= 2u;
-        if (isLand(x, y + 1)) mask |= 4u;
-        if (isLand(x - 1, y)) mask |= 8u;
-        if (mask != 0u) {
-          SDL_Rect foam = FoamRect(mask);
-          SDL_RenderCopy(renderer, terrainOverlayTexture_, &foam, &dst);
+            bool beach =
+                !isLand(x, y - 1) || !isLand(x + 1, y) || !isLand(x, y + 1) || !isLand(x - 1, y);
+            uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
+                                beach ? kSandSeed : kGrassSeed);
+            SDL_Rect src =
+                beach ? PickTilesVariant(kSandCoords, h) : PickTilesVariant(kGrassCoords, h);
+            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
+                         kTilePx};
+            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+          }
         }
-      }
-    }
-
-    for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-      for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-        if (!isLand(x, y)) continue;
-
-        bool beach = !isLand(x, y - 1) || !isLand(x + 1, y) || !isLand(x, y + 1) || !isLand(x - 1, y);
-        uint32_t h = Hash2D(static_cast<uint32_t>(x >> 2), static_cast<uint32_t>(y >> 2),
-                            beach ? kSandSeed : kGrassSeed);
-        SDL_Rect src = beach ? PickTilesVariant(kSandCoords, h) : PickTilesVariant(kGrassCoords, h);
-        SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx, kTilePx};
-        SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
       }
     }
   }
@@ -722,26 +732,27 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
   SDL_SetRenderTarget(renderer, previousTarget);
 
   // Evict old textures (world can be enormous; keep cache bounded).
-  int textureCount = 0;
-  for (const auto& chunk : chunks_) {
-    if (chunk.texture) textureCount++;
-  }
-  while (textureCount > maxTerrainTextures_) {
+  while (static_cast<int>(terrainTextureIndices_.size()) > maxTerrainTextures_) {
     uint64_t oldest = std::numeric_limits<uint64_t>::max();
-    int oldestIdx = -1;
-    for (int i = 0; i < static_cast<int>(chunks_.size()); ++i) {
-      const auto& chunk = chunks_[i];
+    int oldestChunkIndex = -1;
+    int oldestListIndex = -1;
+    for (int i = 0; i < static_cast<int>(terrainTextureIndices_.size()); ++i) {
+      int chunkIndex = terrainTextureIndices_[i];
+      if (chunkIndex < 0 || chunkIndex >= static_cast<int>(chunks_.size())) continue;
+      const auto& chunk = chunks_[static_cast<size_t>(chunkIndex)];
       if (!chunk.texture) continue;
-      if (chunk.usedThisFrame) continue;
+      if (chunk.lastUsedFrame == frameCounter_) continue;
       if (chunk.lastUsedFrame < oldest) {
         oldest = chunk.lastUsedFrame;
-        oldestIdx = i;
+        oldestChunkIndex = chunkIndex;
+        oldestListIndex = i;
       }
     }
-    if (oldestIdx < 0) break;
-    SDL_DestroyTexture(chunks_[oldestIdx].texture);
-    chunks_[oldestIdx].texture = nullptr;
-    textureCount--;
+    if (oldestChunkIndex < 0 || oldestListIndex < 0) break;
+    SDL_DestroyTexture(chunks_[static_cast<size_t>(oldestChunkIndex)].texture);
+    chunks_[static_cast<size_t>(oldestChunkIndex)].texture = nullptr;
+    terrainTextureIndices_[static_cast<size_t>(oldestListIndex)] = terrainTextureIndices_.back();
+    terrainTextureIndices_.pop_back();
   }
 }
 
@@ -766,16 +777,24 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   EnsureTerrainCache(renderer, world);
   RebuildTerrainCache(renderer, world, minX, minY, maxX, maxY);
 
-  for (const auto& chunk : chunks_) {
-    if (!chunk.texture) continue;
-    if (chunk.originX > maxX || chunk.originX + chunk.tilesWide - 1 < minX) continue;
-    if (chunk.originY > maxY || chunk.originY + chunk.tilesHigh - 1 < minY) continue;
-    float worldX = static_cast<float>(chunk.originX) * tileSize;
-    float worldY = static_cast<float>(chunk.originY) * tileSize;
-    float width = static_cast<float>(chunk.tilesWide) * tileSize;
-    float height = static_cast<float>(chunk.tilesHigh) * tileSize;
-    SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
-    SDL_RenderCopyF(renderer, chunk.texture, nullptr, &dst);
+  const int minChunkX = std::max(0, minX / chunkTiles_);
+  const int minChunkY = std::max(0, minY / chunkTiles_);
+  const int maxChunkX = std::min(chunksX_ - 1, maxX / chunkTiles_);
+  const int maxChunkY = std::min(chunksY_ - 1, maxY / chunkTiles_);
+  if (minChunkX <= maxChunkX && minChunkY <= maxChunkY) {
+    for (int cy = minChunkY; cy <= maxChunkY; ++cy) {
+      for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
+        const int chunkIndex = cy * chunksX_ + cx;
+        const TerrainChunk& chunk = chunks_[static_cast<size_t>(chunkIndex)];
+        if (!chunk.texture) continue;
+        float worldX = static_cast<float>(chunk.originX) * tileSize;
+        float worldY = static_cast<float>(chunk.originY) * tileSize;
+        float width = static_cast<float>(chunk.tilesWide) * tileSize;
+        float height = static_cast<float>(chunk.tilesHigh) * tileSize;
+        SDL_FRect dst = MakeDstRect(worldX, worldY, width, height, camera);
+        SDL_RenderCopyF(renderer, chunk.texture, nullptr, &dst);
+      }
+    }
   }
 
   int zoneSize = settlements.ZoneSize();

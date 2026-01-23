@@ -213,15 +213,31 @@ void App::Update(float dt) {
     hoverValid_ = ScreenToTile(mouseX, mouseY, hoverTileX_, hoverTileY_);
     bool leftDown = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
     bool rightDown = (buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
+    bool leftPressed = leftDown && !prevLeftDown_;
+    bool rightPressed = rightDown && !prevRightDown_;
     if (leftDown || rightDown) {
       int tileX = 0;
       int tileY = 0;
       if (ScreenToTile(mouseX, mouseY, tileX, tileY)) {
-        ApplyToolAt(tileX, tileY, rightDown);
+        if (ui_.tool == ToolType::SelectKingdom) {
+          if (leftPressed) {
+            int ownerId = settlements_.ZoneOwnerForTile(tileX, tileY);
+            const Settlement* settlement = (ownerId > 0) ? settlements_.Get(ownerId) : nullptr;
+            int factionId = (settlement && settlement->factionId > 0) ? settlement->factionId : -1;
+            ui_.selectedFactionId = factionId;
+            ui_.factionEditorOpen = (factionId > 0);
+          }
+        } else {
+          ApplyToolAt(tileX, tileY, rightDown);
+        }
       }
     }
+    prevLeftDown_ = leftDown;
+    prevRightDown_ = rightDown;
   } else {
     hoverValid_ = false;
+    prevLeftDown_ = false;
+    prevRightDown_ = false;
   }
 
   hoverInfo_.valid = hoverValid_;

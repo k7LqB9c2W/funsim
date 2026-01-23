@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <unordered_map>
 #include <vector>
 
 #include "render.h"
@@ -190,7 +189,7 @@ class SettlementManager {
   void ApplyConflictImpactMacro(World& world, Random& rng, int dayCount,
                                 FactionManager& factions);
   void UpdateBorderPressure(const FactionManager& factions);
- void GenerateTasks(World& world, Random& rng);
+  void GenerateTasks(World& world, Random& rng);
   void RunSettlementEconomy(World& world, Random& rng);
   void EnsureSettlementFactions(FactionManager& factions, Random& rng);
 
@@ -207,10 +206,25 @@ class SettlementManager {
   int zonesX_ = 0;
   int zonesY_ = 0;
 
-  std::unordered_map<uint64_t, int> zonePopByKey_;
-  std::unordered_map<uint64_t, int> zoneDenseDaysByKey_;
-  std::unordered_map<uint64_t, int> zoneOwnerByKey_;
-  std::unordered_map<uint64_t, int> zoneConflictByKey_;
+  uint32_t zonePopGeneration_ = 1;
+  std::vector<uint32_t> zonePopStampByIndex_;
+  std::vector<int> zonePopByIndex_;
+
+  uint32_t zoneDenseGeneration_ = 1;
+  std::vector<uint32_t> zoneDenseStampByIndex_;
+  std::vector<int> zoneDenseDaysByIndex_;
+  std::vector<int> denseZoneIndices_;
+
+  uint32_t zoneOwnerGeneration_ = 1;
+  std::vector<uint32_t> zoneOwnerStampByIndex_;
+  std::vector<int> zoneOwnerByIndex_;
+  std::vector<int> zoneOwnerBestDistSqByIndex_;
+  std::vector<int> ownedZoneIndices_;
+
+  uint32_t zoneConflictGeneration_ = 1;
+  std::vector<uint32_t> zoneConflictStampByIndex_;
+  std::vector<int> zoneConflictByIndex_;
+  std::vector<int> conflictZoneIndices_;
   std::vector<int> memberCounts_;
   std::vector<int> memberOffsets_;
   std::vector<int> memberIndices_;

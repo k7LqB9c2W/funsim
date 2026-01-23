@@ -1,6 +1,7 @@
 #pragma once
 
 enum class ToolType {
+  SelectKingdom,
   PlaceLand,
   PlaceFreshWater,
   AddTrees,

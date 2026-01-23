@@ -1,0 +1,10 @@
+^C:\FUNSIM\BUILD\CMAKEFILES\D99143516E625F836A6B17DBF7342C9F\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -SC:/funsim -BC:/funsim/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/funsim/build/funsim.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
