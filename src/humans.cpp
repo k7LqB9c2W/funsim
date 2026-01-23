@@ -32,6 +32,12 @@ constexpr int kMateFoodReservePerPop = 10;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGathererWanderRadius = 18;
 constexpr int kScoutWanderRadius = 26;
+constexpr int kNoStockFoodSearchRadius = 24;
+constexpr int kNoStockFoodSearchSamples = 16;
+constexpr int kDaysPerYear = 365;
+constexpr int kOldAgeStartDays = 80 * kDaysPerYear;
+constexpr int kOldAgeMaxDays = 130 * kDaysPerYear;
+constexpr uint16_t kOldAgeMaxDailyChanceQ16 = 1311;  // ~0.02 * 65535
 
 constexpr int kMacroBins = 6;
 constexpr int kMacroBinDays[kMacroBins] = {365, 4 * 365, 13 * 365, 22 * 365, 20 * 365, 200 * 365};
@@ -61,6 +67,122 @@ int ClampInt(int value, int min_value, int max_value) {
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
   return value;
+}
+
+bool SettlementHasStockFood(const SettlementManager& settlements, const Human& human) {
+  if (human.settlementId == -1) return false;
+  const Settlement* settlement = settlements.Get(human.settlementId);
+  return settlement && settlement->stockFood > 0;
+}
+
+bool TryPickNoStockFoodTarget(Human& human, const World& world, const SettlementManager& settlements,
+                              Random& rng, int tickCount) {
+  if (SettlementHasStockFood(settlements, human)) return false;
+
+  auto isEdibleFoodTile = [&](int x, int y) {
+    if (!world.InBounds(x, y)) return false;
+    const Tile& tile = world.At(x, y);
+    if (tile.type != TileType::Land || tile.burning) return false;
+    return tile.food > 0;
+  };
+
+  if (isEdibleFoodTile(human.lastFoodX, human.lastFoodY)) {
+    human.targetX = human.lastFoodX;
+    human.targetY = human.lastFoodY;
+    return true;
+  }
+
+  int baseX = human.x;
+  int baseY = human.y;
+  if (human.settlementId != -1) {
+    const Settlement* settlement = settlements.Get(human.settlementId);
+    if (settlement) {
+      baseX = settlement->centerX;
+      baseY = settlement->centerY;
+    }
+  }
+
+  int bestX = -1;
+  int bestY = -1;
+  int bestScore = std::numeric_limits<int>::min();
+  for (int i = 0; i < kNoStockFoodSearchSamples; ++i) {
+    int dx = rng.RangeInt(-kNoStockFoodSearchRadius, kNoStockFoodSearchRadius);
+    int dy = rng.RangeInt(-kNoStockFoodSearchRadius, kNoStockFoodSearchRadius);
+    int x = baseX + dx;
+    int y = baseY + dy;
+    if (!world.InBounds(x, y)) continue;
+    const Tile& tile = world.At(x, y);
+    if (tile.type != TileType::Land || tile.burning) continue;
+    if (tile.food <= 0) continue;
+    int dist = std::abs(dx) + std::abs(dy);
+    int noise = static_cast<int>(HashNoise(static_cast<uint32_t>(human.id),
+                                           static_cast<uint32_t>(tickCount),
+                                           static_cast<uint32_t>(x),
+                                           static_cast<uint32_t>(y)) &
+                                 0xFFu);
+    int score = static_cast<int>(tile.food) * 256 - dist * 8 + noise;
+    if (score > bestScore) {
+      bestScore = score;
+      bestX = x;
+      bestY = y;
+    }
+  }
+  if (bestX == -1 || bestY == -1) return false;
+  human.targetX = bestX;
+  human.targetY = bestY;
+  return true;
+}
+
+void PickNoStockFoodExploreTarget(Human& human, const World& world, const SettlementManager& settlements,
+                                  int tickCount) {
+  int baseX = human.x;
+  int baseY = human.y;
+  if (human.settlementId != -1) {
+    const Settlement* settlement = settlements.Get(human.settlementId);
+    if (settlement) {
+      baseX = settlement->centerX;
+      baseY = settlement->centerY;
+    }
+  }
+
+  uint32_t hash = HashNoise(static_cast<uint32_t>(human.id),
+                            static_cast<uint32_t>(tickCount),
+                            0xF0u, 0x0Du);
+  int radius = kNoStockFoodSearchRadius;
+  int dx = static_cast<int>(hash % (radius * 2 + 1)) - radius;
+  int dy = static_cast<int>((hash >> 8) % (radius * 2 + 1)) - radius;
+  int x = ClampInt(baseX + dx, 0, world.width() - 1);
+  int y = ClampInt(baseY + dy, 0, world.height() - 1);
+  if (world.At(x, y).type == TileType::Ocean) {
+    x = human.x;
+    y = human.y;
+  }
+  human.targetX = x;
+  human.targetY = y;
+}
+
+uint16_t OldAgeDailyChanceQ16(int ageDays, bool legendary) {
+  if (ageDays < kOldAgeStartDays) return 0;
+  if (ageDays >= kOldAgeMaxDays) return 65535u;
+  const uint32_t range = static_cast<uint32_t>(kOldAgeMaxDays - kOldAgeStartDays);
+  const uint32_t t = static_cast<uint32_t>(ageDays - kOldAgeStartDays);
+  const uint32_t fQ16 = (t << 16) / range;
+  const uint32_t f2Q16 = (fQ16 * fQ16) >> 16;
+  const uint32_t f4Q16 = (f2Q16 * f2Q16) >> 16;
+  const uint32_t f6Q16 = (f4Q16 * f2Q16) >> 16;
+  uint32_t chanceQ16 = (f6Q16 * static_cast<uint32_t>(kOldAgeMaxDailyChanceQ16)) >> 16;
+  if (legendary) {
+    chanceQ16 = (chanceQ16 * 3u) / 4u;
+  }
+  if (chanceQ16 > 65535u) chanceQ16 = 65535u;
+  return static_cast<uint16_t>(chanceQ16);
+}
+
+bool RollOldAgeDeath(Random& rng, int ageDays, bool legendary) {
+  if (ageDays >= kOldAgeMaxDays) return true;
+  uint16_t chanceQ16 = OldAgeDailyChanceQ16(ageDays, legendary);
+  if (chanceQ16 == 0) return false;
+  return static_cast<uint32_t>(rng.RangeInt(0, 65535)) < static_cast<uint32_t>(chanceQ16);
 }
 
 int AgeBinIndex(int ageDays) {
@@ -226,6 +348,8 @@ const char* DeathReasonName(DeathReason reason) {
       return "starvation";
     case DeathReason::Dehydration:
       return "dehydration";
+    case DeathReason::OldAge:
+      return "old_age";
     case DeathReason::War:
       return "war";
     default:
@@ -363,6 +487,9 @@ void HumanManager::RecordDeath(int humanId, int day, DeathReason reason) {
       break;
     case DeathReason::Dehydration:
       deathSummary_.dehydration++;
+      break;
+    case DeathReason::OldAge:
+      deathSummary_.oldAge++;
       break;
     case DeathReason::War:
       deathSummary_.war++;
@@ -514,6 +641,14 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
   } else if (hungry) {
     human.goal = Goal::SeekFood;
     human.mateTargetId = -1;
+    if (!SettlementHasStockFood(settlements, human)) {
+      if (!TryPickNoStockFoodTarget(human, world, settlements, rng, tickCount)) {
+        PickNoStockFoodExploreTarget(human, world, settlements, tickCount);
+      }
+    } else {
+      human.targetX = human.x;
+      human.targetY = human.y;
+    }
   } else if (human.hasTask) {
     switch (human.taskType) {
       case TaskType::CollectFood:
@@ -672,6 +807,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       human.targetY = human.taskY;
     } else {
       human.goal = Goal::SeekFood;
+      human.forceReplan = true;
       if (human.hasTask && !human.carrying && human.taskType != TaskType::CollectFood &&
           human.taskType != TaskType::HarvestFarm) {
         human.hasTask = false;
@@ -786,18 +922,15 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     const bool isGatherOrScout = (human.role == Role::Gatherer || human.role == Role::Scout);
     const bool isHomeBoundRole = (human.role == Role::Guard || human.role == Role::Builder ||
                                  human.role == Role::Farmer || human.role == Role::Soldier);
-    bool needFoodScent = false;
     bool needWaterScent = false;
     bool needFireRisk = false;
     bool needHomeScent = false;
 
     switch (human.goal) {
       case Goal::SeekFood:
-        if (human.hasTask && TaskTargetsTile(human.taskType)) {
+        if (human.targetX != human.x || human.targetY != human.y) {
           int dist = Manhattan(nx, ny, human.targetX, human.targetY);
           score -= dist * 160;
-        } else {
-          needFoodScent = true;
         }
         break;
       case Goal::SeekWater:
@@ -832,9 +965,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     }
 
-    if (isGatherOrScout) {
-      needFoodScent = true;
-    } else if (isHomeBoundRole) {
+    if (isHomeBoundRole) {
       int dist = Manhattan(nx, ny, human.homeX, human.homeY);
       score -= dist * 40;
     }
@@ -847,25 +978,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
     }
 
-    uint16_t foodScent = 0;
     uint16_t waterScent = 0;
     uint16_t fireRisk = 0;
     uint16_t homeScent = 0;
-    if (needFoodScent) foodScent = world.FoodScentAt(nx, ny);
     if (needWaterScent) waterScent = world.WaterScentAt(nx, ny);
     if (needFireRisk) fireRisk = world.FireRiskAt(nx, ny);
     if (needHomeScent) homeScent = world.HomeScentAt(nx, ny);
 
-    if (human.goal == Goal::SeekFood && !(human.hasTask && TaskTargetsTile(human.taskType))) {
-      score += static_cast<int>(foodScent) * 4;
-    } else if (human.goal == Goal::SeekWater) {
+    if (human.goal == Goal::SeekWater) {
       score += static_cast<int>(waterScent) * 4;
     } else if (human.goal == Goal::FleeFire) {
       score -= static_cast<int>(fireRisk) * 6;
-    }
-
-    if (isGatherOrScout) {
-      score += static_cast<int>(foodScent) / 4;
     }
 
     if (needHomeScent) {
@@ -1406,6 +1529,13 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         deathsToday++;
         continue;
       }
+    }
+
+    if (RollOldAgeDeath(rng, human.ageDays, human.legendary)) {
+      RecordDeath(human.id, dayCount, DeathReason::OldAge);
+      human.alive = false;
+      deathsToday++;
+      continue;
     }
   }
 

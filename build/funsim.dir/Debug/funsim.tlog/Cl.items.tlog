@@ -4,6 +4,8 @@ C:\funsim\src\world.cpp;C:\funsim\build\funsim.dir\Debug\world.obj
 C:\funsim\src\humans.cpp;C:\funsim\build\funsim.dir\Debug\humans.obj
 C:\funsim\src\tools.cpp;C:\funsim\build\funsim.dir\Debug\tools.obj
 C:\funsim\src\render.cpp;C:\funsim\build\funsim.dir\Debug\render.obj
+C:\funsim\src\settlements.cpp;C:\funsim\build\funsim.dir\Debug\settlements.obj
+C:\funsim\src\factions.cpp;C:\funsim\build\funsim.dir\Debug\factions.obj
 C:\funsim\src\ui.cpp;C:\funsim\build\funsim.dir\Debug\ui.obj
 C:\funsim\src\util.cpp;C:\funsim\build\funsim.dir\Debug\util.obj
 C:\funsim\third_party\imgui\imgui.cpp;C:\funsim\build\funsim.dir\Debug\imgui.obj

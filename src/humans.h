@@ -12,7 +12,7 @@ enum class TaskType : uint8_t;
 
 enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
-enum class DeathReason : uint8_t { Starvation, Dehydration, War };
+enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War };
 
 enum class HumanTrait : uint16_t {
   Brave = 1u << 0,
@@ -33,6 +33,7 @@ struct DeathRecord {
 struct DeathSummary {
   int starvation = 0;
   int dehydration = 0;
+  int oldAge = 0;
   int war = 0;
   int macroNatural = 0;
   int macroStarvation = 0;
