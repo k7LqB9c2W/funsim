@@ -1,10 +1,11 @@
 funsim_death_log
-days=1520
-total_births=7639
-total_deaths=48
-final_population=9165
-starvation=18
-dehydration=30
+days=1567
+total_births=9829
+total_deaths=0
+final_population=12529
+starvation=0
+dehydration=0
+old_age=0
 war=0
 macro_natural=0
 macro_starvation=0
@@ -12,54 +13,6 @@ macro_fire=0
 
 # micro_deaths
 day,id,reason
-6,672,dehydration
-56,588,dehydration
-73,1251,dehydration
-115,623,dehydration
-118,1795,starvation
-119,864,dehydration
-121,1485,starvation
-123,1559,starvation
-123,1740,starvation
-125,1342,starvation
-127,1536,starvation
-128,1589,starvation
-128,1908,starvation
-129,1417,starvation
-133,1606,starvation
-135,1523,starvation
-136,1529,starvation
-137,1663,starvation
-137,1750,starvation
-139,1802,starvation
-150,1462,starvation
-151,1249,starvation
-151,1823,starvation
-165,1233,dehydration
-173,234,dehydration
-176,1013,dehydration
-177,1062,dehydration
-178,1052,dehydration
-178,1567,dehydration
-179,1245,dehydration
-180,795,dehydration
-180,1415,dehydration
-180,1455,dehydration
-181,594,dehydration
-181,838,dehydration
-181,879,dehydration
-181,1725,dehydration
-181,1798,dehydration
-182,1564,dehydration
-183,1641,dehydration
-184,705,dehydration
-184,804,dehydration
-184,1763,dehydration
-187,1026,dehydration
-188,807,dehydration
-189,366,dehydration
-192,1399,dehydration
-192,1736,dehydration
 
 # macro_deaths_summary
 macro counts are aggregated; no per-human ids in macro mode

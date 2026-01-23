@@ -747,6 +747,7 @@ void App::WriteDeathLog() const {
   const auto& deathStats = humans_.GetDeathSummary();
   out << "starvation=" << deathStats.starvation << "\n";
   out << "dehydration=" << deathStats.dehydration << "\n";
+  out << "old_age=" << deathStats.oldAge << "\n";
   out << "war=" << deathStats.war << "\n";
   out << "macro_natural=" << deathStats.macroNatural << "\n";
   out << "macro_starvation=" << deathStats.macroStarvation << "\n";
