@@ -1321,143 +1321,18 @@ void SettlementManager::UpdateSettlementRoleStatsMacro(World& world, const Facti
 
 void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans, Random& rng,
                                              int dayCount, int dayDelta, FactionManager& factions) {
+  UpdateArmyOrders(world, humans, rng, dayCount, dayDelta, factions);
+
   if (settlements_.empty()) return;
   if (dayDelta < 1) dayDelta = 1;
 
   auto& humanList = humans.HumansMutable();
-  for (auto& human : humanList) {
-    if (!human.alive) continue;
-    human.isGeneral = false;
-    human.armyState = ArmyState::Idle;
-    human.warId = -1;
-    human.warTargetSettlementId = -1;
-    human.formationSlot = 0;
-  }
 
   auto factionForHuman = [&](const Human& human) -> int {
     if (human.settlementId <= 0) return -1;
     const Settlement* home = Get(human.settlementId);
     return home ? home->factionId : -1;
   };
-
-  auto pickWarTarget = [&](const Settlement& from, int warId) -> int {
-    const War* war = factions.GetWar(warId);
-    if (!war || !war->active) return -1;
-    const bool attacker = factions.WarIsAttacker(warId, from.factionId);
-    const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
-    if (enemyFactions.empty()) return -1;
-
-    int bestTarget = -1;
-    int bestScore = std::numeric_limits<int>::min();
-    for (const auto& candidate : settlements_) {
-      if (candidate.id == from.id) continue;
-      if (candidate.population <= 0) continue;
-      if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
-        continue;
-      }
-      int dx = candidate.centerX - from.centerX;
-      int dy = candidate.centerY - from.centerY;
-      int dist = std::abs(dx) + std::abs(dy);
-      int value = candidate.population * 3 + (candidate.isCapital ? 60 : 0) + candidate.techTier * 10;
-      int score = value * 10 - dist * 12;
-      if (score > bestScore) {
-        bestScore = score;
-        bestTarget = candidate.id;
-      }
-    }
-    return bestTarget;
-  };
-
-  for (int si = 0; si < static_cast<int>(settlements_.size()); ++si) {
-    Settlement& settlement = settlements_[si];
-    int warId = factions.ActiveWarIdForFaction(settlement.factionId);
-    settlement.warId = warId;
-
-    if (warId > 0 && (settlement.warTargetSettlementId <= 0 ||
-                      dayCount - settlement.lastWarOrderDay >= 7 ||
-                      !Get(settlement.warTargetSettlementId))) {
-      settlement.warTargetSettlementId = pickWarTarget(settlement, warId);
-      settlement.lastWarOrderDay = dayCount;
-    }
-    if (warId <= 0) {
-      settlement.warTargetSettlementId = -1;
-    }
-
-    std::vector<int> soldierIndices;
-    int start = (si < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si] : 0;
-    int end = (si + 1 < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si + 1] : 0;
-    for (int mi = start; mi < end; ++mi) {
-      int humanIndex = memberIndices_[mi];
-      if (humanIndex < 0 || humanIndex >= static_cast<int>(humanList.size())) continue;
-      Human& human = humanList[humanIndex];
-      if (!human.alive) continue;
-      if (human.role != Role::Soldier) continue;
-      soldierIndices.push_back(humanIndex);
-    }
-
-    int generalIndex = -1;
-    if (settlement.generalHumanId > 0) {
-      for (int idx : soldierIndices) {
-        if (humanList[idx].id == settlement.generalHumanId) {
-          generalIndex = idx;
-          break;
-        }
-      }
-    }
-    if (generalIndex < 0 && !soldierIndices.empty()) {
-      int bestDist = std::numeric_limits<int>::max();
-      for (int idx : soldierIndices) {
-        const Human& human = humanList[idx];
-        int dist = std::abs(human.x - settlement.centerX) + std::abs(human.y - settlement.centerY);
-        if (dist < bestDist) {
-          bestDist = dist;
-          generalIndex = idx;
-        }
-      }
-      if (generalIndex >= 0) {
-        settlement.generalHumanId = humanList[generalIndex].id;
-      }
-    }
-    if (generalIndex < 0) {
-      settlement.generalHumanId = -1;
-    }
-
-    if (settlement.generalHumanId > 0) {
-      std::sort(soldierIndices.begin(), soldierIndices.end(),
-                [&](int a, int b) { return humanList[a].id < humanList[b].id; });
-
-      for (int pos = 0; pos < static_cast<int>(soldierIndices.size()); ++pos) {
-        int idx = soldierIndices[pos];
-        Human& human = humanList[idx];
-        human.warId = warId;
-        human.warTargetSettlementId = settlement.warTargetSettlementId;
-        human.formationSlot = pos + 1;
-        if (idx == generalIndex) {
-          human.isGeneral = true;
-          human.formationSlot = 0;
-        }
-
-        if (warId <= 0) {
-          human.armyState = ArmyState::Idle;
-          continue;
-        }
-
-        const bool attacker = factions.WarIsAttacker(warId, settlement.factionId);
-        if (attacker) {
-          int daysSinceOrder = std::max(0, dayCount - settlement.lastWarOrderDay);
-          human.armyState = (daysSinceOrder < 2) ? ArmyState::Rally : ArmyState::March;
-          if (idx == generalIndex && settlement.warTargetSettlementId > 0) {
-            int owner = ZoneOwnerForTile(human.x, human.y);
-            if (owner == settlement.warTargetSettlementId) {
-              human.armyState = ArmyState::Siege;
-            }
-          }
-        } else {
-          human.armyState = ArmyState::Defend;
-        }
-      }
-    }
-  }
 
   std::vector<std::vector<int>> soldiersByTerritory(settlements_.size());
   for (int humanIndex = 0; humanIndex < static_cast<int>(humanList.size()); ++humanIndex) {
@@ -1531,6 +1406,25 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
     int defenderForce = defenderSoldiers + defenderGeneralBonus + towerDefense;
     int warId = (bestEnemyFaction > 0) ? factions.ActiveWarIdBetweenFactions(bestEnemyFaction, ownerFactionId) : -1;
     bool isUnderSiege = !attackers.empty();
+
+    if (isUnderSiege) {
+      long long sumX = 0;
+      long long sumY = 0;
+      for (int attackerIndex : attackers) {
+        const Human& attacker = humanList[attackerIndex];
+        sumX += attacker.x;
+        sumY += attacker.y;
+      }
+      int tx = static_cast<int>(sumX / std::max(1, static_cast<int>(attackers.size())));
+      int ty = static_cast<int>(sumY / std::max(1, static_cast<int>(attackers.size())));
+      tx = std::clamp(tx, 0, world.width() - 1);
+      ty = std::clamp(ty, 0, world.height() - 1);
+      settlement.defenseTargetX = tx;
+      settlement.defenseTargetY = ty;
+      settlement.hasDefenseTarget = true;
+    } else {
+      settlement.hasDefenseTarget = false;
+    }
 
     if (isUnderSiege && warId > 0) {
       War* war = factions.GetWarMutable(warId);
@@ -1661,6 +1555,164 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
       }
     }
   }
+}
+
+void SettlementManager::UpdateArmyOrders(World& world, HumanManager& humans, Random& rng, int dayCount,
+                                         int dayDelta, FactionManager& factions) {
+  if (settlements_.empty()) return;
+  if (dayDelta < 1) dayDelta = 1;
+
+  auto& humanList = humans.HumansMutable();
+  for (auto& human : humanList) {
+    if (!human.alive) continue;
+    human.isGeneral = false;
+    human.armyState = ArmyState::Idle;
+    human.warId = -1;
+    human.warTargetSettlementId = -1;
+    human.formationSlot = 0;
+  }
+
+  auto pickWarTarget = [&](const Settlement& from, int warId) -> int {
+    const War* war = factions.GetWar(warId);
+    if (!war || !war->active) return -1;
+    const bool attacker = factions.WarIsAttacker(warId, from.factionId);
+    const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
+    if (enemyFactions.empty()) return -1;
+
+    int bestTarget = -1;
+    int bestScore = std::numeric_limits<int>::min();
+    for (const auto& candidate : settlements_) {
+      if (candidate.id == from.id) continue;
+      if (candidate.population <= 0) continue;
+      if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
+        continue;
+      }
+      int dx = candidate.centerX - from.centerX;
+      int dy = candidate.centerY - from.centerY;
+      int dist = std::abs(dx) + std::abs(dy);
+      int value = candidate.population * 3 + (candidate.isCapital ? 60 : 0) + candidate.techTier * 10;
+      int score = value * 10 - dist * 12;
+      if (score > bestScore) {
+        bestScore = score;
+        bestTarget = candidate.id;
+      }
+    }
+    return bestTarget;
+  };
+
+  auto isValidWarTarget = [&](const Settlement& from, int warId, int targetSettlementId) -> bool {
+    if (targetSettlementId <= 0) return false;
+    const War* war = factions.GetWar(warId);
+    if (!war || !war->active) return false;
+    const Settlement* target = Get(targetSettlementId);
+    if (!target) return false;
+    if (target->id == from.id) return false;
+    if (target->population <= 0) return false;
+    const bool attacker = factions.WarIsAttacker(warId, from.factionId);
+    const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
+    if (enemyFactions.empty()) return false;
+    return std::find(enemyFactions.begin(), enemyFactions.end(), target->factionId) != enemyFactions.end();
+  };
+
+  for (int si = 0; si < static_cast<int>(settlements_.size()); ++si) {
+    Settlement& settlement = settlements_[si];
+    int warId = factions.ActiveWarIdForFaction(settlement.factionId);
+    settlement.warId = warId;
+
+    if (warId <= 0) {
+      settlement.warTargetSettlementId = -1;
+    } else {
+      const bool attacker = factions.WarIsAttacker(warId, settlement.factionId);
+      if (!attacker) {
+        settlement.warTargetSettlementId = -1;
+      } else if (!isValidWarTarget(settlement, warId, settlement.warTargetSettlementId)) {
+        settlement.warTargetSettlementId = pickWarTarget(settlement, warId);
+        settlement.lastWarOrderDay = dayCount;
+      }
+    }
+
+    std::vector<int> soldierIndices;
+    int start = (si < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si] : 0;
+    int end = (si + 1 < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si + 1] : 0;
+    for (int mi = start; mi < end; ++mi) {
+      int humanIndex = memberIndices_[mi];
+      if (humanIndex < 0 || humanIndex >= static_cast<int>(humanList.size())) continue;
+      Human& human = humanList[humanIndex];
+      if (!human.alive) continue;
+      if (human.role != Role::Soldier) continue;
+      soldierIndices.push_back(humanIndex);
+    }
+
+    int generalIndex = -1;
+    if (settlement.generalHumanId > 0) {
+      for (int idx : soldierIndices) {
+        if (humanList[idx].id == settlement.generalHumanId) {
+          generalIndex = idx;
+          break;
+        }
+      }
+    }
+    if (generalIndex < 0 && !soldierIndices.empty()) {
+      int bestDist = std::numeric_limits<int>::max();
+      for (int idx : soldierIndices) {
+        const Human& human = humanList[idx];
+        int dist = std::abs(human.x - settlement.centerX) + std::abs(human.y - settlement.centerY);
+        if (dist < bestDist) {
+          bestDist = dist;
+          generalIndex = idx;
+        }
+      }
+      if (generalIndex >= 0) {
+        settlement.generalHumanId = humanList[generalIndex].id;
+      }
+    }
+    if (generalIndex < 0) {
+      settlement.generalHumanId = -1;
+    }
+
+    if (settlement.generalHumanId <= 0) continue;
+
+    std::sort(soldierIndices.begin(), soldierIndices.end(),
+              [&](int a, int b) { return humanList[a].id < humanList[b].id; });
+
+    for (int pos = 0; pos < static_cast<int>(soldierIndices.size()); ++pos) {
+      int idx = soldierIndices[pos];
+      Human& human = humanList[idx];
+      human.warId = warId;
+      human.warTargetSettlementId = settlement.warTargetSettlementId;
+      human.formationSlot = pos + 1;
+      if (idx == generalIndex) {
+        human.isGeneral = true;
+        human.formationSlot = 0;
+      }
+
+      if (warId <= 0) {
+        human.armyState = ArmyState::Idle;
+        continue;
+      }
+
+      const bool attacker = factions.WarIsAttacker(warId, settlement.factionId);
+      if (attacker) {
+        if (settlement.warTargetSettlementId <= 0) {
+          human.armyState = ArmyState::Defend;
+          continue;
+        }
+        int daysSinceOrder = std::max(0, dayCount - settlement.lastWarOrderDay);
+        int rallyDays = (dayDelta > 1) ? 0 : 2;
+        human.armyState = (daysSinceOrder < rallyDays) ? ArmyState::Rally : ArmyState::March;
+        if (idx == generalIndex) {
+          int owner = ZoneOwnerForTile(human.x, human.y);
+          if (owner == settlement.warTargetSettlementId) {
+            human.armyState = ArmyState::Siege;
+          }
+        }
+      } else {
+        human.armyState = ArmyState::Defend;
+      }
+    }
+  }
+  (void)world;
+  (void)rng;
 }
 
 void SettlementManager::UpdateArmiesAndSiegesMacro(World& world, Random& rng, int dayCount, int dayDelta,

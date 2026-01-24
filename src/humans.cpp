@@ -703,7 +703,13 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     int targetX = human.homeX;
     int targetY = human.homeY;
     if (human.isGeneral) {
-      if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+      if (human.armyState == ArmyState::Defend) {
+        const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+        if (home && home->hasDefenseTarget) {
+          targetX = home->defenseTargetX;
+          targetY = home->defenseTargetY;
+        }
+      } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
         const Settlement* target = (human.warTargetSettlementId > 0)
                                        ? settlements.Get(human.warTargetSettlementId)
                                        : nullptr;
@@ -964,7 +970,13 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     int targetX = human.homeX;
     int targetY = human.homeY;
     if (human.isGeneral) {
-      if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+      if (human.armyState == ArmyState::Defend) {
+        const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+        if (home && home->hasDefenseTarget) {
+          targetX = home->defenseTargetX;
+          targetY = home->defenseTargetY;
+        }
+      } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
         const Settlement* target = (human.warTargetSettlementId > 0)
                                        ? settlements.Get(human.warTargetSettlementId)
                                        : nullptr;
@@ -1089,8 +1101,12 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
 
     const bool isGatherOrScout = (human.role == Role::Gatherer || human.role == Role::Scout);
-    const bool isHomeBoundRole = (human.role == Role::Guard || human.role == Role::Builder ||
-                                 human.role == Role::Farmer || human.role == Role::Soldier);
+    const bool isSoldier = (human.role == Role::Soldier);
+    const bool isMarchingSoldier = (isSoldier && human.armyState != ArmyState::Idle &&
+                                    (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege));
+    const bool isHomeBoundRole =
+        (human.role == Role::Guard || human.role == Role::Builder || human.role == Role::Farmer ||
+         (isSoldier && !isMarchingSoldier));
     bool needWaterScent = false;
     bool needFireRisk = false;
     bool needHomeScent = false;
@@ -1129,7 +1145,11 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       }
       case Goal::Wander: {
         int dist = Manhattan(nx, ny, human.targetX, human.targetY);
-        score -= dist * 40;
+        int weight = 40;
+        if (isMarchingSoldier) {
+          weight = 120;
+        }
+        score -= dist * weight;
         break;
       }
     }

@@ -369,6 +369,7 @@ void App::StepDayCoarse(int dayDelta) {
     factions_.UpdateLeaders(settlements_, humans_);
   }
   factions_.UpdateDiplomacy(settlements_, rng_, stats_.dayCount);
+  settlements_.UpdateArmyOrders(world_, humans_, rng_, stats_.dayCount, dayDelta, factions_);
   RefreshTotals();
   CrashContextSetStage("StepDay:Done");
 }
