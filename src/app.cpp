@@ -16,6 +16,7 @@ namespace {
 constexpr int kTileSize = 32;
 constexpr int kDefaultWidth = 256;
 constexpr int kDefaultHeight = 144;
+constexpr int kCalendarDaysPerCoarseDay = 20;
 
 float Clamp(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
@@ -143,6 +144,12 @@ void App::HandleEvents() {
     ImGui_ImplSDL2_ProcessEvent(&event);
     if (event.type == SDL_QUIT) {
       running_ = false;
+#if SDL_VERSION_ATLEAST(2, 0, 2)
+    } else if (event.type == SDL_RENDER_TARGETS_RESET) {
+      rendererAssets_.OnRenderTargetsReset();
+    } else if (event.type == SDL_RENDER_DEVICE_RESET) {
+      rendererAssets_.OnRenderTargetsReset();
+#endif
     } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
       if (ui_.wholeMapView) {
         FitCameraToWorld();
@@ -286,7 +293,7 @@ void App::Update(float dt) {
         accumulator_ -= tickSeconds_;
         tickCount_++;
         if ((tickCount_ % ticksPerDay_) == 0) {
-          StepDayCoarse();
+          StepDayCoarse(kCalendarDaysPerCoarseDay);
         }
         steps++;
       }
@@ -298,7 +305,7 @@ void App::Update(float dt) {
       AdvanceMacro(1);
     } else {
       tickCount_ += ticksPerDay_;
-      StepDayCoarse();
+      StepDayCoarse(1);
     }
   }
 
@@ -331,23 +338,26 @@ void App::StepTick(float tickSeconds) {
   humans_.UpdateTick(world_, settlements_, rng_, tickCount_, tickSeconds, ticksPerDay_);
 }
 
-void App::StepDayCoarse() {
-  stats_.dayCount++;
+void App::StepDayCoarse(int dayDelta) {
+  if (dayDelta < 1) dayDelta = 1;
+  stats_.birthsToday = 0;
+  stats_.deathsToday = 0;
+  stats_.dayCount += dayDelta;
   CrashContextSetDay(stats_.dayCount);
   CrashContextSetStage("StepDay:World");
-  world_.UpdateDaily(rng_);
+  world_.UpdateDaily(rng_, dayDelta);
   CrashContextSetStage("StepDay:Settlements");
-  settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, villageMarkers_, factions_);
+  settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, dayDelta, villageMarkers_, factions_);
   int warDeathsToday = settlements_.ConsumeWarDeaths();
   CrashContextSetStage("StepDay:Humans");
-  humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, stats_.birthsToday,
+  humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, dayDelta, stats_.birthsToday,
                             stats_.deathsToday);
   stats_.deathsToday += warDeathsToday;
   stats_.totalBirths += stats_.birthsToday;
   stats_.totalDeaths += stats_.deathsToday;
   for (auto& marker : villageMarkers_) {
     if (marker.ttlDays > 0) {
-      marker.ttlDays--;
+      marker.ttlDays = std::max(0, marker.ttlDays - dayDelta);
     }
   }
   villageMarkers_.erase(
@@ -372,7 +382,7 @@ void App::AdvanceMacro(int days) {
     stats_.dayCount++;
     CrashContextSetDay(stats_.dayCount);
     if ((stats_.dayCount % 7) == 0) {
-      world_.UpdateDaily(rng_);
+      world_.UpdateDaily(rng_, 1);
     }
     humans_.AdvanceMacro(world_, settlements_, rng_, 1, stats_.birthsToday, stats_.deathsToday);
     settlements_.UpdateMacro(world_, rng_, stats_.dayCount, villageMarkers_, factions_);

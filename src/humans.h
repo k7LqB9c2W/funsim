@@ -13,6 +13,7 @@ enum class TaskType : uint8_t;
 enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
 enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War };
+enum class ArmyState : uint8_t { Idle, Rally, March, Siege, Defend, Retreat };
 
 enum class HumanTrait : uint16_t {
   Brave = 1u << 0,
@@ -41,6 +42,8 @@ struct DeathSummary {
 };
 
 struct Human {
+  static constexpr int kAdultAgeDays = 18 * 365;
+
   int id = 0;
   bool female = false;
   int ageDays = 0;
@@ -90,6 +93,12 @@ struct Human {
   bool carrying = false;
   int carryFood = 0;
   int carryWood = 0;
+
+  ArmyState armyState = ArmyState::Idle;
+  int warId = -1;
+  int warTargetSettlementId = -1;
+  int formationSlot = 0;
+  bool isGeneral = false;
 };
 
 class HumanManager {
@@ -100,7 +109,7 @@ class HumanManager {
   void UpdateTick(World& world, SettlementManager& settlements, Random& rng, int tickCount,
                   float tickSeconds, int ticksPerDay);
   void UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng, int dayCount,
-                         int& birthsToday, int& deathsToday);
+                         int dayDelta, int& birthsToday, int& deathsToday);
   void EnterMacro(SettlementManager& settlements);
   void ExitMacro(SettlementManager& settlements, Random& rng);
   void AdvanceMacro(World& world, SettlementManager& settlements, Random& rng, int days,
@@ -166,6 +175,7 @@ class HumanManager {
 };
 
 const char* DeathReasonName(DeathReason reason);
+const char* ArmyStateName(ArmyState state);
 const char* HumanTraitName(HumanTrait trait);
 bool HumanHasTrait(uint16_t traits, HumanTrait trait);
 void HumanTraitsToString(char* buffer, size_t size, uint16_t traits, bool legendary);

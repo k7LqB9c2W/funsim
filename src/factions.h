@@ -62,6 +62,41 @@ struct Faction {
   float warExhaustion = 0.0f;
   int stability = 100;
   LeaderInfluence leaderInfluence;
+  int allianceId = -1;
+};
+
+struct AllianceBonus {
+  float soldierCapMult = 1.0f;
+  int watchtowerCapBonus = 0;
+  float defenderCasualtyMult = 1.0f;
+  float attackerCasualtyMult = 1.0f;
+};
+
+struct Alliance {
+  int id = 0;
+  std::string name;
+  int founderFactionId = -1;
+  std::vector<int> members;
+  int createdDay = 0;
+  int level = 1;
+};
+
+struct WarSide {
+  std::vector<int> factions;
+  int allianceId = -1;
+};
+
+struct War {
+  int id = 0;
+  int declaringFactionId = -1;
+  int defendingFactionId = -1;
+  WarSide attackers;
+  WarSide defenders;
+  int startDay = 0;
+  int lastMajorEventDay = 0;
+  int deathsAttackers = 0;
+  int deathsDefenders = 0;
+  bool active = false;
 };
 
 class FactionManager {
@@ -70,6 +105,16 @@ class FactionManager {
   const std::vector<Faction>& Factions() const { return factions_; }
   const Faction* Get(int id) const;
   Faction* GetMutable(int id);
+  const std::vector<Alliance>& Alliances() const { return alliances_; }
+  const std::vector<War>& Wars() const { return warsList_; }
+  const Alliance* GetAlliance(int id) const;
+  const War* GetWar(int id) const;
+  War* GetWarMutable(int id);
+  int ActiveWarIdForFaction(int factionId) const;
+  int ActiveWarIdBetweenFactions(int factionA, int factionB) const;
+  bool WarIsAttacker(int warId, int factionId) const;
+  int CaptureRecipientFaction(int warId, int occupyingFactionId, int targetFactionId) const;
+  AllianceBonus BonusForFaction(int factionId, int dayCount) const;
 
   int CreateFaction(Random& rng);
   void UpdateStats(const SettlementManager& settlements);
@@ -81,7 +126,7 @@ class FactionManager {
   bool IsAtWar(int factionA, int factionB) const;
   int WarCount() const;
   bool CanExpandInto(int sourceFactionId, int targetFactionId, bool resourceStress) const;
-  void SetWar(int factionA, int factionB, bool atWar);
+  void SetWar(int factionA, int factionB, bool atWar, int dayCount, int initiatorFactionId = -1);
   void SetWarEnabled(bool enabled);
   bool WarEnabled() const { return warEnabled_; }
 
@@ -92,10 +137,27 @@ class FactionManager {
   void ResetStats();
   void UpdateTerritory(const SettlementManager& settlements);
   void UpdateWarExhaustion();
+  void UpdateAlliances(const SettlementManager& settlements, Random& rng, int dayCount);
+  void UpdateWars(const SettlementManager& settlements, Random& rng, int dayCount);
+  void RecomputeAllianceLevels(int dayCount);
+  int CreateAlliance(const std::string& name, int founderFactionId, int dayCount);
+  bool AddFactionToAlliance(int allianceId, int factionId);
+  void RemoveFactionFromAlliance(int factionId);
+  void DissolveAlliance(int allianceId);
+  bool AnyActiveWarForFaction(int factionId) const;
+  int FindWarIndexById(int id) const;
+  int FindAllianceIndexById(int id) const;
+  int StartWar(int declaringFactionId, int defendingFactionId, int dayCount);
+  void EndWarByIndex(int warIndex, int dayCount);
+  void SyncWarMatrixFromWars(int dayCount);
 
   std::vector<Faction> factions_;
   std::vector<int> relations_;
   std::vector<uint8_t> wars_;
   std::vector<int> warDays_;
+  std::vector<Alliance> alliances_;
+  std::vector<War> warsList_;
+  int nextAllianceId_ = 1;
+  int nextWarId_ = 1;
   bool warEnabled_ = true;
 };

@@ -41,6 +41,7 @@ struct Settlement {
   static constexpr int kGranaryWoodCost = 6;
   static constexpr int kWellWoodCost = 8;
   static constexpr int kTownHallWoodCost = 18;
+  static constexpr int kWatchTowerWoodCost = 20;
   static constexpr int kFarmYield = 50;
   static constexpr int kFarmReadyStage = 2;
 
@@ -63,6 +64,7 @@ struct Settlement {
   int farms = 0;
   int granaries = 0;
   int wells = 0;
+  int watchtowers = 0;
   int farmsPlanted = 0;
   int farmsReady = 0;
   int townHalls = 0;
@@ -79,6 +81,20 @@ struct Settlement {
   int waterTargetX = 0;
   int waterTargetY = 0;
   bool hasWaterTarget = false;
+
+  int generalHumanId = -1;
+  int warId = -1;
+  int warTargetSettlementId = -1;
+  int lastWarOrderDay = 0;
+
+  float captureProgress = 0.0f;
+  int captureLeaderFactionId = -1;
+  int captureWarId = -1;
+  int lastCaptureUpdateDay = 0;
+
+  int macroArmyTargetSettlementId = -1;
+  int macroArmyEtaDays = 0;
+  bool macroArmySieging = false;
 
   int macroPopM[6] = {};
   int macroPopF[6] = {};
@@ -134,7 +150,7 @@ struct Settlement {
 
 class SettlementManager {
  public:
-  void UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount,
+  void UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount, int dayDelta,
                    std::vector<VillageMarker>& markers, FactionManager& factions);
   void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers,
                    FactionManager& factions);
@@ -167,7 +183,7 @@ class SettlementManager {
   }
 
   void EnsureZoneBuffers(const World& world);
-  void RecomputeZonePop(const World& world, const HumanManager& humans);
+  void RecomputeZonePop(const World& world, const HumanManager& humans, int dayDelta);
   void RecomputeZonePopMacro();
   void TryFoundNewSettlements(World& world, Random& rng, int dayCount,
                               std::vector<VillageMarker>& markers, FactionManager& factions);
@@ -177,19 +193,23 @@ class SettlementManager {
   void RecomputeSettlementBuildings(const World& world);
   void UpdateSettlementCaps();
   void ComputeSettlementWaterTargets(const World& world);
-  void RecomputeSettlementPopAndRoles(World& world, Random& rng, int dayCount,
-                                      HumanManager& humans);
-  void UpdateSettlementRoleStatsMacro(World& world);
+  void RecomputeSettlementPopAndRoles(World& world, Random& rng, int dayCount, int dayDelta,
+                                      HumanManager& humans, const FactionManager& factions);
+  void UpdateSettlementRoleStatsMacro(World& world, const FactionManager& factions, int dayCount);
   void UpdateSettlementEvolution(const FactionManager& factions, Random& rng);
   void UpdateSettlementStability(const FactionManager& factions, Random& rng);
   void UpdateSettlementInfluence(const FactionManager& factions);
   void UpdateCapitalStatus(const FactionManager& factions);
+  void UpdateArmiesAndSieges(World& world, HumanManager& humans, Random& rng, int dayCount,
+                             int dayDelta, FactionManager& factions);
+  void UpdateArmiesAndSiegesMacro(World& world, Random& rng, int dayCount, int dayDelta,
+                                  FactionManager& factions);
   void ApplyConflictImpact(World& world, HumanManager& humans, Random& rng, int dayCount,
                            FactionManager& factions);
   void ApplyConflictImpactMacro(World& world, Random& rng, int dayCount,
                                 FactionManager& factions);
   void UpdateBorderPressure(const FactionManager& factions);
-  void GenerateTasks(World& world, Random& rng);
+  void GenerateTasks(World& world, Random& rng, const FactionManager& factions, int dayCount);
   void RunSettlementEconomy(World& world, Random& rng);
   void EnsureSettlementFactions(FactionManager& factions, Random& rng);
 

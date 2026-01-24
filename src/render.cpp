@@ -388,6 +388,20 @@ void Renderer::Shutdown() {
   }
 }
 
+void Renderer::OnRenderTargetsReset() {
+  for (auto& chunk : chunks_) {
+    if (chunk.texture) {
+      SDL_DestroyTexture(chunk.texture);
+      chunk.texture = nullptr;
+    }
+    chunk.dirty = true;
+    chunk.lastUsedFrame = 0;
+  }
+  terrainTextureIndices_.clear();
+  terrainDirty_ = true;
+  frameCounter_ = 0;
+}
+
 void Renderer::DestroyTerrainCache() {
   for (auto& chunk : chunks_) {
     if (chunk.texture) {
@@ -910,6 +924,9 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           case BuildingType::Well:
             coord = AtlasCoord{1, 1};
             break;
+          case BuildingType::WatchTower:
+            coord = AtlasCoord{1, 0};
+            break;
           default:
             coord = AtlasCoord{0, 0};
             break;
@@ -1009,6 +1026,25 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
     SDL_FRect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
     SDL_RenderCopyF(renderer, humansTexture_, &humanSrc, &dst);
+
+    if (human.role == Role::Soldier) {
+      SDL_Color color{220, 220, 220, 220};
+      if (human.settlementId > 0) {
+        const Settlement* settlement = settlements.Get(human.settlementId);
+        const Faction* faction = (settlement && settlement->factionId > 0) ? factions.Get(settlement->factionId)
+                                                                           : nullptr;
+        if (faction) {
+          color = SDL_Color{faction->color.r, faction->color.g, faction->color.b, 220};
+        }
+      }
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+      const float dotSize = human.isGeneral ? (tileSize * 0.22f) : (tileSize * 0.12f);
+      const float dotX = worldX + tileSize * 0.5f - dotSize * 0.5f;
+      const float dotY = worldY + tileSize * 0.05f;
+      SDL_FRect dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
+      SDL_RenderFillRectF(renderer, &dotDst);
+    }
   }
 
   if (labelFont_) {
@@ -1038,6 +1074,27 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       SDL_FRect dst = MakeDstRect(worldX, worldY, static_cast<float>(entry.width),
                                   static_cast<float>(entry.height), camera);
       SDL_RenderCopyF(renderer, entry.texture, nullptr, &dst);
+
+      if (settlement->captureProgress > 0.0f) {
+        SDL_Color color{255, 70, 70, 220};
+        const Faction* capFaction =
+            (settlement->captureLeaderFactionId > 0) ? factions.Get(settlement->captureLeaderFactionId) : nullptr;
+        if (capFaction) {
+          color = SDL_Color{capFaction->color.r, capFaction->color.g, capFaction->color.b, 220};
+        }
+        float pct = std::max(0.0f, std::min(100.0f, settlement->captureProgress)) / 100.0f;
+        const float barH = 4.0f;
+        float barX = bgX;
+        float barY = bgY - barH - 1.0f;
+        float barW = bgW;
+        SDL_FRect barBg = MakeDstRect(barX, barY, barW, barH, camera);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 170);
+        SDL_RenderFillRectF(renderer, &barBg);
+        SDL_FRect barFill = MakeDstRect(barX + 1.0f, barY + 1.0f, (barW - 2.0f) * pct, barH - 2.0f, camera);
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+        SDL_RenderFillRectF(renderer, &barFill);
+      }
     }
   }
 
