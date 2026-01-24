@@ -25,7 +25,7 @@ class App {
   void Update(float dt);
   void RenderFrame();
   void StepTick(float tickSeconds);
-  void StepDayCoarse();
+  void StepDayCoarse(int dayDelta);
   void AdvanceMacro(int days);
   void EnterMacroMode();
   void ExitMacroMode();

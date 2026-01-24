@@ -35,6 +35,9 @@ class Renderer {
             const std::string& objectsPath, const std::string& buildingsPath,
             const std::string& labelFontPath, int labelFontSize);
   void Shutdown();
+  // Render targets (SDL_TEXTUREACCESS_TARGET) can lose contents on resize/minimize/device reset.
+  // Call this on SDL_RENDER_TARGETS_RESET (and optionally SDL_RENDER_DEVICE_RESET).
+  void OnRenderTargetsReset();
   void Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
               const SettlementManager& settlements, const FactionManager& factions,
               const Camera& camera, int windowWidth, int windowHeight,

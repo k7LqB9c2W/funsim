@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "humans.h"
 #include "settlements.h"
@@ -402,7 +403,6 @@ void FactionManager::UpdateLeaders(const SettlementManager& settlements, const H
 }
 
 void FactionManager::UpdateDiplomacy(const SettlementManager& settlements, Random& rng, int dayCount) {
-  (void)dayCount;
   int count = static_cast<int>(factions_.size());
   if (count == 0) return;
 
@@ -500,38 +500,12 @@ void FactionManager::UpdateDiplomacy(const SettlementManager& settlements, Rando
       score = ClampRelation(score + delta);
       relations_[idx] = score;
       relations_[j * count + i] = score;
-
-      if (atWar) {
-        warDays_[idx]++;
-        warDays_[j * count + i] = warDays_[idx];
-      } else {
-        warDays_[idx] = 0;
-        warDays_[j * count + i] = 0;
-      }
-
-      if (!atWar) {
-        float aggression = (factions_[i].traits.aggressionBias + factions_[j].traits.aggressionBias) * 0.5f;
-        aggression += (factions_[i].leaderInfluence.aggression + factions_[j].leaderInfluence.aggression) * 0.5f;
-        bool pressure = border >= kWarBorderPressureThreshold;
-        bool stressTrigger = (stress[i] > 0.75f || stress[j] > 0.75f);
-        if (score <= kRelationHostileThreshold - 5 && (pressure || stressTrigger) &&
-            (aggression >= 0.55f || rng.Chance(0.06f))) {
-          SetWar(factions_[i].id, factions_[j].id, true);
-        }
-      } else {
-        int daysAtWar = warDays_[idx];
-        float peaceChance = 0.02f +
-                            (factions_[i].leaderInfluence.diplomacy +
-                             factions_[j].leaderInfluence.diplomacy) *
-                                0.03f;
-        peaceChance = ClampFloat(peaceChance, 0.01f, 0.12f);
-        if (daysAtWar > kWarMinDays && score > -20 && rng.Chance(peaceChance)) {
-          SetWar(factions_[i].id, factions_[j].id, false);
-        }
-      }
     }
   }
 
+  UpdateAlliances(settlements, rng, dayCount);
+  UpdateWars(settlements, rng, dayCount);
+  SyncWarMatrixFromWars(dayCount);
   UpdateWarExhaustion();
 }
 
@@ -562,37 +536,32 @@ bool FactionManager::IsAtWar(int factionA, int factionB) const {
 }
 
 int FactionManager::WarCount() const {
-  int count = static_cast<int>(factions_.size());
   int total = 0;
-  for (int i = 0; i < count; ++i) {
-    for (int j = i + 1; j < count; ++j) {
-      if (IsAtWar(factions_[i].id, factions_[j].id)) {
-        total++;
-      }
-    }
+  for (const auto& war : warsList_) {
+    if (war.active) total++;
   }
   return total;
 }
 
-void FactionManager::SetWar(int factionA, int factionB, bool atWar) {
+void FactionManager::SetWar(int factionA, int factionB, bool atWar, int dayCount,
+                            int initiatorFactionId) {
   if (factionA == factionB || factionA <= 0 || factionB <= 0) return;
   if (!warEnabled_ && atWar) return;
-  int indexA = IndexForId(factionA);
-  int indexB = IndexForId(factionB);
-  if (indexA < 0 || indexB < 0) return;
-  int count = static_cast<int>(factions_.size());
-  if (static_cast<int>(wars_.size()) != count * count) {
-    EnsureWarsForNewFaction();
-  }
-  wars_[indexA * count + indexB] = atWar ? 1u : 0u;
-  wars_[indexB * count + indexA] = atWar ? 1u : 0u;
-  int dayValue = atWar ? 1 : 0;
-  warDays_[indexA * count + indexB] = dayValue;
-  warDays_[indexB * count + indexA] = dayValue;
+  if (!Get(factionA) || !Get(factionB)) return;
+
   if (atWar) {
-    relations_[indexA * count + indexB] = std::min(relations_[indexA * count + indexB], -40);
-    relations_[indexB * count + indexA] = std::min(relations_[indexB * count + indexA], -40);
+    int declarer = (initiatorFactionId > 0) ? initiatorFactionId : factionA;
+    int defender = (declarer == factionA) ? factionB : factionA;
+    StartWar(declarer, defender, dayCount);
+  } else {
+    int warId = ActiveWarIdBetweenFactions(factionA, factionB);
+    int warIndex = (warId > 0) ? FindWarIndexById(warId) : -1;
+    if (warIndex >= 0) {
+      EndWarByIndex(warIndex, dayCount);
+    }
   }
+
+  SyncWarMatrixFromWars(dayCount);
 }
 
 void FactionManager::SetWarEnabled(bool enabled) {
@@ -601,6 +570,7 @@ void FactionManager::SetWarEnabled(bool enabled) {
   if (!warEnabled_) {
     std::fill(wars_.begin(), wars_.end(), 0);
     std::fill(warDays_.begin(), warDays_.end(), 0);
+    warsList_.clear();
   }
 }
 
@@ -639,4 +609,509 @@ void FactionManager::UpdateWarExhaustion() {
           ClampFloat(factions_[i].warExhaustion - kWarExhaustionRecover, 0.0f, 1.0f);
     }
   }
+}
+
+const Alliance* FactionManager::GetAlliance(int id) const {
+  if (id <= 0) return nullptr;
+  int index = FindAllianceIndexById(id);
+  return (index >= 0) ? &alliances_[index] : nullptr;
+}
+
+const War* FactionManager::GetWar(int id) const {
+  if (id <= 0) return nullptr;
+  int index = FindWarIndexById(id);
+  return (index >= 0) ? &warsList_[index] : nullptr;
+}
+
+War* FactionManager::GetWarMutable(int id) {
+  if (id <= 0) return nullptr;
+  int index = FindWarIndexById(id);
+  return (index >= 0) ? &warsList_[index] : nullptr;
+}
+
+int FactionManager::FindWarIndexById(int id) const {
+  if (id <= 0) return -1;
+  for (int i = 0; i < static_cast<int>(warsList_.size()); ++i) {
+    if (warsList_[i].id == id) return i;
+  }
+  return -1;
+}
+
+int FactionManager::FindAllianceIndexById(int id) const {
+  if (id <= 0) return -1;
+  for (int i = 0; i < static_cast<int>(alliances_.size()); ++i) {
+    if (alliances_[i].id == id) return i;
+  }
+  return -1;
+}
+
+bool FactionManager::AnyActiveWarForFaction(int factionId) const {
+  if (factionId <= 0) return false;
+  for (const auto& war : warsList_) {
+    if (!war.active) continue;
+    if (std::find(war.attackers.factions.begin(), war.attackers.factions.end(), factionId) !=
+            war.attackers.factions.end() ||
+        std::find(war.defenders.factions.begin(), war.defenders.factions.end(), factionId) !=
+            war.defenders.factions.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int FactionManager::ActiveWarIdForFaction(int factionId) const {
+  if (factionId <= 0) return -1;
+  for (const auto& war : warsList_) {
+    if (!war.active) continue;
+    if (std::find(war.attackers.factions.begin(), war.attackers.factions.end(), factionId) !=
+            war.attackers.factions.end() ||
+        std::find(war.defenders.factions.begin(), war.defenders.factions.end(), factionId) !=
+            war.defenders.factions.end()) {
+      return war.id;
+    }
+  }
+  return -1;
+}
+
+int FactionManager::ActiveWarIdBetweenFactions(int factionA, int factionB) const {
+  if (factionA <= 0 || factionB <= 0 || factionA == factionB) return -1;
+  for (const auto& war : warsList_) {
+    if (!war.active) continue;
+    bool aAttacker = std::find(war.attackers.factions.begin(), war.attackers.factions.end(), factionA) !=
+                     war.attackers.factions.end();
+    bool aDefender = std::find(war.defenders.factions.begin(), war.defenders.factions.end(), factionA) !=
+                     war.defenders.factions.end();
+    bool bAttacker = std::find(war.attackers.factions.begin(), war.attackers.factions.end(), factionB) !=
+                     war.attackers.factions.end();
+    bool bDefender = std::find(war.defenders.factions.begin(), war.defenders.factions.end(), factionB) !=
+                     war.defenders.factions.end();
+    if ((aAttacker && bDefender) || (aDefender && bAttacker)) return war.id;
+  }
+  return -1;
+}
+
+bool FactionManager::WarIsAttacker(int warId, int factionId) const {
+  const War* war = GetWar(warId);
+  if (!war || !war->active) return false;
+  return std::find(war->attackers.factions.begin(), war->attackers.factions.end(), factionId) !=
+         war->attackers.factions.end();
+}
+
+int FactionManager::CaptureRecipientFaction(int warId, int occupyingFactionId,
+                                            int targetFactionId) const {
+  const War* war = GetWar(warId);
+  if (!war || !war->active) return occupyingFactionId;
+  bool occAttacker = WarIsAttacker(warId, occupyingFactionId);
+  bool targetAttacker = WarIsAttacker(warId, targetFactionId);
+  if (occAttacker && !targetAttacker) {
+    return (war->declaringFactionId > 0) ? war->declaringFactionId : occupyingFactionId;
+  }
+  if (!occAttacker && targetAttacker) {
+    return (war->defendingFactionId > 0) ? war->defendingFactionId : occupyingFactionId;
+  }
+  return occupyingFactionId;
+}
+
+AllianceBonus FactionManager::BonusForFaction(int factionId, int dayCount) const {
+  AllianceBonus bonus;
+  const Faction* faction = Get(factionId);
+  if (!faction || faction->allianceId <= 0) return bonus;
+  const Alliance* alliance = GetAlliance(faction->allianceId);
+  if (!alliance) return bonus;
+
+  int ageDays = std::max(0, dayCount - alliance->createdDay);
+  int years = ageDays / 365;
+  int level = 1;
+  if (years >= 100) {
+    level = 5;
+  } else if (years >= 50) {
+    level = 4;
+  } else if (years >= 25) {
+    level = 3;
+  } else if (years >= 10) {
+    level = 2;
+  }
+
+  bonus.soldierCapMult = 1.0f + 0.05f * static_cast<float>(level);
+  bonus.watchtowerCapBonus = (level >= 2) ? 1 : 0;
+  bonus.defenderCasualtyMult = (level >= 3) ? 0.92f : 1.0f;
+  bonus.attackerCasualtyMult = (level >= 4) ? 1.08f : 1.0f;
+  return bonus;
+}
+
+void FactionManager::RecomputeAllianceLevels(int dayCount) {
+  for (auto& alliance : alliances_) {
+    int ageDays = std::max(0, dayCount - alliance.createdDay);
+    int years = ageDays / 365;
+    int level = 1;
+    if (years >= 100) {
+      level = 5;
+    } else if (years >= 50) {
+      level = 4;
+    } else if (years >= 25) {
+      level = 3;
+    } else if (years >= 10) {
+      level = 2;
+    }
+    alliance.level = level;
+  }
+}
+
+int FactionManager::CreateAlliance(const std::string& name, int founderFactionId, int dayCount) {
+  Alliance alliance;
+  alliance.id = nextAllianceId_++;
+  alliance.name = name;
+  alliance.founderFactionId = founderFactionId;
+  alliance.createdDay = dayCount;
+  alliance.level = 1;
+  alliances_.push_back(alliance);
+  return alliance.id;
+}
+
+bool FactionManager::AddFactionToAlliance(int allianceId, int factionId) {
+  if (allianceId <= 0 || factionId <= 0) return false;
+  Faction* faction = GetMutable(factionId);
+  if (!faction) return false;
+  if (faction->allianceId == allianceId) return true;
+  if (faction->allianceId > 0) return false;
+  int idx = FindAllianceIndexById(allianceId);
+  if (idx < 0) return false;
+  Alliance& alliance = alliances_[idx];
+  if (std::find(alliance.members.begin(), alliance.members.end(), factionId) != alliance.members.end()) {
+    faction->allianceId = allianceId;
+    return true;
+  }
+  alliance.members.push_back(factionId);
+  faction->allianceId = allianceId;
+  return true;
+}
+
+void FactionManager::RemoveFactionFromAlliance(int factionId) {
+  Faction* faction = GetMutable(factionId);
+  if (!faction || faction->allianceId <= 0) return;
+  int allianceId = faction->allianceId;
+  int idx = FindAllianceIndexById(allianceId);
+  faction->allianceId = -1;
+  if (idx < 0) return;
+  Alliance& alliance = alliances_[idx];
+  alliance.members.erase(std::remove(alliance.members.begin(), alliance.members.end(), factionId),
+                         alliance.members.end());
+  if (alliance.members.empty()) {
+    DissolveAlliance(allianceId);
+  }
+}
+
+void FactionManager::DissolveAlliance(int allianceId) {
+  int idx = FindAllianceIndexById(allianceId);
+  if (idx < 0) return;
+  Alliance& alliance = alliances_[idx];
+  for (int memberId : alliance.members) {
+    Faction* faction = GetMutable(memberId);
+    if (faction && faction->allianceId == allianceId) {
+      faction->allianceId = -1;
+    }
+  }
+  alliances_.erase(alliances_.begin() + idx);
+}
+
+void FactionManager::UpdateAlliances(const SettlementManager& settlements, Random& rng, int dayCount) {
+  (void)settlements;
+  if (factions_.size() < 2) return;
+
+  RecomputeAllianceLevels(dayCount);
+
+  int supremeFactionId = -1;
+  int bestPower = std::numeric_limits<int>::min();
+  for (const auto& faction : factions_) {
+    int power = faction.stats.population + faction.stats.settlements * 40 + faction.stats.territoryZones / 2;
+    if (power > bestPower) {
+      bestPower = power;
+      supremeFactionId = faction.id;
+    }
+  }
+
+  auto canAllianceAct = [&](int factionId) {
+    if (factionId <= 0) return false;
+    if (factionId == supremeFactionId) return false;
+    if (AnyActiveWarForFaction(factionId)) return false;
+    return true;
+  };
+
+  for (auto& faction : factions_) {
+    if (faction.id == supremeFactionId) continue;
+    if (faction.allianceId > 0) continue;
+    if (!canAllianceAct(faction.id)) continue;
+
+    if (!rng.Chance(0.02f)) continue;
+
+    int bestCandidate = -1;
+    int bestScore = -9999;
+    for (const auto& other : factions_) {
+      if (other.id == faction.id) continue;
+      if (other.allianceId > 0) continue;
+      if (!canAllianceAct(other.id)) continue;
+      int score = RelationScore(faction.id, other.id);
+      if (score < kRelationAllyThreshold + 5) continue;
+      if (score > bestScore) {
+        bestScore = score;
+        bestCandidate = other.id;
+      }
+    }
+    if (bestCandidate <= 0) continue;
+    std::string name = faction.name + " Alliance";
+    int allianceId = CreateAlliance(name, faction.id, dayCount);
+    AddFactionToAlliance(allianceId, faction.id);
+    AddFactionToAlliance(allianceId, bestCandidate);
+  }
+
+  for (auto& faction : factions_) {
+    if (faction.allianceId > 0) continue;
+    if (!canAllianceAct(faction.id)) continue;
+    if (!rng.Chance(0.03f)) continue;
+
+    int chosenAllianceId = -1;
+    int bestScore = -9999;
+    for (const auto& alliance : alliances_) {
+      if (alliance.members.size() >= 6) continue;
+      int founder = alliance.founderFactionId;
+      int score = (founder > 0) ? RelationScore(faction.id, founder) : 0;
+      if (score < kRelationAllyThreshold) continue;
+      if (score > bestScore) {
+        bestScore = score;
+        chosenAllianceId = alliance.id;
+      }
+    }
+    if (chosenAllianceId > 0) {
+      AddFactionToAlliance(chosenAllianceId, faction.id);
+    }
+  }
+}
+
+int FactionManager::StartWar(int declaringFactionId, int defendingFactionId, int dayCount) {
+  if (!warEnabled_) return -1;
+  if (declaringFactionId <= 0 || defendingFactionId <= 0 || declaringFactionId == defendingFactionId) {
+    return -1;
+  }
+  if (!Get(declaringFactionId) || !Get(defendingFactionId)) return -1;
+  if (ActiveWarIdBetweenFactions(declaringFactionId, defendingFactionId) > 0) return -1;
+
+  int attAlliance = Get(declaringFactionId)->allianceId;
+  int defAlliance = Get(defendingFactionId)->allianceId;
+  if (attAlliance > 0 && attAlliance == defAlliance) return -1;
+
+  War war;
+  war.id = nextWarId_++;
+  war.declaringFactionId = declaringFactionId;
+  war.defendingFactionId = defendingFactionId;
+  war.startDay = dayCount;
+  war.lastMajorEventDay = dayCount;
+  war.active = true;
+  war.attackers.allianceId = attAlliance;
+  war.defenders.allianceId = defAlliance;
+
+  if (attAlliance > 0) {
+    const Alliance* alliance = GetAlliance(attAlliance);
+    if (alliance) war.attackers.factions = alliance->members;
+  } else {
+    war.attackers.factions.push_back(declaringFactionId);
+  }
+  if (defAlliance > 0) {
+    const Alliance* alliance = GetAlliance(defAlliance);
+    if (alliance) war.defenders.factions = alliance->members;
+  } else {
+    war.defenders.factions.push_back(defendingFactionId);
+  }
+
+  auto uniqueSort = [](std::vector<int>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+  };
+  uniqueSort(war.attackers.factions);
+  uniqueSort(war.defenders.factions);
+
+  if (war.attackers.factions.empty() || war.defenders.factions.empty()) return -1;
+  for (int f : war.attackers.factions) {
+    if (AnyActiveWarForFaction(f)) return -1;
+  }
+  for (int f : war.defenders.factions) {
+    if (AnyActiveWarForFaction(f)) return -1;
+  }
+
+  for (int a : war.attackers.factions) {
+    for (int d : war.defenders.factions) {
+      int ia = IndexForId(a);
+      int id = IndexForId(d);
+      if (ia < 0 || id < 0) continue;
+      int count = static_cast<int>(factions_.size());
+      relations_[ia * count + id] = std::min(relations_[ia * count + id], -40);
+      relations_[id * count + ia] = std::min(relations_[id * count + ia], -40);
+    }
+  }
+
+  warsList_.push_back(war);
+  return war.id;
+}
+
+void FactionManager::EndWarByIndex(int warIndex, int dayCount) {
+  if (warIndex < 0 || warIndex >= static_cast<int>(warsList_.size())) return;
+  War& war = warsList_[warIndex];
+  if (!war.active) return;
+  war.active = false;
+  war.lastMajorEventDay = dayCount;
+}
+
+void FactionManager::UpdateWars(const SettlementManager& settlements, Random& rng, int dayCount) {
+  if (!warEnabled_) return;
+  if (factions_.size() < 2) return;
+
+  std::vector<int> settlementCount(factions_.size() + 1, 0);
+  std::vector<int> soldierCount(factions_.size() + 1, 0);
+  for (const auto& settlement : settlements.Settlements()) {
+    if (settlement.factionId <= 0) continue;
+    if (settlement.factionId >= static_cast<int>(settlementCount.size())) continue;
+    settlementCount[settlement.factionId]++;
+    soldierCount[settlement.factionId] += settlement.soldiers;
+  }
+
+  for (int wi = 0; wi < static_cast<int>(warsList_.size()); ++wi) {
+    War& war = warsList_[wi];
+    if (!war.active) continue;
+
+    bool attackersHaveSettlements = false;
+    bool defendersHaveSettlements = false;
+    for (int f : war.attackers.factions) {
+      if (f > 0 && f < static_cast<int>(settlementCount.size()) && settlementCount[f] > 0) {
+        attackersHaveSettlements = true;
+        break;
+      }
+    }
+    for (int f : war.defenders.factions) {
+      if (f > 0 && f < static_cast<int>(settlementCount.size()) && settlementCount[f] > 0) {
+        defendersHaveSettlements = true;
+        break;
+      }
+    }
+    if (!attackersHaveSettlements || !defendersHaveSettlements) {
+      EndWarByIndex(wi, dayCount);
+      continue;
+    }
+
+    int duration = std::max(0, dayCount - war.startDay);
+    int score = (war.declaringFactionId > 0 && war.defendingFactionId > 0)
+                    ? RelationScore(war.declaringFactionId, war.defendingFactionId)
+                    : -40;
+    float peaceChance = 0.0f;
+    if (duration > kWarMinDays && score > -20) {
+      const Faction* a = Get(war.declaringFactionId);
+      const Faction* b = Get(war.defendingFactionId);
+      float dip = 0.0f;
+      if (a) dip += a->leaderInfluence.diplomacy;
+      if (b) dip += b->leaderInfluence.diplomacy;
+      peaceChance = ClampFloat(0.01f + dip * 0.04f, 0.01f, 0.12f);
+      if (rng.Chance(peaceChance)) {
+        EndWarByIndex(wi, dayCount);
+        continue;
+      }
+    }
+  }
+
+  int count = static_cast<int>(factions_.size());
+  for (int i = 0; i < count; ++i) {
+    for (int j = i + 1; j < count; ++j) {
+      int factionA = factions_[i].id;
+      int factionB = factions_[j].id;
+      if (factionA <= 0 || factionB <= 0) continue;
+      if (AnyActiveWarForFaction(factionA) || AnyActiveWarForFaction(factionB)) continue;
+      if (factions_[i].allianceId > 0 && factions_[i].allianceId == factions_[j].allianceId) continue;
+      int idx = i * count + j;
+      if (idx >= 0 && idx < static_cast<int>(warDays_.size()) && warDays_[idx] < 0) continue;
+      if (settlementCount[factionA] <= 0 || settlementCount[factionB] <= 0) continue;
+
+      int score = relations_[idx];
+      if (score > kRelationHostileThreshold - 5) continue;
+
+      int soldiersA = soldierCount[factionA];
+      int soldiersB = soldierCount[factionB];
+      if (soldiersA <= 0 || soldiersB <= 0) continue;
+      int maxSoldiers = std::max(soldiersA, soldiersB);
+      if (maxSoldiers > 0) {
+        int minSoldiers = std::min(soldiersA, soldiersB);
+        if (minSoldiers * 10 < maxSoldiers * 7) continue;
+      }
+
+      float aggression =
+          (factions_[i].traits.aggressionBias + factions_[j].traits.aggressionBias) * 0.5f;
+      aggression += (factions_[i].leaderInfluence.aggression + factions_[j].leaderInfluence.aggression) * 0.5f;
+      if (aggression < 0.55f && !rng.Chance(0.03f)) continue;
+
+      int declaring = factionA;
+      int defending = factionB;
+      float aAgg = factions_[i].traits.aggressionBias + factions_[i].leaderInfluence.aggression;
+      float bAgg = factions_[j].traits.aggressionBias + factions_[j].leaderInfluence.aggression;
+      if (bAgg > aAgg + 0.05f) {
+        declaring = factionB;
+        defending = factionA;
+      }
+
+      StartWar(declaring, defending, dayCount);
+      if (AnyActiveWarForFaction(factionA) || AnyActiveWarForFaction(factionB)) {
+        SyncWarMatrixFromWars(dayCount);
+      }
+    }
+  }
+}
+
+void FactionManager::SyncWarMatrixFromWars(int dayCount) {
+  int count = static_cast<int>(factions_.size());
+  if (count <= 0) return;
+  if (static_cast<int>(wars_.size()) != count * count || static_cast<int>(warDays_.size()) != count * count) {
+    EnsureWarsForNewFaction();
+  }
+
+  std::vector<uint8_t> next(count * count, 0);
+  for (const auto& war : warsList_) {
+    if (!war.active) continue;
+    for (int a : war.attackers.factions) {
+      for (int d : war.defenders.factions) {
+        int ia = IndexForId(a);
+        int id = IndexForId(d);
+        if (ia < 0 || id < 0) continue;
+        next[ia * count + id] = 1u;
+        next[id * count + ia] = 1u;
+      }
+    }
+  }
+
+  constexpr int kWarCooldownDays = 120;
+
+  for (int i = 0; i < count; ++i) {
+    next[i * count + i] = 0u;
+  }
+
+  for (int i = 0; i < count; ++i) {
+    for (int j = 0; j < count; ++j) {
+      if (i == j) continue;
+      int idx = i * count + j;
+      bool was = wars_[idx] != 0;
+      bool now = next[idx] != 0;
+      if (now) {
+        if (was && warDays_[idx] > 0) {
+          warDays_[idx] += 1;
+        } else {
+          warDays_[idx] = 1;
+        }
+      } else {
+        if (was && warDays_[idx] > 0) {
+          warDays_[idx] = -kWarCooldownDays;
+        } else if (warDays_[idx] < 0) {
+          warDays_[idx] = std::min(0, warDays_[idx] + 1);
+        } else {
+          warDays_[idx] = 0;
+        }
+      }
+    }
+  }
+
+  wars_.swap(next);
+  (void)dayCount;
 }

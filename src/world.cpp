@@ -493,144 +493,152 @@ void World::RecomputeWellRadius() {
   }
 }
 
-void World::UpdateDaily(Random& rng) {
+void World::UpdateDaily(Random& rng, int dayDelta) {
+  if (dayDelta < 1) dayDelta = 1;
   CrashContextSetStage("World::UpdateDaily");
   RecomputeWellRadius();
 
-  std::vector<uint64_t> ignite;
-  ignite.reserve(128);
+  auto updateOneDay = [&]() {
+    std::vector<uint64_t> ignite;
+    ignite.reserve(128);
 
-  std::vector<uint64_t> burningSnapshot;
-  burningSnapshot.reserve(burningTiles_.size());
-  for (uint64_t key : burningTiles_) {
-    burningSnapshot.push_back(key);
-  }
-
-  for (uint64_t key : burningSnapshot) {
-    int x = 0;
-    int y = 0;
-    UnpackCoord(key, x, y);
-    if (!InBounds(x, y)) continue;
-    const Tile& cur = AtUnchecked(x, y);
-    if (!cur.burning) {
-      burningTiles_.erase(key);
-      continue;
+    std::vector<uint64_t> burningSnapshot;
+    burningSnapshot.reserve(burningTiles_.size());
+    for (uint64_t key : burningTiles_) {
+      burningSnapshot.push_back(key);
     }
 
-    EditTile(x, y, [&](Tile& tile) {
-      if (tile.building != BuildingType::None) {
-        tile.building = BuildingType::None;
-        tile.buildingOwnerId = -1;
-        tile.farmStage = 0;
-        MarkBuildingDirty();
+    for (uint64_t key : burningSnapshot) {
+      int x = 0;
+      int y = 0;
+      UnpackCoord(key, x, y);
+      if (!InBounds(x, y)) continue;
+      const Tile& cur = AtUnchecked(x, y);
+      if (!cur.burning) {
+        burningTiles_.erase(key);
+        continue;
       }
 
-      int trees = static_cast<int>(tile.trees);
-      if (trees > 0) {
-        trees = std::max(0, trees - 2);
-        tile.trees = static_cast<uint8_t>(trees);
-      }
-      int burn = static_cast<int>(tile.burnDaysRemaining);
-      burn = std::max(0, burn - 1);
-      tile.burnDaysRemaining = static_cast<uint8_t>(burn);
+      EditTile(x, y, [&](Tile& tile) {
+        if (tile.building != BuildingType::None) {
+          tile.building = BuildingType::None;
+          tile.buildingOwnerId = -1;
+          tile.farmStage = 0;
+          MarkBuildingDirty();
+        }
 
-      if (trees <= 0 || burn <= 0) {
-        tile.burning = false;
-        tile.burnDaysRemaining = 0;
-      }
-    });
+        int trees = static_cast<int>(tile.trees);
+        if (trees > 0) {
+          trees = std::max(0, trees - 2);
+          tile.trees = static_cast<uint8_t>(trees);
+        }
+        int burn = static_cast<int>(tile.burnDaysRemaining);
+        burn = std::max(0, burn - 1);
+        tile.burnDaysRemaining = static_cast<uint8_t>(burn);
 
-    const Tile& after = AtUnchecked(x, y);
-    if (!after.burning) continue;
+        if (trees <= 0 || burn <= 0) {
+          tile.burning = false;
+          tile.burnDaysRemaining = 0;
+        }
+      });
 
-    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (const auto& d : dirs) {
-      int nx = x + d[0];
-      int ny = y + d[1];
-      if (!InBounds(nx, ny)) continue;
-      const Tile& neighbor = AtUnchecked(nx, ny);
-      if (neighbor.type != TileType::Land) continue;
-      if (neighbor.burning) continue;
-      if (neighbor.trees == 0) continue;
-      if (rng.Chance(0.12f)) {
-        ignite.push_back(PackCoord(nx, ny));
-      }
-    }
-  }
+      const Tile& after = AtUnchecked(x, y);
+      if (!after.burning) continue;
 
-  for (uint64_t key : ignite) {
-    int x = 0;
-    int y = 0;
-    UnpackCoord(key, x, y);
-    if (!InBounds(x, y)) continue;
-    const Tile& tile = AtUnchecked(x, y);
-    if (tile.burning) continue;
-    if (tile.type != TileType::Land) continue;
-    if (tile.trees == 0) continue;
-    SetBurning(x, y, true, kFireDuration);
-  }
-
-  std::vector<uint64_t> farmsSnapshot;
-  farmsSnapshot.reserve(farmGrowTiles_.size());
-  for (uint64_t key : farmGrowTiles_) {
-    farmsSnapshot.push_back(key);
-  }
-
-  for (uint64_t key : farmsSnapshot) {
-    int x = 0;
-    int y = 0;
-    UnpackCoord(key, x, y);
-    if (!InBounds(x, y)) continue;
-    const Tile& tile = AtUnchecked(x, y);
-    if (tile.building != BuildingType::Farm || tile.farmStage == 0 ||
-        tile.farmStage >= Settlement::kFarmReadyStage) {
-      farmGrowTiles_.erase(key);
-      continue;
-    }
-
-    int waterAdj = 0;
-    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-    for (const auto& d : dirs) {
-      int nx = x + d[0];
-      int ny = y + d[1];
-      if (!InBounds(nx, ny)) continue;
-      if (AtUnchecked(nx, ny).type == TileType::FreshWater) {
-        waterAdj++;
-      }
-    }
-
-    if (waterAdj == 0) {
-      bool hasWellWater = false;
-      for (int dy = -kWellRadiusStrong; dy <= kWellRadiusStrong && !hasWellWater; ++dy) {
-        int wy = y + dy;
-        if (wy < 0 || wy >= height_) continue;
-        int rem = kWellRadiusStrong - std::abs(dy);
-        for (int dx = -rem; dx <= rem; ++dx) {
-          int wx = x + dx;
-          if (wx < 0 || wx >= width_) continue;
-          int dist = std::abs(dx) + std::abs(dy);
-          uint8_t radius = WellRadiusAt(wx, wy);
-          if (radius > 0 && dist <= radius) {
-            hasWellWater = true;
-            break;
-          }
+      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (const auto& d : dirs) {
+        int nx = x + d[0];
+        int ny = y + d[1];
+        if (!InBounds(nx, ny)) continue;
+        const Tile& neighbor = AtUnchecked(nx, ny);
+        if (neighbor.type != TileType::Land) continue;
+        if (neighbor.burning) continue;
+        if (neighbor.trees == 0) continue;
+        if (rng.Chance(0.12f)) {
+          ignite.push_back(PackCoord(nx, ny));
         }
       }
-      if (hasWellWater) {
-        waterAdj = 4;
-      }
     }
 
-    float waterFactor = static_cast<float>(waterAdj) / 4.0f;
-    float chance = kFarmGrowBaseChance + waterFactor * kFarmGrowWaterBonus;
-    if (chance > 0.95f) chance = 0.95f;
-    if (rng.Chance(chance)) {
-      EditTile(x, y, [&](Tile& t) {
-        int stage = static_cast<int>(t.farmStage);
-        stage = std::min(stage + 1, Settlement::kFarmReadyStage);
-        t.farmStage = static_cast<uint8_t>(stage);
-      });
+    for (uint64_t key : ignite) {
+      int x = 0;
+      int y = 0;
+      UnpackCoord(key, x, y);
+      if (!InBounds(x, y)) continue;
+      const Tile& tile = AtUnchecked(x, y);
+      if (tile.burning) continue;
+      if (tile.type != TileType::Land) continue;
+      if (tile.trees == 0) continue;
+      SetBurning(x, y, true, kFireDuration);
     }
+
+    std::vector<uint64_t> farmsSnapshot;
+    farmsSnapshot.reserve(farmGrowTiles_.size());
+    for (uint64_t key : farmGrowTiles_) {
+      farmsSnapshot.push_back(key);
+    }
+
+    for (uint64_t key : farmsSnapshot) {
+      int x = 0;
+      int y = 0;
+      UnpackCoord(key, x, y);
+      if (!InBounds(x, y)) continue;
+      const Tile& tile = AtUnchecked(x, y);
+      if (tile.building != BuildingType::Farm || tile.farmStage == 0 ||
+          tile.farmStage >= Settlement::kFarmReadyStage) {
+        farmGrowTiles_.erase(key);
+        continue;
+      }
+
+      int waterAdj = 0;
+      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (const auto& d : dirs) {
+        int nx = x + d[0];
+        int ny = y + d[1];
+        if (!InBounds(nx, ny)) continue;
+        if (AtUnchecked(nx, ny).type == TileType::FreshWater) {
+          waterAdj++;
+        }
+      }
+
+      if (waterAdj == 0) {
+        bool hasWellWater = false;
+        for (int dy = -kWellRadiusStrong; dy <= kWellRadiusStrong && !hasWellWater; ++dy) {
+          int wy = y + dy;
+          if (wy < 0 || wy >= height_) continue;
+          int rem = kWellRadiusStrong - std::abs(dy);
+          for (int dx = -rem; dx <= rem; ++dx) {
+            int wx = x + dx;
+            if (wx < 0 || wx >= width_) continue;
+            int dist = std::abs(dx) + std::abs(dy);
+            uint8_t radius = WellRadiusAt(wx, wy);
+            if (radius > 0 && dist <= radius) {
+              hasWellWater = true;
+              break;
+            }
+          }
+        }
+        if (hasWellWater) {
+          waterAdj = 4;
+        }
+      }
+
+      float waterFactor = static_cast<float>(waterAdj) / 4.0f;
+      float chance = kFarmGrowBaseChance + waterFactor * kFarmGrowWaterBonus;
+      if (chance > 0.95f) chance = 0.95f;
+      if (rng.Chance(chance)) {
+        EditTile(x, y, [&](Tile& t) {
+          int stage = static_cast<int>(t.farmStage);
+          stage = std::min(stage + 1, Settlement::kFarmReadyStage);
+          t.farmStage = static_cast<uint8_t>(stage);
+        });
+      }
+    }
+  };
+
+  for (int i = 0; i < dayDelta; ++i) {
+    if (burningTiles_.empty() && farmGrowTiles_.empty()) break;
+    updateOneDay();
   }
 }
 

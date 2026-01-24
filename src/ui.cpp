@@ -108,8 +108,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Text("Stats");
   ImGui::Text("Day: %d", stats.dayCount);
   ImGui::Text("Population: %lld", static_cast<long long>(stats.totalPop));
-  ImGui::Text("Births Today: %d", stats.birthsToday);
-  ImGui::Text("Deaths Today: %d", stats.deathsToday);
+  ImGui::Text("Births (last step): %d", stats.birthsToday);
+  ImGui::Text("Deaths (last step): %d", stats.deathsToday);
   ImGui::Text("Total Births: %lld", static_cast<long long>(stats.totalBirths));
   ImGui::Text("Total Deaths: %lld", static_cast<long long>(stats.totalDeaths));
   ImGui::Text("Total Food: %lld", static_cast<long long>(stats.totalFood));
@@ -158,6 +158,18 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                   settlement->techTier, settlement->stability);
       ImGui::Text("Border Pressure: %d | War Pressure: %d | Claim Radius %d",
                   settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
+      ImGui::Text("Army: %d soldiers | General: %s", settlement->soldiers,
+                  (settlement->generalHumanId > 0) ? "yes" : "no");
+      ImGui::Text("Watchtowers: %d", settlement->watchtowers);
+      if (settlement->warId > 0) {
+        ImGui::Text("War #%d | Target settlement %d", settlement->warId, settlement->warTargetSettlementId);
+      }
+      if (settlement->captureProgress > 0.0f) {
+        const Faction* capFaction =
+            (settlement->captureLeaderFactionId > 0) ? factions.Get(settlement->captureLeaderFactionId) : nullptr;
+        ImGui::Text("Capture: %.1f%% by %s", settlement->captureProgress,
+                    capFaction ? capFaction->name.c_str() : "unknown");
+      }
       if (settlement->isCapital) {
         ImGui::Text("Capital Seat");
       }
@@ -188,11 +200,35 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
                   faction.stats.territoryZones);
       ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
+      if (faction.allianceId > 0) {
+        const Alliance* alliance = factions.GetAlliance(faction.allianceId);
+        if (alliance) {
+          ImGui::Text("Alliance: %s (L%d) | Members: %d", alliance->name.c_str(), alliance->level,
+                      static_cast<int>(alliance->members.size()));
+        } else {
+          ImGui::Text("Alliance: #%d", faction.allianceId);
+        }
+      }
 
       ImGui::PushID(faction.id);
       if (ImGui::SmallButton("Edit")) {
         state.selectedFactionId = faction.id;
         state.factionEditorOpen = true;
+      }
+      if (ImGui::TreeNode("Wars")) {
+        for (const auto& war : factions.Wars()) {
+          if (!war.active) continue;
+          bool involved =
+              std::find(war.attackers.factions.begin(), war.attackers.factions.end(), faction.id) !=
+                  war.attackers.factions.end() ||
+              std::find(war.defenders.factions.begin(), war.defenders.factions.end(), faction.id) !=
+                  war.defenders.factions.end();
+          if (!involved) continue;
+          const char* side = factions.WarIsAttacker(war.id, faction.id) ? "attackers" : "defenders";
+          ImGui::Text("War #%d (%s) | Days %d | Deaths A/D %d/%d", war.id, side,
+                      std::max(0, stats.dayCount - war.startDay), war.deathsAttackers, war.deathsDefenders);
+        }
+        ImGui::TreePop();
       }
       if (ImGui::TreeNode("Relations")) {
         for (const auto& other : factions.Factions()) {

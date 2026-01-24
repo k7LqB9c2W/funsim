@@ -11,7 +11,6 @@
 #include "settlements.h"
 
 namespace {
-constexpr int kAdultAgeDays = 18 * 365;
 constexpr int kGestationDays = 90;
 constexpr int kCrowdPenalty = 25;
 constexpr float kSeekWaterCrowdPenaltyScale = 0.1f;
@@ -50,6 +49,19 @@ bool IsWalkable(const Tile& tile) {
 
 int Manhattan(int ax, int ay, int bx, int by) {
   return std::abs(ax - bx) + std::abs(ay - by);
+}
+
+uint32_t HashNoise(uint32_t a, uint32_t b, uint32_t c, uint32_t d);
+
+void FormationOffset(int slot, int& outDx, int& outDy) {
+  uint32_t h = HashNoise(static_cast<uint32_t>(slot), 0xC3u, 0x5Au, 0x19u);
+  int dx = static_cast<int>(h % 7u) - 3;
+  int dy = static_cast<int>((h >> 8) % 7u) - 3;
+  if (dx == 0 && dy == 0) {
+    dx = 1;
+  }
+  outDx = dx;
+  outDy = dy;
 }
 
 uint32_t HashNoise(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
@@ -185,6 +197,54 @@ bool RollOldAgeDeath(Random& rng, int ageDays, bool legendary) {
   return static_cast<uint32_t>(rng.RangeInt(0, 65535)) < static_cast<uint32_t>(chanceQ16);
 }
 
+float ChanceWindow(float perDayChance, int days) {
+  if (days <= 1) return perDayChance;
+  if (!(perDayChance > 0.0f)) return 0.0f;
+  if (perDayChance >= 1.0f) return 1.0f;
+  float base = 1.0f - perDayChance;
+  float pow = 1.0f;
+  int exp = days;
+  while (exp > 0) {
+    if ((exp & 1) != 0) pow *= base;
+    base *= base;
+    exp >>= 1;
+  }
+  float out = 1.0f - pow;
+  if (out < 0.0f) return 0.0f;
+  if (out > 1.0f) return 1.0f;
+  return out;
+}
+
+uint16_t ChanceWindowQ16(uint16_t perDayChanceQ16, int days) {
+  if (days <= 1) return perDayChanceQ16;
+  if (perDayChanceQ16 == 0) return 0;
+  if (perDayChanceQ16 >= 65535u) return 65535u;
+  uint32_t baseQ16 = 65535u - static_cast<uint32_t>(perDayChanceQ16);
+  uint32_t powQ16 = 65535u;
+  int exp = days;
+  while (exp > 0) {
+    if ((exp & 1) != 0) {
+      powQ16 = static_cast<uint32_t>((static_cast<uint64_t>(powQ16) * baseQ16) / 65535u);
+    }
+    baseQ16 = static_cast<uint32_t>((static_cast<uint64_t>(baseQ16) * baseQ16) / 65535u);
+    exp >>= 1;
+  }
+  uint32_t out = 65535u - powQ16;
+  if (out > 65535u) out = 65535u;
+  return static_cast<uint16_t>(out);
+}
+
+bool RollOldAgeDeathWindow(Random& rng, int ageDaysStart, int dayDelta, bool legendary) {
+  if (ageDaysStart >= kOldAgeMaxDays) return true;
+  if (dayDelta <= 1) return RollOldAgeDeath(rng, ageDaysStart, legendary);
+  int ageDaysEnd = ageDaysStart + std::max(1, dayDelta);
+  if (ageDaysEnd >= kOldAgeMaxDays) return true;
+  uint16_t perDayQ16 = OldAgeDailyChanceQ16(ageDaysEnd, legendary);
+  uint16_t windowQ16 = ChanceWindowQ16(perDayQ16, dayDelta);
+  if (windowQ16 == 0) return false;
+  return static_cast<uint32_t>(rng.RangeInt(0, 65535)) < static_cast<uint32_t>(windowQ16);
+}
+
 int AgeBinIndex(int ageDays) {
   int remaining = ageDays;
   for (int i = 0; i < kMacroBins - 1; ++i) {
@@ -316,6 +376,8 @@ int BuildWoodCost(BuildingType type) {
       return Settlement::kGranaryWoodCost;
     case BuildingType::Well:
       return Settlement::kWellWoodCost;
+    case BuildingType::WatchTower:
+      return Settlement::kWatchTowerWoodCost;
     default:
       return 0;
   }
@@ -352,6 +414,25 @@ const char* DeathReasonName(DeathReason reason) {
       return "old_age";
     case DeathReason::War:
       return "war";
+    default:
+      return "unknown";
+  }
+}
+
+const char* ArmyStateName(ArmyState state) {
+  switch (state) {
+    case ArmyState::Idle:
+      return "idle";
+    case ArmyState::Rally:
+      return "rally";
+    case ArmyState::March:
+      return "march";
+    case ArmyState::Siege:
+      return "siege";
+    case ArmyState::Defend:
+      return "defend";
+    case ArmyState::Retreat:
+      return "retreat";
     default:
       return "unknown";
   }
@@ -469,7 +550,7 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
 }
 
 void HumanManager::Spawn(int x, int y, bool female, Random& rng) {
-  humans_.push_back(CreateHuman(x, y, female, rng, kAdultAgeDays));
+  humans_.push_back(CreateHuman(x, y, female, rng, Human::kAdultAgeDays));
 }
 
 void HumanManager::RebuildIdMap() {
@@ -612,7 +693,52 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
 
   bool thirsty = human.daysWithoutWater >= 2;
   bool hungry = human.daysWithoutFood >= 2;
-  bool adult = human.ageDays >= kAdultAgeDays;
+  bool adult = human.ageDays >= Human::kAdultAgeDays;
+
+  bool mobilized = (human.role == Role::Soldier && human.armyState != ArmyState::Idle);
+  if (mobilized && !nearFire && !thirsty && !hungry) {
+    human.hasTask = false;
+    human.mateTargetId = -1;
+
+    int targetX = human.homeX;
+    int targetY = human.homeY;
+    if (human.isGeneral) {
+      if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+        const Settlement* target = (human.warTargetSettlementId > 0)
+                                       ? settlements.Get(human.warTargetSettlementId)
+                                       : nullptr;
+        if (target) {
+          targetX = target->centerX;
+          targetY = target->centerY;
+        }
+      }
+    } else {
+      const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+      const int generalId = home ? home->generalHumanId : -1;
+      int gx = 0;
+      int gy = 0;
+      if (generalId > 0 && GetHumanById(generalId, gx, gy)) {
+        int dx = 0;
+        int dy = 0;
+        FormationOffset(human.formationSlot, dx, dy);
+        targetX = gx + dx;
+        targetY = gy + dy;
+      }
+    }
+
+    targetX = ClampInt(targetX, 0, world.width() - 1);
+    targetY = ClampInt(targetY, 0, world.height() - 1);
+    if (world.At(targetX, targetY).type == TileType::Ocean) {
+      targetX = human.x;
+      targetY = human.y;
+    }
+
+    human.goal = Goal::Wander;
+    human.targetX = targetX;
+    human.targetY = targetY;
+    human.rethinkCooldownTicks = rng.RangeInt(std::max(1, ticksPerDay / 4), std::max(2, ticksPerDay / 2));
+    return;
+  }
 
   if (nearFire) {
     human.goal = Goal::FleeFire;
@@ -783,6 +909,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
   bool thirsty = human.daysWithoutWater >= 2;
   bool hungry = human.daysWithoutFood >= 2;
   bool emergency = nearFire || thirsty || hungry;
+  bool mobilized = (human.role == Role::Soldier && human.armyState != ArmyState::Idle);
   bool haulingFood = human.hasTask && human.taskType == TaskType::HaulToStockpile &&
                      human.carryFood > 0;
   int stayX = human.homeX;
@@ -830,6 +957,48 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
   }
 
+  if (mobilized && !emergency) {
+    human.hasTask = false;
+    human.mateTargetId = -1;
+
+    int targetX = human.homeX;
+    int targetY = human.homeY;
+    if (human.isGeneral) {
+      if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+        const Settlement* target = (human.warTargetSettlementId > 0)
+                                       ? settlements.Get(human.warTargetSettlementId)
+                                       : nullptr;
+        if (target) {
+          targetX = target->centerX;
+          targetY = target->centerY;
+        }
+      }
+    } else {
+      const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+      const int generalId = home ? home->generalHumanId : -1;
+      int gx = 0;
+      int gy = 0;
+      if (generalId > 0 && GetHumanById(generalId, gx, gy)) {
+        int dx = 0;
+        int dy = 0;
+        FormationOffset(human.formationSlot, dx, dy);
+        targetX = gx + dx;
+        targetY = gy + dy;
+      }
+    }
+
+    targetX = ClampInt(targetX, 0, world.width() - 1);
+    targetY = ClampInt(targetY, 0, world.height() - 1);
+    if (world.At(targetX, targetY).type == TileType::Ocean) {
+      targetX = human.x;
+      targetY = human.y;
+    }
+
+    human.goal = Goal::Wander;
+    human.targetX = targetX;
+    human.targetY = targetY;
+  }
+
   if (human.goal == Goal::SeekMate && human.mateTargetId != -1) {
     int mx = 0;
     int my = 0;
@@ -839,7 +1008,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
   }
 
-  if (!human.hasTask && human.settlementId != -1) {
+  if (!mobilized && !human.hasTask && human.settlementId != -1) {
     Settlement* settlement = settlements.GetMutable(human.settlementId);
     if (settlement) {
       Task task;
@@ -1216,12 +1385,14 @@ void HumanManager::RecordWarDeaths(int count) {
 }
 
 void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng,
-                                     int dayCount, int& birthsToday, int& deathsToday) {
+                                     int dayCount, int dayDelta, int& birthsToday,
+                                     int& deathsToday) {
   if (macroActive_) return;
   CrashContextSetStage("Humans::UpdateDailyCoarse begin");
   CrashContextSetPopulation(static_cast<int>(humans_.size()));
   birthsToday = 0;
   deathsToday = 0;
+  if (dayDelta < 1) dayDelta = 1;
 
   const int w = world.width();
   const int h = world.height();
@@ -1248,7 +1419,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
     popCountByTile_[static_cast<size_t>(idx)]++;
 
-    if (!human.female && human.ageDays >= kAdultAgeDays) {
+    if (!human.female && human.ageDays >= Human::kAdultAgeDays) {
       if (adultMaleStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) {
         adultMaleStampByTile_[static_cast<size_t>(idx)] = crowdGeneration_;
         adultMaleCountByTile_[static_cast<size_t>(idx)] = 0;
@@ -1275,19 +1446,21 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       human.y = ClampInt(human.y, 0, h - 1);
     }
 
-    human.ageDays++;
-    if (human.mateCooldownDays > 0) {
-      human.mateCooldownDays--;
-    }
+    int ageDaysStart = human.ageDays;
+    human.ageDays += dayDelta;
+    human.mateCooldownDays = std::max(0, human.mateCooldownDays - dayDelta);
 
     if (human.pregnant) {
-      human.gestationDays++;
+      human.gestationDays += dayDelta;
       if (human.gestationDays >= kGestationDays) {
         human.pregnant = false;
         human.gestationDays = 0;
         bool babyFemale = rng.Chance(0.5f);
         Human baby = CreateHuman(human.x, human.y, babyFemale, rng, 0);
         baby.parentIdMother = human.id;
+        baby.settlementId = human.settlementId;
+        baby.homeX = human.homeX;
+        baby.homeY = human.homeY;
         newborns_.push_back(baby);
         birthsToday++;
         if (human.settlementId != -1) {
@@ -1459,7 +1632,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       human.daysWithoutWater++;
     }
 
-    bool adult = human.ageDays >= kAdultAgeDays;
+    bool adult = human.ageDays >= Human::kAdultAgeDays;
     if (human.female && adult && !human.pregnant && human.mateCooldownDays == 0 &&
         human.daysWithoutFood <= 4 && human.daysWithoutWater <= 4) {
       bool canMate = true;
@@ -1477,15 +1650,16 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
             maleCount += AdultMaleCountAt(mx, my);
           }
         }
-        if (maleCount > 0) {
-          float chance = kMateBaseChance + static_cast<float>(maleCount) * kMatePerMaleChance;
-          if (chance > kMateMaxChance) chance = kMateMaxChance;
-          if (rng.Chance(chance)) {
-            human.pregnant = true;
-            human.gestationDays = 0;
-            human.mateCooldownDays = kMateCooldownDays;
+          if (maleCount > 0) {
+            float chance = kMateBaseChance + static_cast<float>(maleCount) * kMatePerMaleChance;
+            if (chance > kMateMaxChance) chance = kMateMaxChance;
+            float chanceWindow = ChanceWindow(chance, dayDelta);
+            if (rng.Chance(chanceWindow)) {
+              human.pregnant = true;
+              human.gestationDays = 0;
+              human.mateCooldownDays = kMateCooldownDays;
+            }
           }
-        }
       }
     }
 
@@ -1531,7 +1705,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       }
     }
 
-    if (RollOldAgeDeath(rng, human.ageDays, human.legendary)) {
+    if (RollOldAgeDeathWindow(rng, ageDaysStart, dayDelta, human.legendary)) {
       RecordDeath(human.id, dayCount, DeathReason::OldAge);
       human.alive = false;
       deathsToday++;

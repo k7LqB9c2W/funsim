@@ -25,6 +25,7 @@ enum class BuildingType : uint8_t {
   Farm,
   Granary,
   Well,
+  WatchTower,
 };
 
 struct Tile {
@@ -116,7 +117,7 @@ class World {
     MarkBuildingDirty();
   }
 
-  void UpdateDaily(Random& rng);
+  void UpdateDaily(Random& rng, int dayDelta);
   void RecomputeScentFields();
   void RecomputeHomeField(const SettlementManager& settlements);
 
