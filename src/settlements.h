@@ -86,6 +86,9 @@ struct Settlement {
   int warId = -1;
   int warTargetSettlementId = -1;
   int lastWarOrderDay = 0;
+  int defenseTargetX = 0;
+  int defenseTargetY = 0;
+  bool hasDefenseTarget = false;
 
   float captureProgress = 0.0f;
   int captureLeaderFactionId = -1;
@@ -154,6 +157,8 @@ class SettlementManager {
                    std::vector<VillageMarker>& markers, FactionManager& factions);
   void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers,
                    FactionManager& factions);
+  void UpdateArmyOrders(World& world, HumanManager& humans, Random& rng, int dayCount, int dayDelta,
+                        FactionManager& factions);
   void RefreshBuildingStats(const World& world) { RecomputeSettlementBuildings(world); }
   int ConsumeWarDeaths();
 
