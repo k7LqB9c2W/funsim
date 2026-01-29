@@ -993,9 +993,6 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           case BuildingType::Well:
             coord = AtlasCoord{1, 1};
             break;
-          case BuildingType::WatchTower:
-            coord = AtlasCoord{1, 0};
-            break;
           default:
             coord = AtlasCoord{0, 0};
             break;
@@ -1086,6 +1083,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     const float worldX = static_cast<float>(human.x) * tileSize;
     const float worldY = static_cast<float>(human.y) * tileSize;
 
+    if (config.showSoldierTileMarkers && human.role == Role::Soldier) {
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, 40, 255, 80, 70);
+      SDL_FRect tileDst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
+      SDL_RenderFillRectF(renderer, &tileDst);
+    }
+
     const float shadowW = tileSize * 0.55f;
     const float shadowH = tileSize * 0.22f;
     const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.0f;
@@ -1113,6 +1117,34 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       const float dotY = worldY + tileSize * 0.05f;
       SDL_FRect dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
       SDL_RenderFillRectF(renderer, &dotDst);
+    }
+  }
+
+  const auto& arrows = humans.Arrows();
+  if (!arrows.empty()) {
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (const auto& arrow : arrows) {
+      int tx = static_cast<int>(arrow.x);
+      int ty = static_cast<int>(arrow.y);
+      if (tx < minX - 2 || tx > maxX + 2 || ty < minY - 2 || ty > maxY + 2) continue;
+
+      SDL_Color color{220, 220, 220, 200};
+      if (arrow.shooterFactionId > 0) {
+        const Faction* faction = factions.Get(arrow.shooterFactionId);
+        if (faction) {
+          color = SDL_Color{faction->color.r, faction->color.g, faction->color.b, 210};
+        }
+      }
+      SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+
+      float worldX0 = arrow.prevX * tileSize;
+      float worldY0 = arrow.prevY * tileSize;
+      float worldX1 = arrow.x * tileSize;
+      float worldY1 = arrow.y * tileSize;
+      float sx0 = 0.0f, sy0 = 0.0f, sx1 = 0.0f, sy1 = 0.0f;
+      WorldToScreen(camera, worldX0, worldY0, sx0, sy0);
+      WorldToScreen(camera, worldX1, worldY1, sx1, sy1);
+      SDL_RenderDrawLineF(renderer, sx0, sy0, sx1, sy1);
     }
   }
 

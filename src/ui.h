@@ -58,7 +58,6 @@ struct UIState {
   bool warEnabled = true;
   bool rebellionsEnabled = true;
   bool starvationDeathEnabled = true;
-  bool dehydrationDeathEnabled = true;
   OverlayMode overlayMode = OverlayMode::FactionTerritory;
   bool wholeMapView = false;
   int territoryOverlayAlpha = 90;
@@ -67,6 +66,7 @@ struct UIState {
   bool showWarArrows = true;
   bool showTroopCounts = true;
   bool showTroopCountsAllZones = false;
+  bool showSoldierTileMarkers = true;
   int worldSizeIndex = 0;
   bool newWorld = false;
   bool saveMap = false;

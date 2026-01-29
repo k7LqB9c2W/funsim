@@ -19,7 +19,7 @@ namespace {
 constexpr int kTileSize = 32;
 constexpr int kDefaultWidth = 256;
 constexpr int kDefaultHeight = 144;
-constexpr int kCalendarDaysPerCoarseDay = 20;
+constexpr int kCalendarDaysPerCoarseDay = 30;
 
 float Clamp(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
@@ -205,7 +205,6 @@ void App::Update(float dt) {
   factions_.SetWarEnabled(ui_.warEnabled);
   settlements_.SetRebellionsEnabled(ui_.rebellionsEnabled);
   humans_.SetAllowStarvationDeath(ui_.starvationDeathEnabled);
-  humans_.SetAllowDehydrationDeath(ui_.dehydrationDeathEnabled);
   if (ui_.requestArmyOrdersRefresh && !macroActive_) {
     settlements_.UpdateArmyOrders(world_, humans_, rng_, stats_.dayCount, 1, factions_);
   }
@@ -337,6 +336,7 @@ void App::RenderFrame() {
   overlayConfig.showWarArrows = ui_.showWarArrows;
   overlayConfig.showTroopCounts = ui_.showTroopCounts;
   overlayConfig.showTroopCountsAllZones = ui_.showTroopCountsAllZones;
+  overlayConfig.showSoldierTileMarkers = ui_.showSoldierTileMarkers;
   rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
                          villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
                          ui_.overlayMode, overlayConfig);
@@ -358,6 +358,10 @@ void App::StepDayCoarse(int dayDelta) {
   stats_.deathsToday = 0;
   stats_.dayCount += dayDelta;
   CrashContextSetDay(stats_.dayCount);
+  std::vector<int> warsBefore;
+  for (const auto& war : factions_.Wars()) {
+    if (war.active) warsBefore.push_back(war.id);
+  }
   CrashContextSetStage("StepDay:World");
   world_.UpdateDaily(rng_, dayDelta);
   CrashContextSetStage("StepDay:Settlements");
@@ -383,6 +387,15 @@ void App::StepDayCoarse(int dayDelta) {
     factions_.UpdateLeaders(settlements_, humans_);
   }
   factions_.UpdateDiplomacy(settlements_, rng_, stats_.dayCount);
+  std::vector<int> warsStarted;
+  for (const auto& war : factions_.Wars()) {
+    if (!war.active) continue;
+    if (std::find(warsBefore.begin(), warsBefore.end(), war.id) != warsBefore.end()) continue;
+    warsStarted.push_back(war.id);
+  }
+  if (!macroActive_ && !warsStarted.empty()) {
+    settlements_.MobilizeForWarStart(humans_, rng_, factions_, warsStarted);
+  }
   settlements_.UpdateArmyOrders(world_, humans_, rng_, stats_.dayCount, dayDelta, factions_);
   if (ui_.warLoggingEnabled) {
     AppendWarLog(dayDelta);

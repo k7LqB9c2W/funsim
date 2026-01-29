@@ -67,7 +67,6 @@ struct Faction {
 
 struct AllianceBonus {
   float soldierCapMult = 1.0f;
-  int watchtowerCapBonus = 0;
   float defenderCasualtyMult = 1.0f;
   float attackerCasualtyMult = 1.0f;
 };

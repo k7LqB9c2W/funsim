@@ -41,7 +41,6 @@ struct Settlement {
   static constexpr int kGranaryWoodCost = 6;
   static constexpr int kWellWoodCost = 8;
   static constexpr int kTownHallWoodCost = 18;
-  static constexpr int kWatchTowerWoodCost = 20;
   static constexpr int kFarmYield = 50;
   static constexpr int kFarmReadyStage = 2;
 
@@ -64,7 +63,6 @@ struct Settlement {
   int farms = 0;
   int granaries = 0;
   int wells = 0;
-  int watchtowers = 0;
   int farmsPlanted = 0;
   int farmsReady = 0;
   int townHalls = 0;
@@ -175,8 +173,13 @@ class SettlementManager {
                    FactionManager& factions);
   void UpdateArmyOrders(World& world, HumanManager& humans, Random& rng, int dayCount, int dayDelta,
                         FactionManager& factions);
+  void MobilizeForWarStart(HumanManager& humans, Random& rng, const FactionManager& factions,
+                           const std::vector<int>& warIdsStarted);
   void RefreshBuildingStats(const World& world) { RecomputeSettlementBuildings(world); }
   int ConsumeWarDeaths();
+  void AddWarDeaths(int count) {
+    if (count > 0) warDeathsPending_ += count;
+  }
 
   int Count() const { return static_cast<int>(settlements_.size()); }
   const std::vector<Settlement>& Settlements() const { return settlements_; }

@@ -22,24 +22,43 @@ constexpr float kMateMaxChance = 0.25f;
 constexpr float kStepsPerDay = 8.0f;
 constexpr int kBlockedReplanTicks = 8;
 constexpr int kFoodIntervalDays = 3;
-constexpr int kFoodGraceDays = 21;
-constexpr int kFoodMaxDays = 35;
 constexpr int kWaterGraceDays = 3;
 constexpr int kWaterMaxDays = 7;
-constexpr int kCarryFoodEmergencyDays = 3;
+constexpr int kNutritionMax = 100;
+constexpr int kNutritionEatThreshold = 60;
+constexpr int kNutritionFromBread = 100;
+constexpr int kNutritionFromBerries = 30;
+constexpr float kNutritionMonthsPerPoint = 1.6f;
+constexpr int kStarvationDamage = 5;
+constexpr int kCarryFoodEatThreshold = 20;
+constexpr int kMarchTargetWeight = 240;
+constexpr int kMarchNoiseRange = 20;
+constexpr int kBowRangeTiles = 9;
+constexpr float kBowCooldownSeconds = 0.8f;
+constexpr float kArrowSpeedTilesPerSecond = 18.0f;
+constexpr float kArrowTtlSeconds = 1.8f;
+constexpr float kArrowHitRadiusTiles = 0.22f;
+constexpr int kArrowDamage = 25;
+constexpr int kMaxActiveArrows = 20000;
 constexpr int kMateFoodReservePerPop = 10;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGathererWanderRadius = 18;
 constexpr int kScoutWanderRadius = 26;
 constexpr int kNoStockFoodSearchRadius = 24;
 constexpr int kNoStockFoodSearchSamples = 16;
-constexpr int kDaysPerYear = 365;
-constexpr int kOldAgeStartDays = 80 * kDaysPerYear;
-constexpr int kOldAgeMaxDays = 130 * kDaysPerYear;
+constexpr int kOldAgeStartDays = 80 * Human::kDaysPerYear;
+constexpr int kOldAgeMaxDays = 130 * Human::kDaysPerYear;
 constexpr uint16_t kOldAgeMaxDailyChanceQ16 = 1311;  // ~0.02 * 65535
 
 constexpr int kMacroBins = 6;
-constexpr int kMacroBinDays[kMacroBins] = {365, 4 * 365, 13 * 365, 22 * 365, 20 * 365, 200 * 365};
+constexpr int kMacroBinDays[kMacroBins] = {
+    Human::kDaysPerYear,
+    4 * Human::kDaysPerYear,
+    13 * Human::kDaysPerYear,
+    22 * Human::kDaysPerYear,
+    20 * Human::kDaysPerYear,
+    200 * Human::kDaysPerYear,
+};
 constexpr float kMacroDeathRate[kMacroBins] = {0.0020f, 0.0003f, 0.00008f, 0.00012f, 0.0006f, 0.0025f};
 constexpr float kMacroBirthRatePerDay = 0.0014f;
 
@@ -79,6 +98,16 @@ int ClampInt(int value, int min_value, int max_value) {
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
   return value;
+}
+
+void AddNutrition(Human& human, int amount) {
+  human.nutrition = ClampInt(human.nutrition + amount, 0, kNutritionMax);
+}
+
+int FactionForHuman(const SettlementManager& settlements, const Human& human) {
+  if (human.settlementId <= 0) return -1;
+  const Settlement* settlement = settlements.Get(human.settlementId);
+  return settlement ? settlement->factionId : -1;
 }
 
 bool SettlementHasStockFood(const SettlementManager& settlements, const Human& human) {
@@ -376,8 +405,6 @@ int BuildWoodCost(BuildingType type) {
       return Settlement::kGranaryWoodCost;
     case BuildingType::Well:
       return Settlement::kWellWoodCost;
-    case BuildingType::WatchTower:
-      return Settlement::kWatchTowerWoodCost;
     default:
       return 0;
   }
@@ -504,10 +531,11 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.alive = true;
   human.pregnant = false;
   human.gestationDays = 0;
-  human.daysWithoutFood = 0;
+  human.nutrition = 100;
+  human.nutritionMonthAccumulator = 0.0f;
+  human.maxHealth = 100;
+  human.health = 100;
   human.daysWithoutWater = 0;
-  human.foodCooldownDays = static_cast<uint8_t>(
-      rng.RangeInt(0, std::max(0, kFoodIntervalDays - 1)));
   human.animTimer = 0.0f;
   human.animFrame = 0;
   human.moving = false;
@@ -632,6 +660,14 @@ void HumanManager::EnsureCrowdGrids(int w, int h) {
     adultMaleStampByTile_.clear();
     adultMaleCountByTile_.clear();
     adultMaleSampleIdByTile_.clear();
+    soldierGridGeneration_ = 1;
+    soldierStampByTile_.clear();
+    soldierCountByTile_.clear();
+    soldierSampleIdByTile_.clear();
+    unitGridGeneration_ = 1;
+    unitStampByTile_.clear();
+    unitCountByTile_.clear();
+    unitSampleIdByTile_.clear();
     return;
   }
 
@@ -646,6 +682,14 @@ void HumanManager::EnsureCrowdGrids(int w, int h) {
   adultMaleStampByTile_.assign(total, 0u);
   adultMaleCountByTile_.assign(total, 0);
   adultMaleSampleIdByTile_.assign(total, -1);
+  soldierGridGeneration_ = 1;
+  soldierStampByTile_.assign(total, 0u);
+  soldierCountByTile_.assign(total, 0);
+  soldierSampleIdByTile_.assign(total, -1);
+  unitGridGeneration_ = 1;
+  unitStampByTile_.assign(total, 0u);
+  unitCountByTile_.assign(total, 0);
+  unitSampleIdByTile_.assign(total, -1);
 }
 
 int HumanManager::FindMateTargetId(const Human& human, const World& world, Random& rng) const {
@@ -691,12 +735,13 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     }
   }
 
-  bool thirsty = human.daysWithoutWater >= 2;
-  bool hungry = human.daysWithoutFood >= 2;
+  const bool isWarSoldier =
+      (human.role == Role::Soldier && human.armyState != ArmyState::Idle && human.warId > 0);
+  bool hungry = (human.nutrition <= kNutritionEatThreshold) && !isWarSoldier;
   bool adult = human.ageDays >= Human::kAdultAgeDays;
 
   bool mobilized = (human.role == Role::Soldier && human.armyState != ArmyState::Idle);
-  if (mobilized && !nearFire && !thirsty && !hungry) {
+  if (mobilized && !nearFire && !hungry) {
     human.hasTask = false;
     human.mateTargetId = -1;
 
@@ -749,27 +794,6 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
   if (nearFire) {
     human.goal = Goal::FleeFire;
     human.mateTargetId = -1;
-  } else if (thirsty) {
-    human.goal = Goal::SeekWater;
-    human.mateTargetId = -1;
-    bool hasTarget = false;
-    if (world.InBounds(human.lastWaterX, human.lastWaterY) &&
-        world.At(human.lastWaterX, human.lastWaterY).type == TileType::FreshWater) {
-      human.targetX = human.lastWaterX;
-      human.targetY = human.lastWaterY;
-      hasTarget = true;
-    } else if (human.settlementId != -1) {
-      const Settlement* settlement = settlements.Get(human.settlementId);
-      if (settlement && settlement->hasWaterTarget) {
-        human.targetX = settlement->waterTargetX;
-        human.targetY = settlement->waterTargetY;
-        hasTarget = true;
-      }
-    }
-    if (!hasTarget) {
-      human.targetX = human.x;
-      human.targetY = human.y;
-    }
   } else if (hungry) {
     human.goal = Goal::SeekFood;
     human.mateTargetId = -1;
@@ -806,7 +830,7 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     }
   } else {
     bool canMate = adult && human.female && !human.pregnant && human.mateCooldownDays == 0 &&
-                   human.daysWithoutFood <= 4 && human.daysWithoutWater <= 4;
+                   human.nutrition >= 50;
     if (canMate && human.settlementId != -1) {
       const Settlement* settlement = settlements.Get(human.settlementId);
       if (!settlement || settlement->stockFood < settlement->population * kMateFoodReservePerPop ||
@@ -867,7 +891,7 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
 
   int minTicks = ticksPerDay / 2;
   int maxTicks = ticksPerDay * 2;
-  if (human.daysWithoutFood >= 2 || human.daysWithoutWater >= 2) {
+  if (hungry) {
     minTicks = ticksPerDay / 3;
     maxTicks = ticksPerDay;
   }
@@ -912,9 +936,10 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
   }
 
-  bool thirsty = human.daysWithoutWater >= 2;
-  bool hungry = human.daysWithoutFood >= 2;
-  bool emergency = nearFire || thirsty || hungry;
+  const bool isWarSoldier =
+      (human.role == Role::Soldier && human.armyState != ArmyState::Idle && human.warId > 0);
+  bool hungry = (human.nutrition <= kNutritionEatThreshold) && !isWarSoldier;
+  bool emergency = nearFire || hungry;
   bool mobilized = (human.role == Role::Soldier && human.armyState != ArmyState::Idle);
   bool haulingFood = human.hasTask && human.taskType == TaskType::HaulToStockpile &&
                      human.carryFood > 0;
@@ -928,11 +953,6 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       human.hasTask = false;
     }
     human.mateTargetId = -1;
-  } else if (thirsty && human.goal != Goal::SeekWater) {
-    human.goal = Goal::SeekWater;
-    human.hasTask = false;
-    human.mateTargetId = -1;
-    human.forceReplan = true;
   } else if (hungry && human.goal != Goal::SeekFood) {
     if (haulingFood) {
       human.goal = Goal::StayHome;
@@ -945,20 +965,6 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
           human.taskType != TaskType::HarvestFarm) {
         human.hasTask = false;
         human.forceReplan = true;
-      }
-    }
-  }
-
-  if (thirsty && human.goal == Goal::SeekWater) {
-    if (world.InBounds(human.lastWaterX, human.lastWaterY) &&
-        world.At(human.lastWaterX, human.lastWaterY).type == TileType::FreshWater) {
-      human.targetX = human.lastWaterX;
-      human.targetY = human.lastWaterY;
-    } else if (human.settlementId != -1) {
-      const Settlement* settlement = settlements.Get(human.settlementId);
-      if (settlement && settlement->hasWaterTarget) {
-        human.targetX = settlement->waterTargetX;
-        human.targetY = settlement->waterTargetY;
       }
     }
   }
@@ -1147,7 +1153,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
         int dist = Manhattan(nx, ny, human.targetX, human.targetY);
         int weight = 40;
         if (isMarchingSoldier) {
-          weight = 120;
+          weight = kMarchTargetWeight;
         }
         score -= dist * weight;
         break;
@@ -1191,7 +1197,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
                                static_cast<uint32_t>(nx), static_cast<uint32_t>(ny));
     int noiseRange = 200;
     if (isMarchingSoldier) {
-      noiseRange = 60;
+      noiseRange = kMarchNoiseRange;
     }
     score += static_cast<int>(noise % static_cast<uint32_t>(noiseRange)) - (noiseRange / 2);
 
@@ -1344,12 +1350,64 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
 
 void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Random& rng,
                               int tickCount, float tickSeconds, int ticksPerDay) {
-  (void)tickSeconds;
   if (macroActive_) return;
   if (humans_.empty()) return;
 
   CrashContextSetStage("Humans::UpdateTick");
+  EnsureCrowdGrids(world.width(), world.height());
   const float stepsPerTick = kStepsPerDay / static_cast<float>(ticksPerDay);
+
+  if (!arrows_.empty()) {
+    auto indexForId = [&](int id) -> int {
+      if (id <= 0 || id >= static_cast<int>(humanIdToIndex_.size())) return -1;
+      int idx = humanIdToIndex_[id];
+      if (idx < 0 || idx >= static_cast<int>(humans_.size())) return -1;
+      return idx;
+    };
+
+    size_t write = 0;
+    const float hitRadiusSq = kArrowHitRadiusTiles * kArrowHitRadiusTiles;
+    for (size_t read = 0; read < arrows_.size(); ++read) {
+      ArrowProjectile arrow = arrows_[read];
+      arrow.prevX = arrow.x;
+      arrow.prevY = arrow.y;
+      arrow.x += arrow.vx * tickSeconds;
+      arrow.y += arrow.vy * tickSeconds;
+      arrow.ttlSeconds -= tickSeconds;
+
+      bool keep = (arrow.ttlSeconds > 0.0f);
+      if (keep) {
+        int tidx = indexForId(arrow.targetId);
+        if (tidx < 0) {
+          keep = false;
+        } else {
+          Human& target = humans_[tidx];
+          if (!target.alive) {
+            keep = false;
+          } else {
+            float tx = static_cast<float>(target.x) + 0.5f;
+            float ty = static_cast<float>(target.y) + 0.5f;
+            float dx = tx - arrow.x;
+            float dy = ty - arrow.y;
+            float distSq = dx * dx + dy * dy;
+            if (distSq <= hitRadiusSq) {
+              target.health = std::max(0, target.health - kArrowDamage);
+              if (target.health <= 0) {
+                MarkDeadByIndex(tidx, currentDay_, DeathReason::War);
+                settlements.AddWarDeaths(1);
+              }
+              keep = false;
+            }
+          }
+        }
+      }
+
+      if (keep) {
+        arrows_[write++] = arrow;
+      }
+    }
+    arrows_.resize(write);
+  }
 
   int thinkBudget = ClampInt(static_cast<int>(humans_.size() / 500), 200, 5000);
   for (int i = 0; i < thinkBudget && !humans_.empty(); ++i) {
@@ -1393,6 +1451,206 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       steps++;
     }
   }
+
+  if (crowdGridW_ > 0 && crowdGridH_ > 0) {
+    soldierGridGeneration_++;
+    if (soldierGridGeneration_ == 0) {
+      std::fill(soldierStampByTile_.begin(), soldierStampByTile_.end(), 0u);
+      soldierGridGeneration_ = 1;
+    }
+    unitGridGeneration_++;
+    if (unitGridGeneration_ == 0) {
+      std::fill(unitStampByTile_.begin(), unitStampByTile_.end(), 0u);
+      unitGridGeneration_ = 1;
+    }
+
+    auto stampTile = [&](int x, int y, int humanId) {
+      if (static_cast<unsigned>(x) >= static_cast<unsigned>(crowdGridW_) ||
+          static_cast<unsigned>(y) >= static_cast<unsigned>(crowdGridH_)) {
+        return;
+      }
+      const int idx = y * crowdGridW_ + x;
+      if (soldierStampByTile_[static_cast<size_t>(idx)] != soldierGridGeneration_) {
+        soldierStampByTile_[static_cast<size_t>(idx)] = soldierGridGeneration_;
+        soldierCountByTile_[static_cast<size_t>(idx)] = 0;
+        soldierSampleIdByTile_[static_cast<size_t>(idx)] = -1;
+      }
+      int count = static_cast<int>(++soldierCountByTile_[static_cast<size_t>(idx)]);
+      if (count <= 1 || rng.RangeInt(0, count - 1) == 0) {
+        soldierSampleIdByTile_[static_cast<size_t>(idx)] = humanId;
+      }
+    };
+
+    auto stampUnitTile = [&](int x, int y, int humanId) {
+      if (static_cast<unsigned>(x) >= static_cast<unsigned>(crowdGridW_) ||
+          static_cast<unsigned>(y) >= static_cast<unsigned>(crowdGridH_)) {
+        return;
+      }
+      const int idx = y * crowdGridW_ + x;
+      if (unitStampByTile_[static_cast<size_t>(idx)] != unitGridGeneration_) {
+        unitStampByTile_[static_cast<size_t>(idx)] = unitGridGeneration_;
+        unitCountByTile_[static_cast<size_t>(idx)] = 0;
+        unitSampleIdByTile_[static_cast<size_t>(idx)] = -1;
+      }
+      int count = static_cast<int>(++unitCountByTile_[static_cast<size_t>(idx)]);
+      if (count <= 1 || rng.RangeInt(0, count - 1) == 0) {
+        unitSampleIdByTile_[static_cast<size_t>(idx)] = humanId;
+      }
+    };
+
+    for (const auto& human : humans_) {
+      if (!human.alive) continue;
+      if (human.warId > 0) {
+        stampUnitTile(human.x, human.y, human.id);
+      }
+      if (human.role == Role::Soldier && human.warId > 0) {
+        stampTile(human.x, human.y, human.id);
+      }
+    }
+
+    auto indexForId = [&](int id) -> int {
+      if (id <= 0 || id >= static_cast<int>(humanIdToIndex_.size())) return -1;
+      int idx = humanIdToIndex_[id];
+      if (idx < 0 || idx >= static_cast<int>(humans_.size())) return -1;
+      return idx;
+    };
+
+    auto isValidEnemySoldierTarget = [&](const Human& shooter, int shooterFactionId, int targetId) -> bool {
+      int tidx = indexForId(targetId);
+      if (tidx < 0) return false;
+      const Human& target = humans_[tidx];
+      if (!target.alive) return false;
+      if (target.role != Role::Soldier) return false;
+      if (target.warId != shooter.warId) return false;
+      int targetFactionId = FactionForHuman(settlements, target);
+      if (targetFactionId <= 0) return false;
+      if (targetFactionId == shooterFactionId) return false;
+      int dx = target.x - shooter.x;
+      int dy = target.y - shooter.y;
+      return (dx * dx + dy * dy) <= (kBowRangeTiles * kBowRangeTiles);
+    };
+
+    auto isValidEnemyCivilianTarget = [&](const Human& shooter, int shooterFactionId, int targetId) -> bool {
+      int tidx = indexForId(targetId);
+      if (tidx < 0) return false;
+      const Human& target = humans_[tidx];
+      if (!target.alive) return false;
+      if (target.role == Role::Soldier) return false;
+      if (target.warId != shooter.warId) return false;
+      int targetFactionId = FactionForHuman(settlements, target);
+      if (targetFactionId <= 0) return false;
+      if (targetFactionId == shooterFactionId) return false;
+      int dx = target.x - shooter.x;
+      int dy = target.y - shooter.y;
+      return (dx * dx + dy * dy) <= (kBowRangeTiles * kBowRangeTiles);
+    };
+
+    for (auto& shooter : humans_) {
+      if (!shooter.alive) continue;
+      if (shooter.role != Role::Soldier) continue;
+      if (shooter.warId <= 0) continue;
+      if (shooter.armyState == ArmyState::Idle) continue;
+
+      if (shooter.bowCooldownSeconds > 0.0f) {
+        shooter.bowCooldownSeconds = std::max(0.0f, shooter.bowCooldownSeconds - tickSeconds);
+        continue;
+      }
+
+      int shooterFactionId = FactionForHuman(settlements, shooter);
+      if (shooterFactionId <= 0) continue;
+
+      int enemySoldierTargetId = -1;
+      int bestTargetId = -1;
+      if (shooter.bowTargetId > 0 &&
+          isValidEnemySoldierTarget(shooter, shooterFactionId, shooter.bowTargetId)) {
+        enemySoldierTargetId = shooter.bowTargetId;
+      } else {
+        int bestDistSq = std::numeric_limits<int>::max();
+        for (int dy = -kBowRangeTiles; dy <= kBowRangeTiles; ++dy) {
+          int y = shooter.y + dy;
+          if (y < 0 || y >= crowdGridH_) continue;
+          for (int dx = -kBowRangeTiles; dx <= kBowRangeTiles; ++dx) {
+            int x = shooter.x + dx;
+            if (x < 0 || x >= crowdGridW_) continue;
+            int distSq = dx * dx + dy * dy;
+            if (distSq > kBowRangeTiles * kBowRangeTiles) continue;
+            int idx = y * crowdGridW_ + x;
+            if (soldierStampByTile_[static_cast<size_t>(idx)] != soldierGridGeneration_) continue;
+            int candidateId = soldierSampleIdByTile_[static_cast<size_t>(idx)];
+            if (candidateId <= 0) continue;
+            if (!isValidEnemySoldierTarget(shooter, shooterFactionId, candidateId)) continue;
+            if (distSq < bestDistSq) {
+              bestDistSq = distSq;
+              enemySoldierTargetId = candidateId;
+            }
+          }
+        }
+      }
+
+      if (enemySoldierTargetId > 0) {
+        bestTargetId = enemySoldierTargetId;
+      } else {
+        if (shooter.bowTargetId > 0 &&
+            isValidEnemyCivilianTarget(shooter, shooterFactionId, shooter.bowTargetId)) {
+          bestTargetId = shooter.bowTargetId;
+        } else {
+          int bestDistSq = std::numeric_limits<int>::max();
+          for (int dy = -kBowRangeTiles; dy <= kBowRangeTiles; ++dy) {
+            int y = shooter.y + dy;
+            if (y < 0 || y >= crowdGridH_) continue;
+            for (int dx = -kBowRangeTiles; dx <= kBowRangeTiles; ++dx) {
+              int x = shooter.x + dx;
+              if (x < 0 || x >= crowdGridW_) continue;
+              int distSq = dx * dx + dy * dy;
+              if (distSq > kBowRangeTiles * kBowRangeTiles) continue;
+              int idx = y * crowdGridW_ + x;
+              if (unitStampByTile_[static_cast<size_t>(idx)] != unitGridGeneration_) continue;
+              int candidateId = unitSampleIdByTile_[static_cast<size_t>(idx)];
+              if (candidateId <= 0) continue;
+              if (!isValidEnemyCivilianTarget(shooter, shooterFactionId, candidateId)) continue;
+              if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                bestTargetId = candidateId;
+              }
+            }
+          }
+        }
+      }
+
+      if (bestTargetId <= 0) continue;
+      int tidx = indexForId(bestTargetId);
+      if (tidx < 0) continue;
+      const Human& target = humans_[tidx];
+      if (!target.alive) continue;
+
+      if (static_cast<int>(arrows_.size()) < kMaxActiveArrows) {
+        float sx = static_cast<float>(shooter.x) + 0.5f;
+        float sy = static_cast<float>(shooter.y) + 0.5f;
+        float tx = static_cast<float>(target.x) + 0.5f;
+        float ty = static_cast<float>(target.y) + 0.5f;
+        float dx = tx - sx;
+        float dy = ty - sy;
+        float lenSq = dx * dx + dy * dy;
+        if (lenSq > 0.0001f) {
+          float invLen = 1.0f / std::sqrt(lenSq);
+          ArrowProjectile arrow;
+          arrow.x = sx;
+          arrow.y = sy;
+          arrow.prevX = sx;
+          arrow.prevY = sy;
+          arrow.vx = dx * invLen * kArrowSpeedTilesPerSecond;
+          arrow.vy = dy * invLen * kArrowSpeedTilesPerSecond;
+          float travel = std::sqrt(lenSq) / kArrowSpeedTilesPerSecond;
+          arrow.ttlSeconds = std::min(kArrowTtlSeconds, travel + 0.25f);
+          arrow.targetId = bestTargetId;
+          arrow.shooterFactionId = shooterFactionId;
+          arrows_.push_back(arrow);
+          shooter.bowCooldownSeconds = kBowCooldownSeconds * rng.RangeFloat(0.85f, 1.15f);
+          shooter.bowTargetId = bestTargetId;
+        }
+      }
+    }
+  }
 }
 
 void HumanManager::MarkDeadByIndex(int index, int day, DeathReason reason) {
@@ -1414,6 +1672,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
   if (macroActive_) return;
   CrashContextSetStage("Humans::UpdateDailyCoarse begin");
   CrashContextSetPopulation(static_cast<int>(humans_.size()));
+  currentDay_ = dayCount;
   birthsToday = 0;
   deathsToday = 0;
   if (dayDelta < 1) dayDelta = 1;
@@ -1502,17 +1761,38 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
 
     const Tile& tile = world.At(human.x, human.y);
-    if (human.foodCooldownDays > 0) {
-      human.foodCooldownDays--;
-      human.daysWithoutFood = 0;
-    } else {
+    const float monthDelta = static_cast<float>(dayDelta) / 30.0f;
+    human.nutritionMonthAccumulator += monthDelta;
+    while (human.nutritionMonthAccumulator >= kNutritionMonthsPerPoint) {
+      if (human.nutrition > 0) {
+        human.nutrition = std::max(0, human.nutrition - 1);
+      } else if (allowStarvationDeath_) {
+        int damage = kStarvationDamage;
+        if (human.legendary) {
+          damage = std::max(1, damage / 2);
+        }
+        human.health = std::max(0, human.health - damage);
+        if (human.health <= 0) {
+          RecordDeath(human.id, dayCount, DeathReason::Starvation);
+          human.alive = false;
+          deathsToday++;
+          break;
+        }
+      }
+      human.nutritionMonthAccumulator -= kNutritionMonthsPerPoint;
+    }
+    if (!human.alive) continue;
+
+    if (human.nutrition <= kNutritionEatThreshold) {
       bool ate = false;
       int eatX = human.x;
       int eatY = human.y;
+      int nutritionGain = 0;
 
       if (settlement && settlement->stockFood > 0) {
         settlement->stockFood--;
         ate = true;
+        nutritionGain = kNutritionFromBread;
       }
 
       if (!ate) {
@@ -1533,6 +1813,9 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
               break;
             }
           }
+        }
+        if (ate) {
+          nutritionGain = kNutritionFromBerries;
         }
       }
 
@@ -1559,6 +1842,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
           }
           world.EditTile(human.x, human.y, [&](Tile& t) { t.farmStage = 0; });
           ate = true;
+          nutritionGain = kNutritionFromBerries;
         } else {
           const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
           for (const auto& d : dirs) {
@@ -1588,6 +1872,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
               }
               world.EditTile(nx, ny, [&](Tile& t) { t.farmStage = 0; });
               ate = true;
+              nutritionGain = kNutritionFromBerries;
               eatX = nx;
               eatY = ny;
               break;
@@ -1596,69 +1881,27 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         }
       }
 
-      if (!ate && human.carryFood > 0 && human.daysWithoutFood >= kCarryFoodEmergencyDays) {
+      if (!ate && human.carryFood > 0 && human.nutrition <= kCarryFoodEatThreshold) {
         human.carryFood--;
         human.carrying = (human.carryFood > 0 || human.carryWood > 0);
         ate = true;
+        nutritionGain = kNutritionFromBerries;
       }
 
       if (ate) {
-        human.daysWithoutFood = 0;
+        AddNutrition(human, nutritionGain);
         human.lastFoodX = eatX;
         human.lastFoodY = eatY;
-        human.foodCooldownDays = static_cast<uint8_t>(
-            std::max(0, kFoodIntervalDays - 1));
-      } else {
-        human.daysWithoutFood++;
       }
     }
 
-    auto findDrinkableWater = [&](int cx, int cy, int& outX, int& outY) {
-      const Tile& here = world.At(cx, cy);
-      if (here.type == TileType::FreshWater ||
-          (here.building == BuildingType::Well && world.WellRadiusAt(cx, cy) > 0)) {
-        outX = cx;
-        outY = cy;
-        return true;
-      }
-      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-      for (const auto& d : dirs) {
-        int nx = cx + d[0];
-        int ny = cy + d[1];
-        if (!world.InBounds(nx, ny)) continue;
-        const Tile& neighbor = world.At(nx, ny);
-        if (neighbor.type == TileType::FreshWater ||
-            (neighbor.building == BuildingType::Well && world.WellRadiusAt(nx, ny) > 0)) {
-          outX = nx;
-          outY = ny;
-          return true;
-        }
-      }
-      return false;
-    };
-
-    int drinkX = human.x;
-    int drinkY = human.y;
-    if (findDrinkableWater(human.x, human.y, drinkX, drinkY)) {
-      human.daysWithoutWater = 0;
-      human.lastWaterX = drinkX;
-      human.lastWaterY = drinkY;
-    } else if (settlement) {
-      int dist = Manhattan(human.x, human.y, human.homeX, human.homeY);
-      if (world.WaterScentAt(human.homeX, human.homeY) > 20000 && dist <= 12) {
-        human.daysWithoutWater = 0;
-        human.lastWaterX = human.homeX;
-        human.lastWaterY = human.homeY;
-      } else {
-        human.daysWithoutWater++;
-      }
-    } else {
-      human.daysWithoutWater++;
-    }
+    human.daysWithoutWater = 0;
+    human.lastWaterX = human.x;
+    human.lastWaterY = human.y;
 
     bool adult = human.ageDays >= Human::kAdultAgeDays;
     if (human.female && adult && !human.pregnant && human.mateCooldownDays == 0 &&
-        human.daysWithoutFood <= 4 && human.daysWithoutWater <= 4) {
+        human.nutrition >= 50) {
       bool canMate = true;
       if (settlement && (settlement->stockFood < settlement->population * kMateFoodReservePerPop ||
                          settlement->housingCap <= settlement->population)) {
@@ -1682,50 +1925,9 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
               human.pregnant = true;
               human.gestationDays = 0;
               human.mateCooldownDays = kMateCooldownDays;
+              human.nutrition = std::max(0, human.nutrition - 50);
             }
           }
-      }
-    }
-
-    int foodMaxDays = kFoodMaxDays + (human.legendary ? 5 : 0);
-    if (allowStarvationDeath_ && human.daysWithoutFood > kFoodGraceDays) {
-      if (human.daysWithoutFood >= foodMaxDays) {
-        RecordDeath(human.id, dayCount, DeathReason::Starvation);
-        human.alive = false;
-        deathsToday++;
-        continue;
-      }
-      float chance = static_cast<float>(human.daysWithoutFood - kFoodGraceDays) /
-                     static_cast<float>(foodMaxDays - kFoodGraceDays);
-      if (human.legendary) {
-        chance *= 0.5f;
-      }
-      if (rng.Chance(chance)) {
-        RecordDeath(human.id, dayCount, DeathReason::Starvation);
-        human.alive = false;
-        deathsToday++;
-        continue;
-      }
-    }
-
-    int waterMaxDays = kWaterMaxDays + (human.legendary ? 2 : 0);
-    if (allowDehydrationDeath_ && human.daysWithoutWater > kWaterGraceDays) {
-      if (human.daysWithoutWater >= waterMaxDays) {
-        RecordDeath(human.id, dayCount, DeathReason::Dehydration);
-        human.alive = false;
-        deathsToday++;
-        continue;
-      }
-      float chance = static_cast<float>(human.daysWithoutWater - kWaterGraceDays) /
-                     static_cast<float>(waterMaxDays - kWaterGraceDays);
-      if (human.legendary) {
-        chance *= 0.6f;
-      }
-      if (rng.Chance(chance)) {
-        RecordDeath(human.id, dayCount, DeathReason::Dehydration);
-        human.alive = false;
-        deathsToday++;
-        continue;
       }
     }
 
@@ -1757,6 +1959,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 void HumanManager::EnterMacro(SettlementManager& settlements) {
   if (macroActive_) return;
   macroActive_ = true;
+  arrows_.clear();
 
   auto& list = settlements.SettlementsMutable();
   for (auto& settlement : list) {
@@ -1823,6 +2026,7 @@ void HumanManager::EnterMacro(SettlementManager& settlements) {
 void HumanManager::ExitMacro(SettlementManager& settlements, Random& rng) {
   if (!macroActive_) return;
   macroActive_ = false;
+  arrows_.clear();
 
   humans_.clear();
   newborns_.clear();
@@ -1941,18 +2145,15 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
         if (foodFactor > 1.0f) foodFactor = 1.0f;
       }
 
-      float waterFactor = static_cast<float>(world.WaterScentAt(settlement.centerX,
-                                                                settlement.centerY)) /
-                          60000.0f;
-      if (waterFactor > 1.0f) waterFactor = 1.0f;
+      float waterFactor = 1.0f;
 
       float housingFactor = (settlement.housingCap > popTotal) ? 1.0f : 0.0f;
 
       int fertileFemales = settlement.macroPopF[3];
       int adultMales = settlement.macroPopM[3] + settlement.macroPopM[4];
       int mates = std::min(fertileFemales, adultMales);
-      float expectedBirths = static_cast<float>(mates) * kMacroBirthRatePerDay * foodFactor *
-                             waterFactor * housingFactor;
+      float expectedBirths =
+          static_cast<float>(mates) * kMacroBirthRatePerDay * foodFactor * waterFactor * housingFactor;
       settlement.macroBirthAccum += expectedBirths;
       int births = static_cast<int>(settlement.macroBirthAccum);
       settlement.macroBirthAccum -= static_cast<float>(births);
@@ -2030,10 +2231,7 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
       }
       if (popTotal > 0) {
         float foodFactor = 0.1f;
-        float waterFactor = static_cast<float>(world.WaterScentAt(macroFallbackX_,
-                                                                  macroFallbackY_)) /
-                            60000.0f;
-        if (waterFactor > 1.0f) waterFactor = 1.0f;
+        float waterFactor = 1.0f;
 
         int fertileFemales = macroFallbackF_[3];
         int adultMales = macroFallbackM_[3] + macroFallbackM_[4];

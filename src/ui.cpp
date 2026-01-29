@@ -119,11 +119,11 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Checkbox("Allow War", &state.warEnabled);
   ImGui::Checkbox("Allow Rebellions", &state.rebellionsEnabled);
   ImGui::Checkbox("Allow Starvation Death", &state.starvationDeathEnabled);
-  ImGui::Checkbox("Allow Dehydration Death", &state.dehydrationDeathEnabled);
   ImGui::Separator();
   ImGui::Text("War Visuals");
   ImGui::Checkbox("War Zone Glow", &state.showWarZones);
   ImGui::Checkbox("War Arrows", &state.showWarArrows);
+  ImGui::Checkbox("Soldier Tile Markers", &state.showSoldierTileMarkers);
   ImGui::Checkbox("Troop Counts", &state.showTroopCounts);
   if (state.showTroopCounts) {
     ImGui::SameLine();
@@ -197,7 +197,6 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                   settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
       ImGui::Text("Army: %d soldiers | General: %s", settlement->soldiers,
                   (settlement->generalHumanId > 0) ? "yes" : "no");
-      ImGui::Text("Watchtowers: %d", settlement->watchtowers);
       if (settlement->warId > 0) {
         ImGui::Text("War #%d | Target settlement %d", settlement->warId, settlement->warTargetSettlementId);
       }
@@ -630,7 +629,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       const Faction* faction = factions.Get(info.factionId);
       const char* factionName = faction ? faction->name.c_str() : "Wanderer";
       ImGui::Separator();
-      ImGui::Text("Legend #%d | Age %d", info.id, info.ageDays / 365);
+      ImGui::Text("Legend #%d | Age %d", info.id, info.ageDays / Human::kDaysPerYear);
       ImGui::Text("Traits: %s", info.traitsText);
       ImGui::Text("Faction: %s | Settlement %d", factionName, info.settlementId);
     }

@@ -720,7 +720,7 @@ AllianceBonus FactionManager::BonusForFaction(int factionId, int dayCount) const
   if (!alliance) return bonus;
 
   int ageDays = std::max(0, dayCount - alliance->createdDay);
-  int years = ageDays / 365;
+  int years = ageDays / Human::kDaysPerYear;
   int level = 1;
   if (years >= 100) {
     level = 5;
@@ -733,7 +733,6 @@ AllianceBonus FactionManager::BonusForFaction(int factionId, int dayCount) const
   }
 
   bonus.soldierCapMult = 1.0f + 0.05f * static_cast<float>(level);
-  bonus.watchtowerCapBonus = (level >= 2) ? 1 : 0;
   bonus.defenderCasualtyMult = (level >= 3) ? 0.92f : 1.0f;
   bonus.attackerCasualtyMult = (level >= 4) ? 1.08f : 1.0f;
   return bonus;
@@ -742,7 +741,7 @@ AllianceBonus FactionManager::BonusForFaction(int factionId, int dayCount) const
 void FactionManager::RecomputeAllianceLevels(int dayCount) {
   for (auto& alliance : alliances_) {
     int ageDays = std::max(0, dayCount - alliance.createdDay);
-    int years = ageDays / 365;
+    int years = ageDays / Human::kDaysPerYear;
     int level = 1;
     if (years >= 100) {
       level = 5;

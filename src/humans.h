@@ -41,8 +41,21 @@ struct DeathSummary {
   int macroFire = 0;
 };
 
+struct ArrowProjectile {
+  float x = 0.0f;     // tile-space (e.g. human.x + 0.5)
+  float y = 0.0f;
+  float prevX = 0.0f;
+  float prevY = 0.0f;
+  float vx = 0.0f;    // tile-space units / second
+  float vy = 0.0f;
+  float ttlSeconds = 0.0f;
+  int targetId = -1;
+  int shooterFactionId = -1;
+};
+
 struct Human {
-  static constexpr int kAdultAgeDays = 18 * 365;
+  static constexpr int kDaysPerYear = 360;
+  static constexpr int kAdultAgeDays = 18 * kDaysPerYear;
 
   int id = 0;
   bool female = false;
@@ -52,9 +65,11 @@ struct Human {
   bool alive = true;
   bool pregnant = false;
   int gestationDays = 0;
-  int daysWithoutFood = 0;
+  int nutrition = 100;  // 0..100
+  float nutritionMonthAccumulator = 0.0f;
+  int maxHealth = 100;
+  int health = 100;
   int daysWithoutWater = 0;
-  uint8_t foodCooldownDays = 0;
   float animTimer = 0.0f;
   int animFrame = 0;
   bool moving = false;
@@ -99,6 +114,9 @@ struct Human {
   int warTargetSettlementId = -1;
   int formationSlot = 0;
   bool isGeneral = false;
+
+  float bowCooldownSeconds = 0.0f;
+  int bowTargetId = -1;
 };
 
 class HumanManager {
@@ -119,11 +137,11 @@ class HumanManager {
   void MarkDeadByIndex(int index, int day, DeathReason reason);
   void RecordWarDeaths(int count);
   void SetAllowStarvationDeath(bool enabled) { allowStarvationDeath_ = enabled; }
-  void SetAllowDehydrationDeath(bool enabled) { allowDehydrationDeath_ = enabled; }
 
   int CountAlive() const;
   const std::vector<Human>& Humans() const { return humans_; }
   std::vector<Human>& HumansMutable() { return humans_; }
+  const std::vector<ArrowProjectile>& Arrows() const { return arrows_; }
   const std::vector<DeathRecord>& DeathLog() const { return deathLog_; }
   const DeathSummary& GetDeathSummary() const { return deathSummary_; }
 
@@ -150,6 +168,7 @@ class HumanManager {
 
   int nextId_ = 1;
   std::vector<Human> humans_;
+  std::vector<ArrowProjectile> arrows_;
   int crowdGridW_ = 0;
   int crowdGridH_ = 0;
   uint32_t crowdGeneration_ = 1;
@@ -158,11 +177,20 @@ class HumanManager {
   std::vector<uint32_t> adultMaleStampByTile_;
   std::vector<int> adultMaleCountByTile_;
   std::vector<int> adultMaleSampleIdByTile_;
+  uint32_t soldierGridGeneration_ = 1;
+  std::vector<uint32_t> soldierStampByTile_;
+  std::vector<uint16_t> soldierCountByTile_;
+  std::vector<int> soldierSampleIdByTile_;
+  uint32_t unitGridGeneration_ = 1;
+  std::vector<uint32_t> unitStampByTile_;
+  std::vector<uint16_t> unitCountByTile_;
+  std::vector<int> unitSampleIdByTile_;
   std::vector<int> humanIdToIndex_;
   std::vector<Human> newborns_;
   std::vector<DeathRecord> deathLog_;
   DeathSummary deathSummary_;
   int thinkCursor_ = 0;
+  int currentDay_ = 0;
   bool macroActive_ = false;
   int macroFallbackM_[6] = {};
   int macroFallbackF_[6] = {};
@@ -171,7 +199,6 @@ class HumanManager {
   int macroFallbackY_ = 0;
   bool macroHasFallback_ = false;
   bool allowStarvationDeath_ = true;
-  bool allowDehydrationDeath_ = true;
 };
 
 const char* DeathReasonName(DeathReason reason);
