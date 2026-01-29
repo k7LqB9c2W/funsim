@@ -1189,7 +1189,11 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     uint32_t noise = HashNoise(static_cast<uint32_t>(human.id),
                                static_cast<uint32_t>(tickCount),
                                static_cast<uint32_t>(nx), static_cast<uint32_t>(ny));
-    score += static_cast<int>(noise % 200) - 100;
+    int noiseRange = 200;
+    if (isMarchingSoldier) {
+      noiseRange = 60;
+    }
+    score += static_cast<int>(noise % static_cast<uint32_t>(noiseRange)) - (noiseRange / 2);
 
     if (score > bestScore) {
       bestScore = score;

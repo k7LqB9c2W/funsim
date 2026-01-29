@@ -127,6 +127,56 @@ class FactionManager {
   int WarCount() const;
   bool CanExpandInto(int sourceFactionId, int targetFactionId, bool resourceStress) const;
   void SetWar(int factionA, int factionB, bool atWar, int dayCount, int initiatorFactionId = -1);
+  void ForceAlliance(int factionA, int factionB, int dayCount) {
+    if (factionA == factionB || factionA <= 0 || factionB <= 0) return;
+    Faction* a = GetMutable(factionA);
+    Faction* b = GetMutable(factionB);
+    if (!a || !b) return;
+
+    // Alliances imply peace between members.
+    SetWar(factionA, factionB, false, dayCount);
+
+    int allianceA = a->allianceId;
+    int allianceB = b->allianceId;
+    if (allianceA > 0 && allianceA == allianceB) return;
+
+    if (allianceA > 0 && allianceB > 0) {
+      const Alliance* source = GetAlliance(allianceB);
+      std::vector<int> moveList = source ? source->members : std::vector<int>{factionB};
+      for (int memberId : moveList) {
+        RemoveFactionFromAlliance(memberId);
+        AddFactionToAlliance(allianceA, memberId);
+      }
+      RecomputeAllianceLevels(dayCount);
+      return;
+    }
+
+    if (allianceA > 0) {
+      RemoveFactionFromAlliance(factionB);
+      AddFactionToAlliance(allianceA, factionB);
+      RecomputeAllianceLevels(dayCount);
+      return;
+    }
+    if (allianceB > 0) {
+      RemoveFactionFromAlliance(factionA);
+      AddFactionToAlliance(allianceB, factionA);
+      RecomputeAllianceLevels(dayCount);
+      return;
+    }
+
+    std::string name = a->name + " Alliance";
+    int newAllianceId = CreateAlliance(name, factionA, dayCount);
+    AddFactionToAlliance(newAllianceId, factionA);
+    AddFactionToAlliance(newAllianceId, factionB);
+    RecomputeAllianceLevels(dayCount);
+  }
+
+  void ForceLeaveAlliance(int factionId) {
+    if (factionId <= 0) return;
+    Faction* faction = GetMutable(factionId);
+    if (!faction || faction->allianceId <= 0) return;
+    RemoveFactionFromAlliance(factionId);
+  }
   void SetWarEnabled(bool enabled);
   bool WarEnabled() const { return warEnabled_; }
 

@@ -3,6 +3,9 @@
 #include <SDL.h>
 #include <SDL_image.h>
 
+#include <unordered_map>
+#include <unordered_set>
+
 #include "factions.h"
 #include "humans.h"
 #include "render.h"
@@ -41,6 +44,8 @@ class App {
   void ClampCamera();
   void RefreshTotals();
   void WriteDeathLog() const;
+  void AppendWarLog(int dayDelta);
+  void AppendWarEvents(int dayDelta);
 
   SDL_Window* window_ = nullptr;
   SDL_Renderer* renderer_ = nullptr;
@@ -79,4 +84,10 @@ class App {
 
   bool prevLeftDown_ = false;
   bool prevRightDown_ = false;
+
+  std::unordered_set<int> prevActiveWarIds_;
+  std::unordered_map<int, int> prevSettlementWarTarget_;
+  std::unordered_map<int, int> prevSettlementWarId_;
+  std::unordered_map<int, int> prevSettlementGeneralId_;
+  std::unordered_map<int, int> prevSettlementSoldiersTracked_;
 };

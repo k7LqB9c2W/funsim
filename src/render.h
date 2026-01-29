@@ -27,6 +27,15 @@ struct VillageMarker {
   int ttlDays = 0;
 };
 
+struct RenderOverlayConfig {
+  int territoryAlpha = 90;          // Used for FactionTerritory/SettlementInfluence fills.
+  float territoryDarken = 0.65f;    // Multiplies faction RGB to reduce saturation.
+  bool showWarZones = true;         // Draw conflict glow regardless of overlay mode.
+  bool showWarArrows = true;        // Draw arrows between warring settlements.
+  bool showTroopCounts = true;      // Draw soldier counts over zones.
+  bool showTroopCountsAllZones = false;  // Otherwise only conflict zones.
+};
+
 class Renderer {
  public:
   Renderer() = default;
@@ -43,6 +52,11 @@ class Renderer {
               const Camera& camera, int windowWidth, int windowHeight,
               const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
               bool hoverValid, int brushSize, OverlayMode overlayMode);
+  void Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
+              const SettlementManager& settlements, const FactionManager& factions,
+              const Camera& camera, int windowWidth, int windowHeight,
+              const std::vector<VillageMarker>& villageMarkers, int hoverTileX, int hoverTileY,
+              bool hoverValid, int brushSize, OverlayMode overlayMode, const RenderOverlayConfig& config);
 
  private:
   void DestroyTerrainCache();
@@ -98,4 +112,14 @@ class Renderer {
     bool used = false;
   };
   std::vector<LabelCacheEntry> labelCache_;
+
+  struct TextCacheEntry {
+    std::string text;
+    SDL_Color color{255, 255, 255, 255};
+    SDL_Texture* texture = nullptr;
+    int width = 0;
+    int height = 0;
+    uint64_t lastUsedFrame = 0;
+  };
+  std::vector<TextCacheEntry> textCache_;
 };

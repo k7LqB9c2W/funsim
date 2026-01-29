@@ -427,6 +427,14 @@ void Renderer::ClearLabelCache() {
     }
   }
   labelCache_.clear();
+
+  for (auto& entry : textCache_) {
+    if (entry.texture) {
+      SDL_DestroyTexture(entry.texture);
+      entry.texture = nullptr;
+    }
+  }
+  textCache_.clear();
 }
 
 void Renderer::UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
@@ -775,6 +783,34 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
                       const Camera& camera, int windowWidth, int windowHeight,
                       const std::vector<VillageMarker>& villageMarkers, int hoverTileX,
                       int hoverTileY, bool hoverValid, int brushSize, OverlayMode overlayMode) {
+  Render(renderer, world, humans, settlements, factions, camera, windowWidth, windowHeight, villageMarkers,
+         hoverTileX, hoverTileY, hoverValid, brushSize, overlayMode, RenderOverlayConfig{});
+}
+
+namespace {
+void WorldToScreen(const Camera& camera, float worldX, float worldY, float& outX, float& outY) {
+  outX = (worldX - camera.x) * camera.zoom;
+  outY = (worldY - camera.y) * camera.zoom;
+}
+
+SDL_Color DarkenColor(SDL_Color in, float darken, Uint8 alpha) {
+  darken = std::max(0.0f, std::min(1.0f, darken));
+  SDL_Color out;
+  out.r = static_cast<Uint8>(std::max(0, std::min(255, static_cast<int>(std::round(in.r * darken)))));
+  out.g = static_cast<Uint8>(std::max(0, std::min(255, static_cast<int>(std::round(in.g * darken)))));
+  out.b = static_cast<Uint8>(std::max(0, std::min(255, static_cast<int>(std::round(in.b * darken)))));
+  out.a = alpha;
+  return out;
+}
+
+}  // namespace
+
+void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
+                      const SettlementManager& settlements, const FactionManager& factions,
+                      const Camera& camera, int windowWidth, int windowHeight,
+                      const std::vector<VillageMarker>& villageMarkers, int hoverTileX,
+                      int hoverTileY, bool hoverValid, int brushSize, OverlayMode overlayMode,
+                      const RenderOverlayConfig& config) {
   const float tileSize = static_cast<float>(kTilePx);
   const float invZoom = 1.0f / camera.zoom;
 
@@ -814,21 +850,30 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   int zoneSize = settlements.ZoneSize();
   int zonesX = settlements.ZonesX();
   int zonesY = settlements.ZonesY();
-  if (overlayMode != OverlayMode::None && zoneSize > 0 && zonesX > 0 && zonesY > 0) {
-    int minZoneX = std::max(0, minX / zoneSize);
-    int minZoneY = std::max(0, minY / zoneSize);
-    int maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
-    int maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
+  int minZoneX = 0;
+  int minZoneY = 0;
+  int maxZoneX = -1;
+  int maxZoneY = -1;
+  if (zoneSize > 0 && zonesX > 0 && zonesY > 0) {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
     int maxPop = 1;
     if (overlayMode == OverlayMode::PopulationHeat) {
+      minZoneX = std::max(0, minX / zoneSize);
+      minZoneY = std::max(0, minY / zoneSize);
+      maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
+      maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
       for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
         for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
           maxPop = std::max(maxPop, settlements.ZonePopAt(zx, zy));
         }
       }
     }
+
+    minZoneX = std::max(0, minX / zoneSize);
+    minZoneY = std::max(0, minY / zoneSize);
+    maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
+    maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
 
     for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
       for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
@@ -848,11 +893,17 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
         if (overlayMode == OverlayMode::FactionTerritory) {
           if (!faction) continue;
-          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, 70);
+          SDL_Color color = DarkenColor(SDL_Color{faction->color.r, faction->color.g, faction->color.b, 255},
+                                        config.territoryDarken,
+                                        static_cast<Uint8>(std::max(0, std::min(255, config.territoryAlpha))));
+          SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
           SDL_RenderFillRectF(renderer, &dst);
         } else if (overlayMode == OverlayMode::SettlementInfluence) {
           if (!faction || !settlement) continue;
-          SDL_SetRenderDrawColor(renderer, faction->color.r, faction->color.g, faction->color.b, 70);
+          SDL_Color color = DarkenColor(SDL_Color{faction->color.r, faction->color.g, faction->color.b, 255},
+                                        config.territoryDarken,
+                                        static_cast<Uint8>(std::max(0, std::min(255, config.territoryAlpha))));
+          SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
           SDL_RenderFillRectF(renderer, &dst);
         } else if (overlayMode == OverlayMode::PopulationHeat) {
           int pop = settlements.ZonePopAt(zx, zy);
@@ -866,6 +917,16 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           Uint8 alpha = static_cast<Uint8>(std::min(200, intensity));
           SDL_SetRenderDrawColor(renderer, 220, 70, 60, alpha);
           SDL_RenderFillRectF(renderer, &dst);
+        }
+
+        if (config.showWarZones) {
+          int intensity = settlements.ZoneConflictAt(zx, zy);
+          if (intensity > 0) {
+            float pulse = 0.65f + 0.35f * std::sin(static_cast<float>(frameCounter_) * 0.06f);
+            Uint8 alpha = static_cast<Uint8>(std::min(200, static_cast<int>(std::round(intensity * pulse))));
+            SDL_SetRenderDrawColor(renderer, 255, 60, 60, alpha);
+            SDL_RenderFillRectF(renderer, &dst);
+          }
         }
 
         if (overlayMode == OverlayMode::FactionTerritory ||
@@ -898,6 +959,14 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         }
       }
     }
+  }
+
+  // If there's no overlay mode, still compute visible zone range for war visuals.
+  if (zoneSize > 0 && zonesX > 0 && zonesY > 0 && maxZoneX < minZoneX) {
+    minZoneX = std::max(0, minX / zoneSize);
+    minZoneY = std::max(0, minY / zoneSize);
+    maxZoneX = std::min(zonesX - 1, maxX / zoneSize);
+    maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
   }
 
   if (buildingsTexture_) {
@@ -1047,6 +1116,60 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     }
   }
 
+  if (config.showWarArrows && zoneSize > 0 && zonesX > 0 && zonesY > 0) {
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    auto drawArrow = [&](float worldFromX, float worldFromY, float worldToX, float worldToY, SDL_Color color) {
+      float sx0 = 0.0f, sy0 = 0.0f, sx1 = 0.0f, sy1 = 0.0f;
+      WorldToScreen(camera, worldFromX, worldFromY, sx0, sy0);
+      WorldToScreen(camera, worldToX, worldToY, sx1, sy1);
+      float dx = sx1 - sx0;
+      float dy = sy1 - sy0;
+      float len = std::sqrt(dx * dx + dy * dy);
+      if (len < 10.0f) return;
+      float ux = dx / len;
+      float uy = dy / len;
+      float size = 14.0f;
+      float ax = sx1 - ux * size;
+      float ay = sy1 - uy * size;
+      float px = -uy;
+      float py = ux;
+      float wing = size * 0.55f;
+      SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+      SDL_RenderDrawLineF(renderer, sx0, sy0, sx1, sy1);
+      SDL_RenderDrawLineF(renderer, sx1, sy1, ax + px * wing, ay + py * wing);
+      SDL_RenderDrawLineF(renderer, sx1, sy1, ax - px * wing, ay - py * wing);
+    };
+
+    for (const auto& settlement : settlements.Settlements()) {
+      if (settlement.population <= 0) continue;
+      if (settlement.centerX < minX || settlement.centerX > maxX ||
+          settlement.centerY < minY || settlement.centerY > maxY) {
+        continue;
+      }
+      if (settlement.warId <= 0 || settlement.factionId <= 0) continue;
+      const Faction* faction = factions.Get(settlement.factionId);
+      SDL_Color color{220, 220, 220, 180};
+      if (faction) {
+        color = SDL_Color{faction->color.r, faction->color.g, faction->color.b, 190};
+      }
+      bool attacker = factions.WarIsAttacker(settlement.warId, settlement.factionId);
+      float fromX = settlement.centerX * tileSize + tileSize * 0.5f;
+      float fromY = settlement.centerY * tileSize + tileSize * 0.5f;
+      if (attacker && settlement.warTargetSettlementId > 0) {
+        const Settlement* target = settlements.Get(settlement.warTargetSettlementId);
+        if (target) {
+          float toX = target->centerX * tileSize + tileSize * 0.5f;
+          float toY = target->centerY * tileSize + tileSize * 0.5f;
+          drawArrow(fromX, fromY, toX, toY, color);
+        }
+      } else if (!attacker && settlement.hasDefenseTarget) {
+        float toX = settlement.defenseTargetX * tileSize + tileSize * 0.5f;
+        float toY = settlement.defenseTargetY * tileSize + tileSize * 0.5f;
+        drawArrow(fromX, fromY, toX, toY, SDL_Color{80, 200, 255, 190});
+      }
+    }
+  }
+
   if (labelFont_) {
     UpdateLabelCache(renderer, settlements, factions);
     const int padding = 3;
@@ -1094,6 +1217,157 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_FRect barFill = MakeDstRect(barX + 1.0f, barY + 1.0f, (barW - 2.0f) * pct, barH - 2.0f, camera);
         SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
         SDL_RenderFillRectF(renderer, &barFill);
+      }
+    }
+  }
+
+  if (config.showTroopCounts && labelFont_ && zoneSize > 0 && zonesX > 0 && zonesY > 0 &&
+      minZoneX <= maxZoneX && minZoneY <= maxZoneY) {
+    const int zoneCount = zonesX * zonesY;
+    std::vector<int> zoneTotal(zoneCount, 0);
+    std::vector<int> zoneTopFaction(zoneCount, -1);
+    std::vector<int> zoneTopCount(zoneCount, 0);
+    std::vector<int> zoneSecondFaction(zoneCount, -1);
+    std::vector<int> zoneSecondCount(zoneCount, 0);
+
+    auto bumpFaction = [&](int idx, int factionId) {
+      zoneTotal[idx]++;
+      if (zoneTopFaction[idx] == factionId) {
+        zoneTopCount[idx]++;
+        return;
+      }
+      if (zoneSecondFaction[idx] == factionId) {
+        zoneSecondCount[idx]++;
+        if (zoneSecondCount[idx] > zoneTopCount[idx]) {
+          std::swap(zoneSecondFaction[idx], zoneTopFaction[idx]);
+          std::swap(zoneSecondCount[idx], zoneTopCount[idx]);
+        }
+        return;
+      }
+      if (zoneTopFaction[idx] == -1 || zoneTopCount[idx] == 0) {
+        zoneTopFaction[idx] = factionId;
+        zoneTopCount[idx] = 1;
+        return;
+      }
+      if (zoneSecondFaction[idx] == -1 || zoneSecondCount[idx] == 0) {
+        zoneSecondFaction[idx] = factionId;
+        zoneSecondCount[idx] = 1;
+        return;
+      }
+      if (zoneTopCount[idx] <= zoneSecondCount[idx]) {
+        zoneTopFaction[idx] = factionId;
+        zoneTopCount[idx] = 1;
+      } else {
+        zoneSecondFaction[idx] = factionId;
+        zoneSecondCount[idx] = 1;
+      }
+    };
+
+    for (const auto& human : humans.Humans()) {
+      if (!human.alive) continue;
+      if (human.role != Role::Soldier) continue;
+      if (human.settlementId <= 0) continue;
+      if (human.x < minX || human.x > maxX || human.y < minY || human.y > maxY) continue;
+      const Settlement* home = settlements.Get(human.settlementId);
+      if (!home || home->factionId <= 0) continue;
+      int zx = human.x / zoneSize;
+      int zy = human.y / zoneSize;
+      if (zx < minZoneX || zx > maxZoneX || zy < minZoneY || zy > maxZoneY) continue;
+      int idx = zy * zonesX + zx;
+      if (idx < 0 || idx >= zoneCount) continue;
+      bumpFaction(idx, home->factionId);
+    }
+
+    auto getTextTexture = [&](const std::string& text, SDL_Color color, int& outW, int& outH) -> SDL_Texture* {
+      for (auto& entry : textCache_) {
+        if (entry.text == text && SameColor(entry.color, color) && entry.texture) {
+          entry.lastUsedFrame = frameCounter_;
+          outW = entry.width;
+          outH = entry.height;
+          return entry.texture;
+        }
+      }
+      SDL_Surface* surface = TTF_RenderUTF8_Blended(labelFont_, text.c_str(), color);
+      if (!surface) {
+        outW = 0;
+        outH = 0;
+        return nullptr;
+      }
+      SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+      if (!texture) {
+        SDL_FreeSurface(surface);
+        outW = 0;
+        outH = 0;
+        return nullptr;
+      }
+      SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+      SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+      TextCacheEntry entry;
+      entry.text = text;
+      entry.color = color;
+      entry.texture = texture;
+      entry.width = surface->w;
+      entry.height = surface->h;
+      entry.lastUsedFrame = frameCounter_;
+      textCache_.push_back(entry);
+      outW = entry.width;
+      outH = entry.height;
+      SDL_FreeSurface(surface);
+      return texture;
+    };
+
+    // Simple pruning to keep cache bounded.
+    const size_t kMaxTextCache = 256;
+    if (textCache_.size() > kMaxTextCache) {
+      std::sort(textCache_.begin(), textCache_.end(),
+                [](const TextCacheEntry& a, const TextCacheEntry& b) { return a.lastUsedFrame < b.lastUsedFrame; });
+      while (textCache_.size() > kMaxTextCache) {
+        auto& victim = textCache_.front();
+        if (victim.texture) SDL_DestroyTexture(victim.texture);
+        textCache_.erase(textCache_.begin());
+      }
+    }
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (int zy = minZoneY; zy <= maxZoneY; ++zy) {
+      for (int zx = minZoneX; zx <= maxZoneX; ++zx) {
+        int idx = zy * zonesX + zx;
+        if (idx < 0 || idx >= zoneCount) continue;
+        if (zoneTotal[idx] <= 0) continue;
+        int intensity = settlements.ZoneConflictAt(zx, zy);
+        if (!config.showTroopCountsAllZones && intensity <= 0) continue;
+
+        std::string text = std::to_string(zoneTotal[idx]);
+        int tw = 0;
+        int th = 0;
+        SDL_Texture* tex = getTextTexture(text, SDL_Color{255, 255, 255, 255}, tw, th);
+        if (!tex || tw <= 0 || th <= 0) continue;
+
+        float worldX = (zx * zoneSize + zoneSize * 0.5f) * tileSize - tw * 0.5f;
+        float worldY = (zy * zoneSize + zoneSize * 0.5f) * tileSize - th * 0.5f;
+        SDL_FRect bg = MakeDstRect(worldX - 3.0f, worldY - 2.0f, tw + 6.0f, th + 4.0f, camera);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 140);
+        SDL_RenderFillRectF(renderer, &bg);
+
+        if (zoneTopFaction[idx] > 0) {
+          const Faction* f = factions.Get(zoneTopFaction[idx]);
+          if (f) {
+            SDL_SetRenderDrawColor(renderer, f->color.r, f->color.g, f->color.b, 220);
+            SDL_FRect dot = MakeDstRect(worldX - 9.0f, worldY + th * 0.5f - 3.0f, 6.0f, 6.0f, camera);
+            SDL_RenderFillRectF(renderer, &dot);
+          }
+        }
+        if (zoneSecondFaction[idx] > 0) {
+          const Faction* f = factions.Get(zoneSecondFaction[idx]);
+          if (f) {
+            SDL_SetRenderDrawColor(renderer, f->color.r, f->color.g, f->color.b, 220);
+            SDL_FRect dot = MakeDstRect(worldX + tw + 3.0f, worldY + th * 0.5f - 3.0f, 6.0f, 6.0f, camera);
+            SDL_RenderFillRectF(renderer, &dot);
+          }
+        }
+
+        SDL_FRect dst = MakeDstRect(worldX, worldY, static_cast<float>(tw), static_cast<float>(th), camera);
+        SDL_RenderCopyF(renderer, tex, nullptr, &dst);
       }
     }
   }
