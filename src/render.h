@@ -34,6 +34,7 @@ struct RenderOverlayConfig {
   bool showWarArrows = true;        // Draw arrows between warring settlements.
   bool showTroopCounts = true;      // Draw soldier counts over zones.
   bool showTroopCountsAllZones = false;  // Otherwise only conflict zones.
+  bool showSoldierTileMarkers = true;    // Draw green tile highlights under soldiers.
 };
 
 class Renderer {
