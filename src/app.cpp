@@ -4,7 +4,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <system_error>
 
@@ -130,7 +133,7 @@ void App::Run() {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
-    DrawUI(ui_, stats_, factions_, settlements_, hoverInfo_);
+    DrawUI(ui_, stats_, factions_, settlements_, humans_, hoverInfo_);
 
     Update(dt);
 
@@ -200,8 +203,12 @@ void App::Update(float dt) {
 
   UpdateWholeMapView();
   factions_.SetWarEnabled(ui_.warEnabled);
+  settlements_.SetRebellionsEnabled(ui_.rebellionsEnabled);
   humans_.SetAllowStarvationDeath(ui_.starvationDeathEnabled);
   humans_.SetAllowDehydrationDeath(ui_.dehydrationDeathEnabled);
+  if (ui_.requestArmyOrdersRefresh && !macroActive_) {
+    settlements_.UpdateArmyOrders(world_, humans_, rng_, stats_.dayCount, 1, factions_);
+  }
 
   if (!io.WantCaptureKeyboard && !ui_.wholeMapView) {
     const Uint8* keys = SDL_GetKeyboardState(nullptr);
@@ -323,9 +330,16 @@ void App::RenderFrame() {
   SDL_SetRenderDrawColor(renderer_, 8, 12, 22, 255);
   SDL_RenderClear(renderer_);
 
+  RenderOverlayConfig overlayConfig;
+  overlayConfig.territoryAlpha = ui_.territoryOverlayAlpha;
+  overlayConfig.territoryDarken = ui_.territoryOverlayDarken;
+  overlayConfig.showWarZones = ui_.showWarZones;
+  overlayConfig.showWarArrows = ui_.showWarArrows;
+  overlayConfig.showTroopCounts = ui_.showTroopCounts;
+  overlayConfig.showTroopCountsAllZones = ui_.showTroopCountsAllZones;
   rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
                          villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
-                         ui_.overlayMode);
+                         ui_.overlayMode, overlayConfig);
 
   ImGui::Render();
   ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer_);
@@ -370,8 +384,183 @@ void App::StepDayCoarse(int dayDelta) {
   }
   factions_.UpdateDiplomacy(settlements_, rng_, stats_.dayCount);
   settlements_.UpdateArmyOrders(world_, humans_, rng_, stats_.dayCount, dayDelta, factions_);
+  if (ui_.warLoggingEnabled) {
+    AppendWarLog(dayDelta);
+    AppendWarEvents(dayDelta);
+  }
   RefreshTotals();
   CrashContextSetStage("StepDay:Done");
+}
+
+namespace {
+bool FileNeedsHeader(const std::string& path) {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec)) return true;
+  auto size = std::filesystem::file_size(path, ec);
+  return ec ? true : (size == 0);
+}
+
+void CsvEscape(std::ostream& out, const std::string& value) {
+  bool needQuotes = false;
+  for (char c : value) {
+    if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+      needQuotes = true;
+      break;
+    }
+  }
+  if (!needQuotes) {
+    out << value;
+    return;
+  }
+  out << '"';
+  for (char c : value) {
+    if (c == '"') out << "\"\"";
+    else out << c;
+  }
+  out << '"';
+}
+
+struct WarLogCounts {
+  int roles[7] = {};
+  int armyStates[6] = {};
+  int soldiers = 0;
+  int soldiersInEnemyTerritory = 0;
+  int soldiersInTargetTerritory = 0;
+};
+}  // namespace
+
+void App::AppendWarLog(int dayDelta) {
+  const std::string path = "war_debug.csv";
+  std::ofstream out(path, std::ios::app);
+  if (!out.is_open()) return;
+  if (FileNeedsHeader(path)) {
+    out << "day,dayDelta,speedIndex,wantsMacro,settlementId,factionId,warId,isAttacker,targetSettlementId,"
+           "population,stockFood,stockWood,stability,unrest,borderPressure,warPressure,captureProgress,"
+           "captureLeaderFactionId,foodEmergency,soldiersPreEmergency,warSoldierFloor,targetFarmers,targetGatherers,"
+           "targetBuilders,targetGuards,targetSoldiers,targetScouts,targetIdle,roleIdle,roleGatherer,roleFarmer,"
+           "roleBuilder,roleGuard,roleSoldier,roleScout,armyIdle,armyRally,armyMarch,armySiege,armyDefend,armyRetreat,"
+           "soldiersTracked,soldiersInEnemyTerritory,soldiersInTargetTerritory\n";
+  }
+
+  std::unordered_map<int, WarLogCounts> countsBySettlement;
+  for (const auto& human : humans_.Humans()) {
+    if (!human.alive) continue;
+    if (human.settlementId <= 0) continue;
+    WarLogCounts& counts = countsBySettlement[human.settlementId];
+    int roleIndex = static_cast<int>(human.role);
+    if (roleIndex >= 0 && roleIndex < 7) counts.roles[roleIndex]++;
+    if (human.role != Role::Soldier) continue;
+    counts.soldiers++;
+    int stateIndex = static_cast<int>(human.armyState);
+    if (stateIndex >= 0 && stateIndex < 6) counts.armyStates[stateIndex]++;
+
+    const Settlement* home = settlements_.Get(human.settlementId);
+    if (!home || home->factionId <= 0) continue;
+    int ownerSettlementId = settlements_.ZoneOwnerForTile(human.x, human.y);
+    if (ownerSettlementId <= 0 || ownerSettlementId == home->id) continue;
+    const Settlement* owner = settlements_.Get(ownerSettlementId);
+    if (!owner || owner->factionId <= 0) continue;
+    if (!factions_.IsAtWar(home->factionId, owner->factionId)) continue;
+    counts.soldiersInEnemyTerritory++;
+    if (ownerSettlementId == home->warTargetSettlementId) {
+      counts.soldiersInTargetTerritory++;
+    }
+  }
+
+  const bool wantsMacro = (ui_.speedIndex == 4);
+  const int filterSettlementId = ui_.warLogOnlySelected ? ui_.warDebugSettlementId : -1;
+  const int filterFactionId = ui_.warLogOnlySelected ? ui_.warDebugFactionId : -1;
+
+  for (const auto& settlement : settlements_.Settlements()) {
+    if (settlement.id <= 0) continue;
+    if (filterSettlementId > 0 && settlement.id != filterSettlementId) continue;
+    if (filterFactionId > 0 && settlement.factionId != filterFactionId) continue;
+
+    int warId = (settlement.factionId > 0) ? factions_.ActiveWarIdForFaction(settlement.factionId) : -1;
+    bool isAttacker = (warId > 0 && factions_.WarIsAttacker(warId, settlement.factionId));
+
+    WarLogCounts empty{};
+    const WarLogCounts& counts =
+        (countsBySettlement.find(settlement.id) != countsBySettlement.end())
+            ? countsBySettlement[settlement.id]
+            : empty;
+
+    out << stats_.dayCount << ',' << dayDelta << ',' << ui_.speedIndex << ',' << (wantsMacro ? 1 : 0) << ','
+        << settlement.id << ',' << settlement.factionId << ',' << warId << ',' << (isAttacker ? 1 : 0) << ','
+        << settlement.warTargetSettlementId << ',' << settlement.population << ',' << settlement.stockFood << ','
+        << settlement.stockWood << ',' << settlement.stability << ',' << settlement.unrest << ','
+        << settlement.borderPressure << ',' << settlement.warPressure << ',' << std::fixed << std::setprecision(2)
+        << settlement.captureProgress << ',' << settlement.captureLeaderFactionId << ','
+        << (settlement.debugFoodEmergency ? 1 : 0) << ',' << settlement.debugSoldiersPreEmergency << ','
+        << settlement.debugWarSoldierFloor << ',' << settlement.debugTargetFarmers << ','
+        << settlement.debugTargetGatherers << ',' << settlement.debugTargetBuilders << ','
+        << settlement.debugTargetGuards << ',' << settlement.debugTargetSoldiers << ','
+        << settlement.debugTargetScouts << ',' << settlement.debugTargetIdle << ','
+        << counts.roles[0] << ',' << counts.roles[1] << ',' << counts.roles[2] << ',' << counts.roles[3] << ','
+        << counts.roles[4] << ',' << counts.roles[5] << ',' << counts.roles[6] << ',' << counts.armyStates[0] << ','
+        << counts.armyStates[1] << ',' << counts.armyStates[2] << ',' << counts.armyStates[3] << ','
+        << counts.armyStates[4] << ',' << counts.armyStates[5] << ',' << counts.soldiers << ','
+        << counts.soldiersInEnemyTerritory << ',' << counts.soldiersInTargetTerritory << '\n';
+  }
+}
+
+void App::AppendWarEvents(int dayDelta) {
+  (void)dayDelta;
+  const std::string path = "war_events.csv";
+  std::ofstream out(path, std::ios::app);
+  if (!out.is_open()) return;
+  if (FileNeedsHeader(path)) {
+    out << "day,event,warId,settlementId,factionId,detail\n";
+  }
+
+  std::unordered_set<int> activeWarsNow;
+  for (const auto& war : factions_.Wars()) {
+    if (!war.active) continue;
+    activeWarsNow.insert(war.id);
+    if (prevActiveWarIds_.find(war.id) == prevActiveWarIds_.end()) {
+      out << stats_.dayCount << ",war_started," << war.id << ",,," << "decl=" << war.declaringFactionId
+          << " def=" << war.defendingFactionId << '\n';
+    }
+  }
+  for (int warId : prevActiveWarIds_) {
+    if (activeWarsNow.find(warId) == activeWarsNow.end()) {
+      out << stats_.dayCount << ",war_ended," << warId << ",,," << "" << '\n';
+    }
+  }
+  prevActiveWarIds_ = std::move(activeWarsNow);
+
+  for (const auto& settlement : settlements_.Settlements()) {
+    if (settlement.id <= 0) continue;
+    int prevTarget = prevSettlementWarTarget_.count(settlement.id) ? prevSettlementWarTarget_[settlement.id] : 0;
+    int prevWarId = prevSettlementWarId_.count(settlement.id) ? prevSettlementWarId_[settlement.id] : 0;
+    int prevGeneral = prevSettlementGeneralId_.count(settlement.id) ? prevSettlementGeneralId_[settlement.id] : 0;
+    int prevTracked = prevSettlementSoldiersTracked_.count(settlement.id)
+                          ? prevSettlementSoldiersTracked_[settlement.id]
+                          : 0;
+
+    if (prevWarId != settlement.warId) {
+      out << stats_.dayCount << ",settlement_war_changed," << settlement.warId << ',' << settlement.id << ','
+          << settlement.factionId << ",from=" << prevWarId << '\n';
+    }
+    if (prevTarget != settlement.warTargetSettlementId) {
+      out << stats_.dayCount << ",settlement_target_changed," << settlement.warId << ',' << settlement.id << ','
+          << settlement.factionId << ",from=" << prevTarget << " to=" << settlement.warTargetSettlementId << '\n';
+    }
+    if (prevGeneral != settlement.generalHumanId) {
+      out << stats_.dayCount << ",settlement_general_changed," << settlement.warId << ',' << settlement.id << ','
+          << settlement.factionId << ",from=" << prevGeneral << " to=" << settlement.generalHumanId << '\n';
+    }
+
+    int trackedSoldiers = settlement.debugTargetSoldiers;
+    if (trackedSoldiers == 0 && prevTracked != 0 && settlement.warId > 0) {
+      out << stats_.dayCount << ",soldiers_dropped_to_zero," << settlement.warId << ',' << settlement.id << ','
+          << settlement.factionId << ",foodEmergency=" << (settlement.debugFoodEmergency ? 1 : 0) << '\n';
+    }
+    prevSettlementWarTarget_[settlement.id] = settlement.warTargetSettlementId;
+    prevSettlementWarId_[settlement.id] = settlement.warId;
+    prevSettlementGeneralId_[settlement.id] = settlement.generalHumanId;
+    prevSettlementSoldiersTracked_[settlement.id] = trackedSoldiers;
+  }
 }
 
 void App::AdvanceMacro(int days) {

@@ -90,6 +90,21 @@ struct Settlement {
   int defenseTargetY = 0;
   bool hasDefenseTarget = false;
 
+  // Debug: role allocation snapshot for the last UpdateDaily.
+  bool debugFoodEmergency = false;
+  bool debugWarTime = false;
+  bool debugWarAttacker = false;
+  int debugWarId = -1;
+  int debugWarSoldierFloor = 0;
+  int debugTargetFarmers = 0;
+  int debugTargetGatherers = 0;
+  int debugTargetBuilders = 0;
+  int debugTargetGuards = 0;
+  int debugTargetSoldiers = 0;
+  int debugTargetScouts = 0;
+  int debugTargetIdle = 0;
+  int debugSoldiersPreEmergency = 0;
+
   float captureProgress = 0.0f;
   int captureLeaderFactionId = -1;
   int captureWarId = -1;
@@ -153,6 +168,7 @@ struct Settlement {
 
 class SettlementManager {
  public:
+  void SetRebellionsEnabled(bool enabled) { rebellionsEnabled_ = enabled; }
   void UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount, int dayDelta,
                    std::vector<VillageMarker>& markers, FactionManager& factions);
   void UpdateMacro(World& world, Random& rng, int dayCount, std::vector<VillageMarker>& markers,
@@ -257,6 +273,7 @@ class SettlementManager {
   std::vector<std::vector<ClaimSource>> claimSources_;
   int warDeathsPending_ = 0;
   bool homeFieldDirty_ = true;
+  bool rebellionsEnabled_ = true;
 };
 
 const char* SettlementTierName(SettlementTier tier);

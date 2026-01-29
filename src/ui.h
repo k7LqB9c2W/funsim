@@ -7,6 +7,7 @@
 
 class FactionManager;
 class SettlementManager;
+class HumanManager;
 
 struct SimStats {
   int dayCount = 0;
@@ -55,10 +56,17 @@ struct UIState {
   int speedIndex = 0;
   bool stepDay = false;
   bool warEnabled = true;
+  bool rebellionsEnabled = true;
   bool starvationDeathEnabled = true;
   bool dehydrationDeathEnabled = true;
   OverlayMode overlayMode = OverlayMode::FactionTerritory;
   bool wholeMapView = false;
+  int territoryOverlayAlpha = 90;
+  float territoryOverlayDarken = 0.65f;
+  bool showWarZones = true;
+  bool showWarArrows = true;
+  bool showTroopCounts = true;
+  bool showTroopCountsAllZones = false;
   int worldSizeIndex = 0;
   bool newWorld = false;
   bool saveMap = false;
@@ -72,6 +80,16 @@ struct UIState {
   char factionIdeologyBuf[96] = "";
   char factionLeaderNameBuf[96] = "";
   char factionLeaderTitleBuf[96] = "";
+
+  bool warDebugOpen = false;
+  int warDebugSettlementId = -1;
+  int warDebugFactionId = -1;
+  bool warDebugFollowHover = true;
+  bool warLoggingEnabled = false;
+  bool warLogOnlySelected = true;
+
+  int diplomacyOtherFactionId = -1;
+  bool requestArmyOrdersRefresh = false;
 };
 
 struct HoverInfo {
@@ -82,5 +100,8 @@ struct HoverInfo {
   int factionId = -1;
 };
 
+void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
+            const SettlementManager& settlements, const HumanManager& humans, const HoverInfo& hover);
+// Backward-compatible overload for stale build artifacts.
 void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
             const SettlementManager& settlements, const HoverInfo& hover);
