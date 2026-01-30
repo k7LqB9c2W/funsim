@@ -93,6 +93,8 @@ struct War {
   WarSide defenders;
   int startDay = 0;
   int lastMajorEventDay = 0;
+  int focusTargetSettlementId = -1;
+  int focusTargetSetDay = 0;
   int deathsAttackers = 0;
   int deathsDefenders = 0;
   bool active = false;

@@ -1459,7 +1459,6 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
 
   for (int si = 0; si < static_cast<int>(settlements_.size()); ++si) {
     Settlement& settlement = settlements_[si];
-    if (settlement.population <= 0) continue;
     const int ownerFactionId = settlement.factionId;
     if (ownerFactionId <= 0) continue;
 
@@ -1521,9 +1520,9 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
     bool coreOccupied = (attackersInCore > 0);
     bool coreDominated = (attackersInCore > defendersInCore);
 
-    if (isUnderSiege) {
-      long long sumX = 0;
-      long long sumY = 0;
+	    if (isUnderSiege) {
+	      long long sumX = 0;
+	      long long sumY = 0;
       for (int attackerIndex : attackers) {
         const Human& attacker = humanList[attackerIndex];
         sumX += attacker.x;
@@ -1534,11 +1533,16 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
       tx = std::clamp(tx, 0, world.width() - 1);
       ty = std::clamp(ty, 0, world.height() - 1);
       settlement.defenseTargetX = tx;
-      settlement.defenseTargetY = ty;
-      settlement.hasDefenseTarget = true;
-    } else {
-      settlement.hasDefenseTarget = false;
-    }
+	      settlement.defenseTargetY = ty;
+	      settlement.hasDefenseTarget = true;
+	    } else {
+	      int activeWarId = settlement.warId;
+	      if (activeWarId <= 0) {
+	        settlement.hasDefenseTarget = false;
+	      } else if (factions.WarIsAttacker(activeWarId, ownerFactionId)) {
+	        settlement.hasDefenseTarget = false;
+	      }
+	    }
 
     if (!isUnderSiege) {
       settlement.siegeDays = 0;
@@ -1616,23 +1620,103 @@ void SettlementManager::UpdateArmiesAndSieges(World& world, HumanManager& humans
     settlement.captureProgress = std::max(0.0f, std::min(100.0f, progress));
     settlement.lastCaptureUpdateDay = dayCount;
 
-    if (settlement.captureProgress >= 100.0f && settlement.captureLeaderFactionId > 0) {
-      int newFactionId = settlement.captureLeaderFactionId;
-      settlement.factionId = newFactionId;
-      settlement.captureProgress = 0.0f;
-      settlement.captureLeaderFactionId = -1;
-      settlement.captureWarId = -1;
+	    if (settlement.captureProgress >= 100.0f && settlement.captureLeaderFactionId > 0) {
+	      const int resolvedWarId = settlement.captureWarId;
+	      int newFactionId = settlement.captureLeaderFactionId;
+	      settlement.factionId = newFactionId;
+	      settlement.captureProgress = 0.0f;
+	      settlement.captureLeaderFactionId = -1;
+	      settlement.captureWarId = -1;
       settlement.warId = -1;
       settlement.warTargetSettlementId = -1;
       settlement.generalHumanId = -1;
-      settlement.lastWarOrderDay = dayCount;
-      settlement.siegeDays = 0;
-      settlement.occupationDays = 0;
+	      settlement.lastWarOrderDay = dayCount;
+	      settlement.siegeDays = 0;
+	      settlement.occupationDays = 0;
 
-      int start = (si < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si] : 0;
-      int end = (si + 1 < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si + 1] : 0;
-      for (int mi = start; mi < end; ++mi) {
-        int humanIndex = memberIndices_[mi];
+	      // After a successful capture, focus all invading forces on the next enemy settlement.
+	      if (resolvedWarId > 0) {
+	        War* war = factions.GetWarMutable(resolvedWarId);
+	        if (war && war->active) {
+	          const bool invaderSideIsAttacker = factions.WarIsAttacker(resolvedWarId, newFactionId);
+	          const std::vector<int>& enemyFactions =
+	              invaderSideIsAttacker ? war->defenders.factions : war->attackers.factions;
+	          bool preferPopulated = false;
+	          for (const auto& candidate : settlements_) {
+	            if (candidate.population <= 0) continue;
+	            if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
+	              continue;
+	            }
+	            preferPopulated = true;
+	            break;
+	          }
+
+	          int bestTarget = -1;
+	          int bestScore = std::numeric_limits<int>::min();
+	          for (const auto& candidate : settlements_) {
+	            if (preferPopulated && candidate.population <= 0) continue;
+	            if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
+	              continue;
+	            }
+	            int dist = std::abs(candidate.centerX - settlement.centerX) +
+	                       std::abs(candidate.centerY - settlement.centerY);
+	            int value = candidate.population * 3 + (candidate.isCapital ? 60 : 0) + candidate.techTier * 10;
+	            int score = value * 6 - dist * 22;
+	            if (score > bestScore) {
+	              bestScore = score;
+	              bestTarget = candidate.id;
+	            }
+	          }
+
+	          war->focusTargetSettlementId = bestTarget;
+	          war->focusTargetSetDay = dayCount;
+	          war->lastMajorEventDay = dayCount;
+
+	          const Settlement* target = (bestTarget > 0) ? Get(bestTarget) : nullptr;
+	          if (target) {
+	            // Update settlement-level orders immediately.
+	            for (auto& s : settlements_) {
+	              if (s.population <= 0) continue;
+	              if (s.factionId <= 0) continue;
+	              if (factions.ActiveWarIdForFaction(s.factionId) != resolvedWarId) continue;
+	              bool sideIsAttacker = factions.WarIsAttacker(resolvedWarId, s.factionId);
+	              if (sideIsAttacker == invaderSideIsAttacker) {
+	                s.warTargetSettlementId = bestTarget;
+	                s.lastWarOrderDay = dayCount;
+	              } else {
+	                s.defenseTargetX = target->centerX;
+	                s.defenseTargetY = target->centerY;
+	                s.hasDefenseTarget = true;
+	              }
+	            }
+
+	            // Update soldier orders immediately (so the retarget feels instantaneous).
+	            for (auto& h : humanList) {
+	              if (!h.alive) continue;
+	              if (h.role != Role::Soldier) continue;
+	              if (h.warId != resolvedWarId) continue;
+	              int hf = factionForHuman(h);
+	              if (hf <= 0) continue;
+	              bool sideIsAttacker = factions.WarIsAttacker(resolvedWarId, hf);
+	              if (sideIsAttacker == invaderSideIsAttacker) {
+	                h.warTargetSettlementId = bestTarget;
+	                if (h.armyState != ArmyState::Idle) {
+	                  h.armyState = ArmyState::March;
+	                }
+	              } else {
+	                if (h.armyState != ArmyState::Idle) {
+	                  h.armyState = ArmyState::Defend;
+	                }
+	              }
+	            }
+	          }
+	        }
+	      }
+
+	      int start = (si < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si] : 0;
+	      int end = (si + 1 < static_cast<int>(memberOffsets_.size())) ? memberOffsets_[si + 1] : 0;
+	      for (int mi = start; mi < end; ++mi) {
+	        int humanIndex = memberIndices_[mi];
         if (humanIndex < 0 || humanIndex >= static_cast<int>(humanList.size())) continue;
         Human& human = humanList[humanIndex];
         if (!human.alive) continue;
@@ -1770,19 +1854,36 @@ void SettlementManager::UpdateArmyOrders(World& world, HumanManager& humans, Ran
     human.formationSlot = 0;
   }
 
+  auto anyPopulatedEnemySettlement = [&](int warId, int settlementFactionId) -> bool {
+    const War* war = factions.GetWar(warId);
+    if (!war || !war->active) return false;
+    const bool attacker = factions.WarIsAttacker(warId, settlementFactionId);
+    const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
+    if (enemyFactions.empty()) return false;
+    for (const auto& candidate : settlements_) {
+      if (candidate.population <= 0) continue;
+      if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  };
+
   auto pickWarTarget = [&](const Settlement& from, int warId) -> int {
     const War* war = factions.GetWar(warId);
     if (!war || !war->active) return -1;
     const bool attacker = factions.WarIsAttacker(warId, from.factionId);
     const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
     if (enemyFactions.empty()) return -1;
+    const bool preferPopulated = anyPopulatedEnemySettlement(warId, from.factionId);
 
     int bestTarget = -1;
     int bestScore = std::numeric_limits<int>::min();
     int bestDist = std::numeric_limits<int>::max();
     for (const auto& candidate : settlements_) {
       if (candidate.id == from.id) continue;
-      if (candidate.population <= 0) continue;
+      if (preferPopulated && candidate.population <= 0) continue;
       if (std::find(enemyFactions.begin(), enemyFactions.end(), candidate.factionId) == enemyFactions.end()) {
         continue;
       }
@@ -1806,6 +1907,33 @@ void SettlementManager::UpdateArmyOrders(World& world, HumanManager& humans, Ran
     return bestTarget;
   };
 
+  auto isValidWarFocusTarget = [&](int warId, int settlementFactionId, int targetSettlementId) -> bool {
+    if (targetSettlementId <= 0) return false;
+    const War* war = factions.GetWar(warId);
+    if (!war || !war->active) return false;
+    const Settlement* target = Get(targetSettlementId);
+    if (!target) return false;
+    const bool attacker = factions.WarIsAttacker(warId, settlementFactionId);
+    const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
+    if (enemyFactions.empty()) return false;
+    const bool preferPopulated = anyPopulatedEnemySettlement(warId, settlementFactionId);
+    if (preferPopulated && target->population <= 0) return false;
+    return std::find(enemyFactions.begin(), enemyFactions.end(), target->factionId) != enemyFactions.end();
+  };
+
+  auto ensureWarFocusTarget = [&](int warId, const Settlement& refSettlement) -> int {
+    War* war = factions.GetWarMutable(warId);
+    if (!war || !war->active) return -1;
+    if (war->focusTargetSettlementId > 0 &&
+        isValidWarFocusTarget(warId, refSettlement.factionId, war->focusTargetSettlementId)) {
+      return war->focusTargetSettlementId;
+    }
+    int next = pickWarTarget(refSettlement, warId);
+    war->focusTargetSettlementId = next;
+    war->focusTargetSetDay = dayCount;
+    return next;
+  };
+
   auto isValidWarTarget = [&](const Settlement& from, int warId, int targetSettlementId) -> bool {
     if (targetSettlementId <= 0) return false;
     const War* war = factions.GetWar(warId);
@@ -1813,10 +1941,11 @@ void SettlementManager::UpdateArmyOrders(World& world, HumanManager& humans, Ran
     const Settlement* target = Get(targetSettlementId);
     if (!target) return false;
     if (target->id == from.id) return false;
-    if (target->population <= 0) return false;
     const bool attacker = factions.WarIsAttacker(warId, from.factionId);
     const std::vector<int>& enemyFactions = attacker ? war->defenders.factions : war->attackers.factions;
     if (enemyFactions.empty()) return false;
+    const bool preferPopulated = anyPopulatedEnemySettlement(warId, from.factionId);
+    if (preferPopulated && target->population <= 0) return false;
     return std::find(enemyFactions.begin(), enemyFactions.end(), target->factionId) != enemyFactions.end();
   };
 
@@ -1827,13 +1956,33 @@ void SettlementManager::UpdateArmyOrders(World& world, HumanManager& humans, Ran
 
     if (warId <= 0) {
       settlement.warTargetSettlementId = -1;
+      settlement.hasDefenseTarget = false;
     } else {
       const bool attacker = factions.WarIsAttacker(warId, settlement.factionId);
       if (!attacker) {
         settlement.warTargetSettlementId = -1;
+        settlement.hasDefenseTarget = false;
+        // Defenders rally to the current battleground (war focus target).
+        const War* war = factions.GetWar(warId);
+        if (war && war->active && war->focusTargetSettlementId > 0) {
+          const Settlement* target = Get(war->focusTargetSettlementId);
+          if (target) {
+            settlement.defenseTargetX = target->centerX;
+            settlement.defenseTargetY = target->centerY;
+            settlement.hasDefenseTarget = true;
+          }
+        }
       } else if (!isValidWarTarget(settlement, warId, settlement.warTargetSettlementId)) {
-        settlement.warTargetSettlementId = pickWarTarget(settlement, warId);
+        int focus = ensureWarFocusTarget(warId, settlement);
+        settlement.warTargetSettlementId = (focus > 0) ? focus : pickWarTarget(settlement, warId);
         settlement.lastWarOrderDay = dayCount;
+      } else {
+        // Force attacker settlements to share a single war focus target once it's set.
+        int focus = ensureWarFocusTarget(warId, settlement);
+        if (focus > 0 && settlement.warTargetSettlementId != focus) {
+          settlement.warTargetSettlementId = focus;
+          settlement.lastWarOrderDay = dayCount;
+        }
       }
     }
 
