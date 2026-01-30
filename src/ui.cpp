@@ -468,9 +468,10 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
         ImGui::Text("FoodEmergency=%s soldiersPreEmergency=%d warFloor=%d",
                     settlement->debugFoodEmergency ? "yes" : "no", settlement->debugSoldiersPreEmergency,
                     settlement->debugWarSoldierFloor);
-        ImGui::Text("WarId %d (%s) targetSettlement %d capture %.1f%%", warId,
+        ImGui::Text("WarId %d (%s) targetSettlement %d capture %.1f%% | siegeDays %d occDays %d", warId,
                     (warId > 0 ? (attackerSide ? "attacker" : "defender") : "none"),
-                    settlement->warTargetSettlementId, settlement->captureProgress);
+                    settlement->warTargetSettlementId, settlement->captureProgress, settlement->siegeDays,
+                    settlement->occupationDays);
         if (settlement->hasDefenseTarget) {
           ImGui::Text("Defense target (%d,%d)", settlement->defenseTargetX, settlement->defenseTargetY);
         }
