@@ -115,6 +115,7 @@ struct Human {
   int formationSlot = 0;
   bool isGeneral = false;
 
+  float meleeCooldownSeconds = 0.0f;
   float bowCooldownSeconds = 0.0f;
   int bowTargetId = -1;
 };

@@ -39,7 +39,12 @@ constexpr float kArrowSpeedTilesPerSecond = 18.0f;
 constexpr float kArrowTtlSeconds = 1.8f;
 constexpr float kArrowHitRadiusTiles = 0.22f;
 constexpr int kArrowDamage = 25;
-constexpr int kMaxActiveArrows = 20000;
+constexpr int kBaseMaxActiveArrows = 20000;
+constexpr int kHardMaxActiveArrows = 220000;
+constexpr int kMaxActiveArrowsPerWarSoldier = 10;
+
+constexpr float kMeleeCooldownSeconds = 0.55f;
+constexpr int kMeleeDamage = 14;
 constexpr int kMateFoodReservePerPop = 10;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGathererWanderRadius = 18;
@@ -81,6 +86,10 @@ void FormationOffset(int slot, int& outDx, int& outDy) {
   }
   outDx = dx;
   outDy = dy;
+}
+
+void SwarmTargetOffset(const Human& human, int& outDx, int& outDy) {
+  FormationOffset(human.id, outDx, outDy);
 }
 
 uint32_t HashNoise(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {
@@ -745,43 +754,43 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     human.hasTask = false;
     human.mateTargetId = -1;
 
-    int targetX = human.homeX;
-    int targetY = human.homeY;
-    if (human.isGeneral) {
-      if (human.armyState == ArmyState::Defend) {
-        const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
-        if (home && home->hasDefenseTarget) {
-          targetX = home->defenseTargetX;
-          targetY = home->defenseTargetY;
-        }
-      } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
-        const Settlement* target = (human.warTargetSettlementId > 0)
-                                       ? settlements.Get(human.warTargetSettlementId)
-                                       : nullptr;
-        if (target) {
-          targetX = target->centerX;
-          targetY = target->centerY;
-        }
+    int baseX = human.homeX;
+    int baseY = human.homeY;
+    const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+    if (human.armyState == ArmyState::Defend || human.armyState == ArmyState::Rally) {
+      if (home && home->hasDefenseTarget) {
+        baseX = home->defenseTargetX;
+        baseY = home->defenseTargetY;
+      } else if (home) {
+        baseX = home->centerX;
+        baseY = home->centerY;
       }
-    } else {
-      const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
-      const int generalId = home ? home->generalHumanId : -1;
-      int gx = 0;
-      int gy = 0;
-      if (generalId > 0 && GetHumanById(generalId, gx, gy)) {
-        int dx = 0;
-        int dy = 0;
-        FormationOffset(human.formationSlot, dx, dy);
-        targetX = gx + dx;
-        targetY = gy + dy;
+    } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+      const Settlement* target = (human.warTargetSettlementId > 0)
+                                     ? settlements.Get(human.warTargetSettlementId)
+                                     : nullptr;
+      if (target) {
+        baseX = target->centerX;
+        baseY = target->centerY;
       }
     }
+    int dx = 0;
+    int dy = 0;
+    SwarmTargetOffset(human, dx, dy);
+    int targetX = baseX + dx;
+    int targetY = baseY + dy;
 
+    baseX = ClampInt(baseX, 0, world.width() - 1);
+    baseY = ClampInt(baseY, 0, world.height() - 1);
     targetX = ClampInt(targetX, 0, world.width() - 1);
     targetY = ClampInt(targetY, 0, world.height() - 1);
     if (world.At(targetX, targetY).type == TileType::Ocean) {
-      targetX = human.x;
-      targetY = human.y;
+      targetX = baseX;
+      targetY = baseY;
+      if (world.At(targetX, targetY).type == TileType::Ocean) {
+        targetX = human.x;
+        targetY = human.y;
+      }
     }
 
     human.goal = Goal::Wander;
@@ -973,43 +982,43 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     human.hasTask = false;
     human.mateTargetId = -1;
 
-    int targetX = human.homeX;
-    int targetY = human.homeY;
-    if (human.isGeneral) {
-      if (human.armyState == ArmyState::Defend) {
-        const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
-        if (home && home->hasDefenseTarget) {
-          targetX = home->defenseTargetX;
-          targetY = home->defenseTargetY;
-        }
-      } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
-        const Settlement* target = (human.warTargetSettlementId > 0)
-                                       ? settlements.Get(human.warTargetSettlementId)
-                                       : nullptr;
-        if (target) {
-          targetX = target->centerX;
-          targetY = target->centerY;
-        }
+    int baseX = human.homeX;
+    int baseY = human.homeY;
+    const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
+    if (human.armyState == ArmyState::Defend || human.armyState == ArmyState::Rally) {
+      if (home && home->hasDefenseTarget) {
+        baseX = home->defenseTargetX;
+        baseY = home->defenseTargetY;
+      } else if (home) {
+        baseX = home->centerX;
+        baseY = home->centerY;
       }
-    } else {
-      const Settlement* home = (human.settlementId > 0) ? settlements.Get(human.settlementId) : nullptr;
-      const int generalId = home ? home->generalHumanId : -1;
-      int gx = 0;
-      int gy = 0;
-      if (generalId > 0 && GetHumanById(generalId, gx, gy)) {
-        int dx = 0;
-        int dy = 0;
-        FormationOffset(human.formationSlot, dx, dy);
-        targetX = gx + dx;
-        targetY = gy + dy;
+    } else if (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege) {
+      const Settlement* target = (human.warTargetSettlementId > 0)
+                                     ? settlements.Get(human.warTargetSettlementId)
+                                     : nullptr;
+      if (target) {
+        baseX = target->centerX;
+        baseY = target->centerY;
       }
     }
+    int dx = 0;
+    int dy = 0;
+    SwarmTargetOffset(human, dx, dy);
+    int targetX = baseX + dx;
+    int targetY = baseY + dy;
 
+    baseX = ClampInt(baseX, 0, world.width() - 1);
+    baseY = ClampInt(baseY, 0, world.height() - 1);
     targetX = ClampInt(targetX, 0, world.width() - 1);
     targetY = ClampInt(targetY, 0, world.height() - 1);
     if (world.At(targetX, targetY).type == TileType::Ocean) {
-      targetX = human.x;
-      targetY = human.y;
+      targetX = baseX;
+      targetY = baseY;
+      if (world.At(targetX, targetY).type == TileType::Ocean) {
+        targetX = human.x;
+        targetY = human.y;
+      }
     }
 
     human.goal = Goal::Wander;
@@ -1097,6 +1106,9 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       crowdPenalty =
           std::max(1, static_cast<int>(std::round(static_cast<float>(kCrowdPenalty) *
                                                  kSeekWaterCrowdPenaltyScale)));
+    }
+    if (human.role == Role::Soldier && human.warId > 0) {
+      crowdPenalty = 0;
     }
     int crowdCount = PopCountAt(nx, ny);
     if (crowdCount > 0) {
@@ -1498,6 +1510,7 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       }
     };
 
+    int activeWarSoldiers = 0;
     for (const auto& human : humans_) {
       if (!human.alive) continue;
       if (human.warId > 0) {
@@ -1505,8 +1518,15 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       }
       if (human.role == Role::Soldier && human.warId > 0) {
         stampTile(human.x, human.y, human.id);
+        if (human.armyState != ArmyState::Idle) {
+          activeWarSoldiers++;
+        }
       }
     }
+
+    int maxArrows =
+        std::clamp(kBaseMaxActiveArrows + activeWarSoldiers * kMaxActiveArrowsPerWarSoldier,
+                   kBaseMaxActiveArrows, kHardMaxActiveArrows);
 
     auto indexForId = [&](int id) -> int {
       if (id <= 0 || id >= static_cast<int>(humanIdToIndex_.size())) return -1;
@@ -1544,6 +1564,51 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       int dy = target.y - shooter.y;
       return (dx * dx + dy * dy) <= (kBowRangeTiles * kBowRangeTiles);
     };
+
+    // Melee: lets large armies actually convert local numbers into faster kills, reducing "1 defender stalls forever"
+    // situations.
+    for (auto& attacker : humans_) {
+      if (!attacker.alive) continue;
+      if (attacker.role != Role::Soldier) continue;
+      if (attacker.warId <= 0) continue;
+      if (attacker.armyState == ArmyState::Idle) continue;
+
+      if (attacker.meleeCooldownSeconds > 0.0f) {
+        attacker.meleeCooldownSeconds = std::max(0.0f, attacker.meleeCooldownSeconds - tickSeconds);
+        continue;
+      }
+
+      int attackerFactionId = FactionForHuman(settlements, attacker);
+      if (attackerFactionId <= 0) continue;
+
+      int bestTargetId = -1;
+      const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+      for (const auto& d : dirs) {
+        int x = attacker.x + d[0];
+        int y = attacker.y + d[1];
+        if (x < 0 || x >= crowdGridW_ || y < 0 || y >= crowdGridH_) continue;
+        int idx = y * crowdGridW_ + x;
+        if (soldierStampByTile_[static_cast<size_t>(idx)] != soldierGridGeneration_) continue;
+        int candidateId = soldierSampleIdByTile_[static_cast<size_t>(idx)];
+        if (candidateId <= 0) continue;
+        if (!isValidEnemySoldierTarget(attacker, attackerFactionId, candidateId)) continue;
+        bestTargetId = candidateId;
+        break;
+      }
+
+      if (bestTargetId <= 0) continue;
+      int tidx = indexForId(bestTargetId);
+      if (tidx < 0) continue;
+      Human& target = humans_[tidx];
+      if (!target.alive) continue;
+
+      target.health = std::max(0, target.health - kMeleeDamage);
+      if (target.health <= 0) {
+        MarkDeadByIndex(tidx, currentDay_, DeathReason::War);
+        settlements.AddWarDeaths(1);
+      }
+      attacker.meleeCooldownSeconds = kMeleeCooldownSeconds * rng.RangeFloat(0.85f, 1.15f);
+    }
 
     for (auto& shooter : humans_) {
       if (!shooter.alive) continue;
@@ -1623,7 +1688,7 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       const Human& target = humans_[tidx];
       if (!target.alive) continue;
 
-      if (static_cast<int>(arrows_.size()) < kMaxActiveArrows) {
+      if (static_cast<int>(arrows_.size()) < maxArrows) {
         float sx = static_cast<float>(shooter.x) + 0.5f;
         float sy = static_cast<float>(shooter.y) + 0.5f;
         float tx = static_cast<float>(target.x) + 0.5f;

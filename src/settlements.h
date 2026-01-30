@@ -107,6 +107,8 @@ struct Settlement {
   int captureLeaderFactionId = -1;
   int captureWarId = -1;
   int lastCaptureUpdateDay = 0;
+  int siegeDays = 0;
+  int occupationDays = 0;
 
   int macroArmyTargetSettlementId = -1;
   int macroArmyEtaDays = 0;
