@@ -13,7 +13,6 @@
 namespace {
 constexpr int kGestationDays = 90;
 constexpr int kCrowdPenalty = 25;
-constexpr float kSeekWaterCrowdPenaltyScale = 0.1f;
 constexpr int kMateRadius = 4;
 constexpr int kMateCooldownDays = 30;
 constexpr float kMateBaseChance = 0.01f;
@@ -22,8 +21,6 @@ constexpr float kMateMaxChance = 0.25f;
 constexpr float kStepsPerDay = 8.0f;
 constexpr int kBlockedReplanTicks = 8;
 constexpr int kFoodIntervalDays = 3;
-constexpr int kWaterGraceDays = 3;
-constexpr int kWaterMaxDays = 7;
 constexpr int kNutritionMax = 100;
 constexpr int kNutritionEatThreshold = 60;
 constexpr int kNutritionFromBread = 100;
@@ -107,6 +104,30 @@ int ClampInt(int value, int min_value, int max_value) {
   if (value < min_value) return min_value;
   if (value > max_value) return max_value;
   return value;
+}
+
+float ClampFloat(float value, float min_value, float max_value) {
+  if (value < min_value) return min_value;
+  if (value > max_value) return max_value;
+  return value;
+}
+
+struct Vec2 {
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
+Vec2 operator+(Vec2 a, Vec2 b) { return Vec2{a.x + b.x, a.y + b.y}; }
+Vec2 operator-(Vec2 a, Vec2 b) { return Vec2{a.x - b.x, a.y - b.y}; }
+Vec2 operator*(Vec2 a, float s) { return Vec2{a.x * s, a.y * s}; }
+
+float LenSq(Vec2 v) { return v.x * v.x + v.y * v.y; }
+float Len(Vec2 v) { return std::sqrt(LenSq(v)); }
+Vec2 NormalizeOrZero(Vec2 v) {
+  float lsq = LenSq(v);
+  if (!(lsq > 1e-10f)) return Vec2{0.0f, 0.0f};
+  float inv = 1.0f / std::sqrt(lsq);
+  return Vec2{v.x * inv, v.y * inv};
 }
 
 void AddNutrition(Human& human, int amount) {
@@ -537,6 +558,21 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.ageDays = ageDays;
   human.x = x;
   human.y = y;
+  human.px = static_cast<float>(x) + 0.5f;
+  human.py = static_cast<float>(y) + 0.5f;
+  human.vx = 0.0f;
+  human.vy = 0.0f;
+  {
+    uint32_t h = HashNoise(static_cast<uint32_t>(human.id), 0x51u, 0xA3u, 0xD7u);
+    auto toSigned01 = [](uint32_t v) {
+      return (static_cast<float>(v) / 255.0f) * 2.0f - 1.0f;
+    };
+    float ox = toSigned01(h & 0xFFu);
+    float oy = toSigned01((h >> 8) & 0xFFu);
+    // Keep small; this is visual variety, not physics.
+    human.personalOffsetX = ox * 0.18f;
+    human.personalOffsetY = oy * 0.14f;
+  }
   human.alive = true;
   human.pregnant = false;
   human.gestationDays = 0;
@@ -544,7 +580,6 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.nutritionMonthAccumulator = 0.0f;
   human.maxHealth = 100;
   human.health = 100;
-  human.daysWithoutWater = 0;
   human.animTimer = 0.0f;
   human.animFrame = 0;
   human.moving = false;
@@ -556,8 +591,6 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.homeY = y;
   human.lastFoodX = x;
   human.lastFoodY = y;
-  human.lastWaterX = x;
-  human.lastWaterY = y;
   human.rethinkCooldownTicks = 0;
   human.mateCooldownDays = 0;
   human.settlementId = -1;
@@ -588,6 +621,14 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
 
 void HumanManager::Spawn(int x, int y, bool female, Random& rng) {
   humans_.push_back(CreateHuman(x, y, female, rng, Human::kAdultAgeDays));
+  const int idx = static_cast<int>(humans_.size()) - 1;
+  const int id = humans_[static_cast<size_t>(idx)].id;
+  if (id > 0) {
+    if (id >= static_cast<int>(humanIdToIndex_.size())) {
+      humanIdToIndex_.resize(static_cast<size_t>(nextId_), -1);
+    }
+    humanIdToIndex_[static_cast<size_t>(id)] = idx;
+  }
 }
 
 void HumanManager::RebuildIdMap() {
@@ -724,6 +765,131 @@ int HumanManager::FindMateTargetId(const Human& human, const World& world, Rando
   }
 
   return selected;
+}
+
+HumanManager::FlowFieldEntry HumanManager::BuildFlowField(const World& world, int targetX, int targetY,
+                                                          int radius) {
+  FlowFieldEntry entry;
+  entry.targetX = targetX;
+  entry.targetY = targetY;
+  entry.radius = std::max(0, radius);
+  entry.terrainVersion = world.TerrainVersion();
+
+  const int w = world.width();
+  const int h = world.height();
+  if (w <= 0 || h <= 0) return entry;
+  if (!world.InBounds(targetX, targetY)) return entry;
+
+  int minX = ClampInt(targetX - entry.radius, 0, w - 1);
+  int maxX = ClampInt(targetX + entry.radius, 0, w - 1);
+  int minY = ClampInt(targetY - entry.radius, 0, h - 1);
+  int maxY = ClampInt(targetY + entry.radius, 0, h - 1);
+  int width = maxX - minX + 1;
+  int height = maxY - minY + 1;
+  if (width <= 0 || height <= 0) return entry;
+
+  entry.minX = minX;
+  entry.minY = minY;
+  entry.width = width;
+  entry.height = height;
+
+  const size_t total = static_cast<size_t>(width) * static_cast<size_t>(height);
+  entry.dirX.assign(total, 0);
+  entry.dirY.assign(total, 0);
+
+  if (!IsWalkable(world.At(targetX, targetY))) {
+    return entry;
+  }
+
+  auto localIndex = [&](int x, int y) -> int {
+    return (y - minY) * width + (x - minX);
+  };
+  auto inDiamond = [&](int x, int y) -> bool {
+    return std::abs(x - targetX) + std::abs(y - targetY) <= entry.radius;
+  };
+
+  std::vector<uint8_t> visited(total, 0u);
+  std::vector<int> queue;
+  queue.reserve(total);
+
+  int seed = localIndex(targetX, targetY);
+  visited[static_cast<size_t>(seed)] = 1u;
+  queue.push_back(seed);
+
+  size_t qhead = 0;
+  while (qhead < queue.size()) {
+    int cur = queue[qhead++];
+    int cx = (cur % width) + minX;
+    int cy = (cur / width) + minY;
+
+    const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& d : dirs) {
+      int nx = cx + d[0];
+      int ny = cy + d[1];
+      if (nx < minX || nx > maxX || ny < minY || ny > maxY) continue;
+      if (!inDiamond(nx, ny)) continue;
+      if (!IsWalkable(world.At(nx, ny))) continue;
+      int ni = localIndex(nx, ny);
+      if (visited[static_cast<size_t>(ni)] != 0u) continue;
+      visited[static_cast<size_t>(ni)] = 1u;
+      entry.dirX[static_cast<size_t>(ni)] = static_cast<int8_t>(-d[0]);
+      entry.dirY[static_cast<size_t>(ni)] = static_cast<int8_t>(-d[1]);
+      queue.push_back(ni);
+    }
+  }
+
+  return entry;
+}
+
+const HumanManager::FlowFieldEntry* HumanManager::GetFlowField(const World& world, int targetX, int targetY,
+                                                               int radius, int tickCount,
+                                                               int& ioBuildBudget) {
+  constexpr size_t kMaxEntries = 64;
+  const uint32_t terrainVersion = world.TerrainVersion();
+  const uint32_t usedTick = static_cast<uint32_t>(std::max(0, tickCount));
+
+  auto findIndex = [&]() -> int {
+    for (int i = 0; i < static_cast<int>(flowFields_.size()); ++i) {
+      const auto& e = flowFields_[i];
+      if (e.targetX == targetX && e.targetY == targetY && e.radius == radius) {
+        return i;
+      }
+    }
+    return -1;
+  };
+
+  int idx = findIndex();
+  if (idx >= 0) {
+    FlowFieldEntry& e = flowFields_[idx];
+    e.lastUsedTick = usedTick;
+    if (e.terrainVersion != terrainVersion) {
+      if (ioBuildBudget <= 0) return nullptr;
+      ioBuildBudget--;
+      e = BuildFlowField(world, targetX, targetY, radius);
+      e.lastUsedTick = usedTick;
+    }
+    return &flowFields_[idx];
+  }
+
+  if (ioBuildBudget <= 0) return nullptr;
+  ioBuildBudget--;
+
+  if (flowFields_.size() >= kMaxEntries) {
+    size_t victim = 0;
+    uint32_t best = flowFields_[0].lastUsedTick;
+    for (size_t i = 1; i < flowFields_.size(); ++i) {
+      if (flowFields_[i].lastUsedTick < best) {
+        best = flowFields_[i].lastUsedTick;
+        victim = i;
+      }
+    }
+    flowFields_.erase(flowFields_.begin() + static_cast<std::ptrdiff_t>(victim));
+  }
+
+  FlowFieldEntry e = BuildFlowField(world, targetX, targetY, radius);
+  e.lastUsedTick = usedTick;
+  flowFields_.push_back(std::move(e));
+  return &flowFields_.back();
 }
 
 void HumanManager::ReplanGoal(Human& human, const World& world, const SettlementManager& settlements,
@@ -929,6 +1095,10 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       static_cast<unsigned>(human.y) >= static_cast<unsigned>(world.height())) {
     human.x = ClampInt(human.x, 0, world.width() - 1);
     human.y = ClampInt(human.y, 0, world.height() - 1);
+    human.px = static_cast<float>(human.x) + 0.5f;
+    human.py = static_cast<float>(human.y) + 0.5f;
+    human.vx = 0.0f;
+    human.vy = 0.0f;
   }
 
   bool nearFire = world.At(human.x, human.y).burning;
@@ -1077,163 +1247,6 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
     }
   }
 
-  const int w = world.width();
-  const int h = world.height();
-  const int dirs[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
-
-  int bestX = human.x;
-  int bestY = human.y;
-  int bestScore = std::numeric_limits<int>::min();
-
-  int mateX = human.x;
-  int mateY = human.y;
-  bool haveMateTarget = false;
-  if (human.goal == Goal::SeekMate && human.mateTargetId != -1) {
-    haveMateTarget = GetHumanById(human.mateTargetId, mateX, mateY);
-  }
-
-  for (const auto& d : dirs) {
-    int nx = human.x + d[0];
-    int ny = human.y + d[1];
-    if (!world.InBounds(nx, ny)) continue;
-    const Tile& candidate = world.At(nx, ny);
-    if ((d[0] != 0 || d[1] != 0) && !IsWalkable(candidate)) continue;
-
-    int score = 0;
-
-    int crowdPenalty = kCrowdPenalty;
-    if (human.goal == Goal::SeekWater) {
-      crowdPenalty =
-          std::max(1, static_cast<int>(std::round(static_cast<float>(kCrowdPenalty) *
-                                                 kSeekWaterCrowdPenaltyScale)));
-    }
-    if (human.role == Role::Soldier && human.warId > 0) {
-      crowdPenalty = 0;
-    }
-    int crowdCount = PopCountAt(nx, ny);
-    if (crowdCount > 0) {
-      score -= crowdCount * crowdPenalty;
-    }
-    if (candidate.burning) {
-      score -= 200000;
-    }
-
-    const bool isGatherOrScout = (human.role == Role::Gatherer || human.role == Role::Scout);
-    const bool isSoldier = (human.role == Role::Soldier);
-    const bool isMarchingSoldier = (isSoldier && human.armyState != ArmyState::Idle &&
-                                    (human.armyState == ArmyState::March || human.armyState == ArmyState::Siege));
-    const bool isHomeBoundRole =
-        (human.role == Role::Guard || human.role == Role::Builder || human.role == Role::Farmer ||
-         (isSoldier && !isMarchingSoldier));
-    bool needWaterScent = false;
-    bool needFireRisk = false;
-    bool needHomeScent = false;
-
-    switch (human.goal) {
-      case Goal::SeekFood:
-        if (human.targetX != human.x || human.targetY != human.y) {
-          int dist = Manhattan(nx, ny, human.targetX, human.targetY);
-          score -= dist * 160;
-        }
-        break;
-      case Goal::SeekWater:
-        needWaterScent = true;
-        if (human.targetX != human.x || human.targetY != human.y) {
-          int dist = Manhattan(nx, ny, human.targetX, human.targetY);
-          score -= dist * 140;
-        }
-        break;
-      case Goal::FleeFire:
-        needFireRisk = true;
-        break;
-      case Goal::StayHome: {
-        int dist = Manhattan(nx, ny, stayX, stayY);
-        score -= dist * 200;
-        break;
-      }
-      case Goal::SeekMate: {
-        if (haveMateTarget) {
-          int dist = Manhattan(nx, ny, mateX, mateY);
-          score -= dist * 180;
-        } else {
-          int dist = Manhattan(nx, ny, human.targetX, human.targetY);
-          score -= dist * 40;
-        }
-        break;
-      }
-      case Goal::Wander: {
-        int dist = Manhattan(nx, ny, human.targetX, human.targetY);
-        int weight = 40;
-        if (isMarchingSoldier) {
-          weight = kMarchTargetWeight;
-        }
-        score -= dist * weight;
-        break;
-      }
-    }
-
-    if (isHomeBoundRole) {
-      int dist = Manhattan(nx, ny, human.homeX, human.homeY);
-      score -= dist * 40;
-    }
-
-    if (human.settlementId != -1 && human.goal != Goal::SeekWater) {
-      bool wanderHeavy =
-          (human.goal == Goal::Wander || isGatherOrScout);
-      if (!wanderHeavy) {
-        needHomeScent = true;
-      }
-    }
-
-    uint16_t waterScent = 0;
-    uint16_t fireRisk = 0;
-    uint16_t homeScent = 0;
-    if (needWaterScent) waterScent = world.WaterScentAt(nx, ny);
-    if (needFireRisk) fireRisk = world.FireRiskAt(nx, ny);
-    if (needHomeScent) homeScent = world.HomeScentAt(nx, ny);
-
-    if (human.goal == Goal::SeekWater) {
-      score += static_cast<int>(waterScent) * 4;
-    } else if (human.goal == Goal::FleeFire) {
-      score -= static_cast<int>(fireRisk) * 6;
-    }
-
-    if (needHomeScent) {
-      float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
-      int homeScore = static_cast<int>(static_cast<float>(homeScent) * 0.015f * homeBias);
-      score += homeScore;
-    }
-
-    uint32_t noise = HashNoise(static_cast<uint32_t>(human.id),
-                               static_cast<uint32_t>(tickCount),
-                               static_cast<uint32_t>(nx), static_cast<uint32_t>(ny));
-    int noiseRange = 200;
-    if (isMarchingSoldier) {
-      noiseRange = kMarchNoiseRange;
-    }
-    score += static_cast<int>(noise % static_cast<uint32_t>(noiseRange)) - (noiseRange / 2);
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestX = nx;
-      bestY = ny;
-    }
-  }
-
-  human.moving = (bestX != human.x || bestY != human.y);
-  if (human.moving) {
-    human.blockedTicks = 0;
-  } else if (human.blockedTicks < 255) {
-    human.blockedTicks++;
-  }
-  human.x = bestX;
-  human.y = bestY;
-
-  if (human.blockedTicks >= kBlockedReplanTicks) {
-    human.blockedTicks = 0;
-    human.forceReplan = true;
-  }
-
   if (human.hasTask) {
     if (human.taskType == TaskType::CollectFood) {
       if (human.x == human.taskX && human.y == human.taskY) {
@@ -1366,8 +1379,58 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
   if (humans_.empty()) return;
 
   CrashContextSetStage("Humans::UpdateTick");
-  EnsureCrowdGrids(world.width(), world.height());
+  const int w = world.width();
+  const int h = world.height();
+  EnsureCrowdGrids(w, h);
   const float stepsPerTick = kStepsPerDay / static_cast<float>(ticksPerDay);
+  const float daySeconds = tickSeconds * static_cast<float>(ticksPerDay);
+  const float baseSpeedTilesPerSecond = (daySeconds > 0.0f) ? (kStepsPerDay / daySeconds) : 0.0f;
+
+  // Update crowd density every tick for separation/flow feel.
+  if (crowdGridW_ > 0 && crowdGridH_ > 0) {
+    crowdGeneration_++;
+    if (crowdGeneration_ == 0) {
+      std::fill(popStampByTile_.begin(), popStampByTile_.end(), 0u);
+      std::fill(adultMaleStampByTile_.begin(), adultMaleStampByTile_.end(), 0u);
+      crowdGeneration_ = 1;
+    }
+
+    for (auto& human : humans_) {
+      if (!human.alive) continue;
+
+      // Keep tile coords in sync with continuous coords.
+      if (!(human.px >= 0.0f) || !(human.py >= 0.0f)) {
+        human.px = static_cast<float>(human.x) + 0.5f;
+        human.py = static_cast<float>(human.y) + 0.5f;
+        human.vx = 0.0f;
+        human.vy = 0.0f;
+      }
+      human.px = ClampFloat(human.px, 0.001f, static_cast<float>(w) - 0.001f);
+      human.py = ClampFloat(human.py, 0.001f, static_cast<float>(h) - 0.001f);
+      human.x = ClampInt(static_cast<int>(std::floor(human.px)), 0, w - 1);
+      human.y = ClampInt(static_cast<int>(std::floor(human.py)), 0, h - 1);
+
+      const int idx = human.y * w + human.x;
+      if (popStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) {
+        popStampByTile_[static_cast<size_t>(idx)] = crowdGeneration_;
+        popCountByTile_[static_cast<size_t>(idx)] = 0;
+      }
+      popCountByTile_[static_cast<size_t>(idx)]++;
+
+      if (!human.female && human.ageDays >= Human::kAdultAgeDays) {
+        if (adultMaleStampByTile_[static_cast<size_t>(idx)] != crowdGeneration_) {
+          adultMaleStampByTile_[static_cast<size_t>(idx)] = crowdGeneration_;
+          adultMaleCountByTile_[static_cast<size_t>(idx)] = 0;
+          adultMaleSampleIdByTile_[static_cast<size_t>(idx)] = -1;
+        }
+        int count = ++adultMaleCountByTile_[static_cast<size_t>(idx)];
+        int currentSample = adultMaleSampleIdByTile_[static_cast<size_t>(idx)];
+        if (currentSample == -1 || rng.RangeInt(0, count - 1) == 0) {
+          adultMaleSampleIdByTile_[static_cast<size_t>(idx)] = human.id;
+        }
+      }
+    }
+  }
 
   if (!arrows_.empty()) {
     auto indexForId = [&](int id) -> int {
@@ -1397,8 +1460,8 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
           if (!target.alive) {
             keep = false;
           } else {
-            float tx = static_cast<float>(target.x) + 0.5f;
-            float ty = static_cast<float>(target.y) + 0.5f;
+            float tx = target.px;
+            float ty = target.py;
             float dx = tx - arrow.x;
             float dy = ty - arrow.y;
             float distSq = dx * dx + dy * dy;
@@ -1461,6 +1524,224 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       human.moveAccum -= 1.0f;
       UpdateMoveStep(human, world, settlements, rng, tickCount, ticksPerDay);
       steps++;
+    }
+  }
+
+  // Continuous movement integration (WorldBox-like motion).
+  {
+    auto sampleFieldGradient = [&](auto&& sampleFn, int tx, int ty) -> Vec2 {
+      int x0 = ClampInt(tx - 1, 0, w - 1);
+      int x1 = ClampInt(tx + 1, 0, w - 1);
+      int y0 = ClampInt(ty - 1, 0, h - 1);
+      int y1 = ClampInt(ty + 1, 0, h - 1);
+      float gx = static_cast<float>(sampleFn(x1, ty)) - static_cast<float>(sampleFn(x0, ty));
+      float gy = static_cast<float>(sampleFn(tx, y1)) - static_cast<float>(sampleFn(tx, y0));
+      return Vec2{gx, gy};
+    };
+
+    int flowBuildBudget = 1;  // build at most 1 new flow-field per tick to avoid spikes
+
+    for (auto& human : humans_) {
+      if (!human.alive) continue;
+      CrashContextSetHuman(human.id, human.x, human.y);
+
+      float speedScale = 1.0f;
+      if (human.role == Role::Idle) {
+        speedScale = 0.6f;
+      } else if (human.role == Role::Builder) {
+        speedScale = 0.8f;
+      } else if (human.role == Role::Guard || human.role == Role::Soldier) {
+        speedScale = 0.9f;
+      }
+      if (HumanHasTrait(human.traits, HumanTrait::Lazy)) speedScale *= 0.86f;
+      if (HumanHasTrait(human.traits, HumanTrait::Ambitious)) speedScale *= 1.05f;
+      float maxSpeed = baseSpeedTilesPerSecond * speedScale;
+
+      bool hasTarget = false;
+      Vec2 targetPos{human.px, human.py};
+
+      int stayX = human.homeX;
+      int stayY = human.homeY;
+      StayTarget(human, stayX, stayY);
+
+      if (human.goal == Goal::StayHome) {
+        targetPos = Vec2{static_cast<float>(stayX) + 0.5f, static_cast<float>(stayY) + 0.5f};
+        hasTarget = true;
+      } else if (human.goal == Goal::SeekMate && human.mateTargetId != -1) {
+        int tidx = (human.mateTargetId > 0 && human.mateTargetId < static_cast<int>(humanIdToIndex_.size()))
+                       ? humanIdToIndex_[human.mateTargetId]
+                       : -1;
+        if (tidx >= 0 && tidx < static_cast<int>(humans_.size()) && humans_[tidx].alive) {
+          targetPos = Vec2{humans_[tidx].px, humans_[tidx].py};
+          hasTarget = true;
+        }
+      } else if (human.goal != Goal::FleeFire) {
+        targetPos = Vec2{static_cast<float>(human.targetX) + 0.5f, static_cast<float>(human.targetY) + 0.5f};
+        hasTarget = true;
+      }
+
+      Vec2 steer{0.0f, 0.0f};
+
+      if (human.goal == Goal::FleeFire) {
+        auto fireAt = [&](int x, int y) { return world.FireRiskAt(x, y); };
+        Vec2 g = sampleFieldGradient(fireAt, human.x, human.y);
+        steer = steer + NormalizeOrZero(g) * -1.4f;
+      }
+
+      if (human.settlementId != -1) {
+        const bool isGatherOrScout = (human.role == Role::Gatherer || human.role == Role::Scout);
+        const bool wanderHeavy = (human.goal == Goal::Wander || isGatherOrScout);
+        if (!wanderHeavy) {
+          auto homeAt = [&](int x, int y) { return world.HomeScentAt(x, y); };
+          Vec2 g = sampleFieldGradient(homeAt, human.x, human.y);
+          float homeBias = 1.0f - (static_cast<float>(human.wanderlust) / 255.0f);
+          steer = steer + NormalizeOrZero(g) * (0.55f * homeBias);
+        }
+      }
+
+      if (human.goal == Goal::SeekFood) {
+        auto foodAt = [&](int x, int y) { return world.FoodScentAt(x, y); };
+        Vec2 g = sampleFieldGradient(foodAt, human.x, human.y);
+        steer = steer + NormalizeOrZero(g) * 0.25f;
+      }
+
+      if (hasTarget) {
+        bool usedFlow = false;
+        if (human.goal != Goal::SeekMate) {
+          int tx = ClampInt(static_cast<int>(std::floor(targetPos.x)), 0, w - 1);
+          int ty = ClampInt(static_cast<int>(std::floor(targetPos.y)), 0, h - 1);
+          int radius = 56;
+          if (human.role == Role::Soldier && human.armyState != ArmyState::Idle) {
+            radius = 80;
+          }
+          const FlowFieldEntry* flow = GetFlowField(world, tx, ty, radius, tickCount, flowBuildBudget);
+          if (flow && flow->width > 0 && flow->height > 0) {
+            int lx = human.x - flow->minX;
+            int ly = human.y - flow->minY;
+            if (lx >= 0 && ly >= 0 && lx < flow->width && ly < flow->height) {
+              size_t idx = static_cast<size_t>(ly * flow->width + lx);
+              int8_t dx = flow->dirX[idx];
+              int8_t dy = flow->dirY[idx];
+              if (dx != 0 || dy != 0) {
+                steer = steer + NormalizeOrZero(Vec2{static_cast<float>(dx), static_cast<float>(dy)}) * 1.35f;
+                usedFlow = true;
+              }
+            }
+          }
+        }
+        if (!usedFlow) {
+          Vec2 toTarget = targetPos - Vec2{human.px, human.py};
+          steer = steer + NormalizeOrZero(toTarget) * 1.25f;
+        }
+      }
+
+      float sepWeight = 0.55f;
+      if (human.role == Role::Soldier && human.warId > 0) sepWeight = 0.12f;
+      {
+        int dx = PopCountAt(human.x - 1, human.y) - PopCountAt(human.x + 1, human.y);
+        int dy = PopCountAt(human.x, human.y - 1) - PopCountAt(human.x, human.y + 1);
+        float fx = ClampFloat(static_cast<float>(dx), -8.0f, 8.0f);
+        float fy = ClampFloat(static_cast<float>(dy), -8.0f, 8.0f);
+        steer = steer + Vec2{fx, fy} * sepWeight;
+      }
+
+      {
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (const auto& d : dirs) {
+          int nx = human.x + d[0];
+          int ny = human.y + d[1];
+          if (!world.InBounds(nx, ny)) continue;
+          const Tile& tile = world.At(nx, ny);
+          if (tile.type == TileType::Ocean) {
+            steer = steer + Vec2{-static_cast<float>(d[0]), -static_cast<float>(d[1])} * 1.2f;
+          }
+          if (tile.burning) {
+            steer = steer + Vec2{-static_cast<float>(d[0]), -static_cast<float>(d[1])} * 1.0f;
+          }
+        }
+      }
+
+      {
+        uint32_t hsh = HashNoise(static_cast<uint32_t>(human.id),
+                                 static_cast<uint32_t>(tickCount / 4),
+                                 0x9Bu, 0xE1u);
+        auto toSigned01 = [](uint32_t v) {
+          return (static_cast<float>(v) / 255.0f) * 2.0f - 1.0f;
+        };
+        float nx = toSigned01(hsh & 0xFFu);
+        float ny = toSigned01((hsh >> 8) & 0xFFu);
+        steer = steer + Vec2{nx, ny} * 0.14f;
+      }
+
+      Vec2 desiredDir = NormalizeOrZero(steer);
+      Vec2 desiredVel = desiredDir * maxSpeed;
+
+      if (hasTarget) {
+        Vec2 toTarget = targetPos - Vec2{human.px, human.py};
+        float dist = Len(toTarget);
+        if (dist < 0.35f) {
+          float t = ClampFloat(dist / 0.35f, 0.0f, 1.0f);
+          desiredVel = desiredVel * t;
+        }
+      }
+
+      const float accel = 10.0f;
+      float blend = ClampFloat(accel * tickSeconds, 0.0f, 1.0f);
+      human.vx = human.vx + (desiredVel.x - human.vx) * blend;
+      human.vy = human.vy + (desiredVel.y - human.vy) * blend;
+
+      float oldPx = human.px;
+      float oldPy = human.py;
+      float newPx = oldPx + human.vx * tickSeconds;
+      float newPy = oldPy + human.vy * tickSeconds;
+
+      auto isWalkableAtPos = [&](float px, float py) -> bool {
+        int tx = ClampInt(static_cast<int>(std::floor(px)), 0, w - 1);
+        int ty = ClampInt(static_cast<int>(std::floor(py)), 0, h - 1);
+        return IsWalkable(world.At(tx, ty));
+      };
+
+      float tryPx = newPx;
+      float tryPy = oldPy;
+      if (isWalkableAtPos(tryPx, tryPy)) {
+        human.px = tryPx;
+      } else {
+        human.px = oldPx;
+        human.vx *= 0.15f;
+      }
+      tryPx = human.px;
+      tryPy = newPy;
+      if (isWalkableAtPos(tryPx, tryPy)) {
+        human.py = tryPy;
+      } else {
+        human.py = oldPy;
+        human.vy *= 0.15f;
+      }
+
+      human.px = ClampFloat(human.px, 0.001f, static_cast<float>(w) - 0.001f);
+      human.py = ClampFloat(human.py, 0.001f, static_cast<float>(h) - 0.001f);
+      human.x = ClampInt(static_cast<int>(std::floor(human.px)), 0, w - 1);
+      human.y = ClampInt(static_cast<int>(std::floor(human.py)), 0, h - 1);
+
+      float speedSq = human.vx * human.vx + human.vy * human.vy;
+      human.moving = speedSq > 0.02f * 0.02f;
+
+      float movedSq = (human.px - oldPx) * (human.px - oldPx) + (human.py - oldPy) * (human.py - oldPy);
+      if (LenSq(desiredVel) > 0.05f * 0.05f && movedSq < 1e-6f) {
+        if (human.blockedTicks < 255) human.blockedTicks++;
+      } else {
+        human.blockedTicks = 0;
+      }
+      if (human.blockedTicks >= kBlockedReplanTicks) {
+        human.blockedTicks = 0;
+        human.forceReplan = true;
+      }
+
+      // Execute on-tile task actions promptly (avoids "walk through and miss" with continuous motion).
+      if (human.forceReplan ||
+          (human.hasTask && human.x == human.taskX && human.y == human.taskY)) {
+        UpdateMoveStep(human, world, settlements, rng, tickCount, ticksPerDay);
+      }
     }
   }
 
@@ -1545,9 +1826,9 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       int targetFactionId = FactionForHuman(settlements, target);
       if (targetFactionId <= 0) return false;
       if (targetFactionId == shooterFactionId) return false;
-      int dx = target.x - shooter.x;
-      int dy = target.y - shooter.y;
-      return (dx * dx + dy * dy) <= (kBowRangeTiles * kBowRangeTiles);
+      float dx = target.px - shooter.px;
+      float dy = target.py - shooter.py;
+      return (dx * dx + dy * dy) <= (static_cast<float>(kBowRangeTiles) * static_cast<float>(kBowRangeTiles));
     };
 
     auto isValidEnemyCivilianTarget = [&](const Human& shooter, int shooterFactionId, int targetId) -> bool {
@@ -1560,9 +1841,9 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       int targetFactionId = FactionForHuman(settlements, target);
       if (targetFactionId <= 0) return false;
       if (targetFactionId == shooterFactionId) return false;
-      int dx = target.x - shooter.x;
-      int dy = target.y - shooter.y;
-      return (dx * dx + dy * dy) <= (kBowRangeTiles * kBowRangeTiles);
+      float dx = target.px - shooter.px;
+      float dy = target.py - shooter.py;
+      return (dx * dx + dy * dy) <= (static_cast<float>(kBowRangeTiles) * static_cast<float>(kBowRangeTiles));
     };
 
     // Melee: lets large armies actually convert local numbers into faster kills, reducing "1 defender stalls forever"
@@ -1689,10 +1970,10 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
       if (!target.alive) continue;
 
       if (static_cast<int>(arrows_.size()) < maxArrows) {
-        float sx = static_cast<float>(shooter.x) + 0.5f;
-        float sy = static_cast<float>(shooter.y) + 0.5f;
-        float tx = static_cast<float>(target.x) + 0.5f;
-        float ty = static_cast<float>(target.y) + 0.5f;
+        float sx = shooter.px;
+        float sy = shooter.py;
+        float tx = target.px;
+        float ty = target.py;
         float dx = tx - sx;
         float dy = ty - sy;
         float lenSq = dx * dx + dy * dy;
@@ -1792,6 +2073,10 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         static_cast<unsigned>(human.y) >= static_cast<unsigned>(h)) {
       human.x = ClampInt(human.x, 0, w - 1);
       human.y = ClampInt(human.y, 0, h - 1);
+      human.px = static_cast<float>(human.x) + 0.5f;
+      human.py = static_cast<float>(human.y) + 0.5f;
+      human.vx = 0.0f;
+      human.vy = 0.0f;
     }
 
     int ageDaysStart = human.ageDays;
@@ -1959,10 +2244,6 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
         human.lastFoodY = eatY;
       }
     }
-
-    human.daysWithoutWater = 0;
-    human.lastWaterX = human.x;
-    human.lastWaterY = human.y;
 
     bool adult = human.ageDays >= Human::kAdultAgeDays;
     if (human.female && adult && !human.pregnant && human.mateCooldownDays == 0 &&
@@ -2344,7 +2625,9 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
 void HumanManager::UpdateAnimation(float dt) {
   for (auto& human : humans_) {
     if (!human.alive) continue;
-    human.animTimer += dt;
+    float speed = std::sqrt(human.vx * human.vx + human.vy * human.vy);
+    float animRate = human.moving ? std::clamp(speed * 0.7f, 0.8f, 3.0f) : 0.6f;
+    human.animTimer += dt * animRate;
     if (human.animTimer >= 0.35f) {
       human.animTimer -= 0.35f;
       human.animFrame = (human.animFrame + 1) % 2;

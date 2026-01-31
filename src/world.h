@@ -135,6 +135,7 @@ class World {
   void MarkTerrainDirty(int x, int y);
   void MarkTerrainDirtyAll();
   bool ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY);
+  uint32_t TerrainVersion() const { return terrainVersion_; }
 
   bool SaveMap(const std::string& path) const;
   bool LoadMap(const std::string& path);
@@ -190,6 +191,7 @@ class World {
   int64_t totalFood_ = 0;
   bool buildingDirty_ = true;
   bool terrainDirty_ = true;
+  uint32_t terrainVersion_ = 1;
   int terrainMinX_ = 0;
   int terrainMinY_ = 0;
   int terrainMaxX_ = 0;

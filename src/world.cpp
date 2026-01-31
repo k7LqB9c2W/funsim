@@ -123,6 +123,7 @@ void World::ResizeStorage() {
   homeSourceStampByTile_.assign(
       static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_)), 0u);
   homeSourceGeneration_ = 1;
+  terrainVersion_ = 1;
 }
 
 Tile& World::AtUnchecked(int x, int y) {
@@ -206,10 +207,12 @@ void World::UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& a
   }
 
   if (before.type != after.type) {
-    bool beforeLand = before.type == TileType::Land;
-    bool afterLand = after.type == TileType::Land;
-    if (beforeLand != afterLand) {
-      MarkTerrainDirty(x, y);
+    MarkTerrainDirty(x, y);
+    bool beforeWalkable = before.type != TileType::Ocean;
+    bool afterWalkable = after.type != TileType::Ocean;
+    if (beforeWalkable != afterWalkable) {
+      terrainVersion_++;
+      if (terrainVersion_ == 0) terrainVersion_ = 1;
     }
     if (before.type == TileType::FreshWater || after.type == TileType::FreshWater) {
       wellRadiusDirty_ = true;
