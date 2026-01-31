@@ -279,6 +279,23 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     return false;
   }
 
+  // Optional large town hall sprite (keeps buildings atlas for other buildings).
+  {
+    const std::string townHallPath = "assets/sprites/TH.png";
+    townHallTexture_ = IMG_LoadTexture(renderer, townHallPath.c_str());
+    if (!townHallTexture_) {
+      SDL_Log("Failed to load town hall texture (%s): %s", townHallPath.c_str(), IMG_GetError());
+    } else {
+      SDL_SetTextureScaleMode(townHallTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(townHallTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(townHallTexture_, nullptr, nullptr, &townHallTexW_, &townHallTexH_) != 0) {
+        SDL_Log("Failed to query town hall texture: %s", SDL_GetError());
+        townHallTexW_ = 0;
+        townHallTexH_ = 0;
+      }
+    }
+  }
+
   SDL_SetTextureBlendMode(humansTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(tilesTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(terrainOverlayTexture_, SDL_BLENDMODE_BLEND);
@@ -377,6 +394,10 @@ void Renderer::Shutdown() {
   if (buildingsTexture_) {
     SDL_DestroyTexture(buildingsTexture_);
     buildingsTexture_ = nullptr;
+  }
+  if (townHallTexture_) {
+    SDL_DestroyTexture(townHallTexture_);
+    townHallTexture_ = nullptr;
   }
   if (shadowTexture_) {
     SDL_DestroyTexture(shadowTexture_);
@@ -971,10 +992,19 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
   if (buildingsTexture_) {
     SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
-    for (int y = minY; y <= maxY; ++y) {
-      for (int x = minX; x <= maxX; ++x) {
+    const int buildMinX = std::max(0, minX - 6);
+    const int buildMinY = std::max(0, minY - 6);
+    const int buildMaxX = std::min(world.width() - 1, maxX + 6);
+    const int buildMaxY = std::min(world.height() - 1, maxY + 6);
+    for (int y = buildMinY; y <= buildMaxY; ++y) {
+      for (int x = buildMinX; x <= buildMaxX; ++x) {
         const Tile& tile = world.At(x, y);
         if (tile.building == BuildingType::None) continue;
+
+        if (tile.building == BuildingType::TownHall && townHallTexture_) {
+          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
+          continue;
+        }
 
         AtlasCoord coord{0, 0};
         switch (tile.building) {
@@ -1045,6 +1075,29 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_Rect src = PickObjectVariant(kFoodCoords, h);
         SDL_FRect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
         SDL_RenderCopyF(renderer, objectsTexture_, &src, &dst);
+      }
+    }
+  }
+
+  // Large town hall sprite pass: render above objects and below fire/humans.
+  if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
+    const int buildMinX = std::max(0, minX - 6);
+    const int buildMinY = std::max(0, minY - 6);
+    const int buildMaxX = std::min(world.width() - 1, maxX + 6);
+    const int buildMaxY = std::min(world.height() - 1, maxY + 6);
+    float scale = tileSize / static_cast<float>(kTilePx);
+    float drawW = static_cast<float>(townHallTexW_) * scale;
+    float drawH = static_cast<float>(townHallTexH_) * scale;
+    for (int y = buildMinY; y <= buildMaxY; ++y) {
+      for (int x = buildMinX; x <= buildMaxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        if (tile.building != BuildingType::TownHall) continue;
+        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+        float worldX = anchorX - drawW * 0.5f;
+        float worldY = anchorY - drawH;
+        SDL_FRect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+        SDL_RenderCopyF(renderer, townHallTexture_, nullptr, &dst);
       }
     }
   }
