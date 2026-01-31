@@ -1141,9 +1141,9 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	          bool downWater = !isLand(tx, ty + 1);
 	          bool leftWater = !isLand(tx - 1, ty);
 	          if (!(upWater || rightWater || downWater || leftWater)) return;
-	
+
 	          SDL_SetTextureColorMod(aoCornerTexture_, 0, 0, 0);
-	          SDL_SetTextureAlphaMod(aoCornerTexture_, 26);
+	          SDL_SetTextureAlphaMod(aoCornerTexture_, 34);
 	          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 	
 	          SDL_Rect src{0, 0, kAOCornerTexPx, kAOCornerTexPx};
@@ -1165,9 +1165,9 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	            SDL_RenderCopyEx(renderer, aoCornerTexture_, &src, &br, 0.0, nullptr,
 	                             static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL));
 	          }
-	
+
 	          // Extra tiny edge darkening near water to soften square boundaries.
-	          SDL_SetRenderDrawColor(renderer, 0, 0, 0, 10);
+	          SDL_SetRenderDrawColor(renderer, 0, 0, 0, 18);
 	          constexpr int kEdge = 2;
 	          if (upWater) {
 	            SDL_Rect edge{dst.x, dst.y, dst.w, kEdge};
@@ -1608,7 +1608,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       const float worldX = static_cast<float>(x) * tileSize;
       const float worldY = static_cast<float>(y) * tileSize;
 
-      if (tile.trees > 0) {
+	      if (tile.trees > 0) {
         const float shadowW = tileSize * 0.6f;
         const float shadowH = tileSize * 0.25f;
         const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
@@ -1630,19 +1630,14 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         const float objX = worldX + static_cast<float>(jitterX);
         const float objY = worldY + static_cast<float>(jitterY);
         SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
 
-        // 1px drop shadow + cheap outline (lighter than units).
-        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(objectsTexture_, 70);
-        SDL_Rect drop = dst;
-        drop.x += 1;
-        drop.y += 1;
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &drop, 0.0, nullptr, flip);
-        SDL_SetTextureAlphaMod(objectsTexture_, 55);
-        SDL_Rect o1 = dst;
-        SDL_Rect o2 = dst;
-        SDL_Rect o3 = dst;
+	        // Cheap outline (lighter than units).
+	        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(objectsTexture_, 55);
+	        SDL_Rect o1 = dst;
+	        SDL_Rect o2 = dst;
+	        SDL_Rect o3 = dst;
         SDL_Rect o4 = dst;
         o1.x += 1;
         o2.x -= 1;
@@ -1657,7 +1652,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
       }
 
-      if (tile.food > 0) {
+	      if (tile.food > 0) {
         const float shadowW = tileSize * 0.5f;
         const float shadowH = tileSize * 0.2f;
         const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.0f;
@@ -1677,19 +1672,15 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         int jitterX = static_cast<int>(h % 5u) - 2;
         int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
         const float objX = worldX + static_cast<float>(jitterX);
-        const float objY = worldY + static_cast<float>(jitterY);
-        SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
-        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(objectsTexture_, 65);
-        SDL_Rect drop = dst;
-        drop.x += 1;
-        drop.y += 1;
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &drop, 0.0, nullptr, flip);
-        SDL_SetTextureAlphaMod(objectsTexture_, 48);
-        SDL_Rect o1 = dst;
-        SDL_Rect o2 = dst;
-        SDL_Rect o3 = dst;
+	        const float objY = worldY + static_cast<float>(jitterY);
+	        SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
+	        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+
+	        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(objectsTexture_, 48);
+	        SDL_Rect o1 = dst;
+	        SDL_Rect o2 = dst;
+	        SDL_Rect o3 = dst;
         SDL_Rect o4 = dst;
         o1.x += 1;
         o2.x -= 1;
