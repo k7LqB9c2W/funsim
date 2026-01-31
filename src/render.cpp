@@ -1080,13 +1080,15 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     humanSrc.x = col * spriteWidth_;
     humanSrc.y = row * spriteHeight_;
 
-    const float worldX = static_cast<float>(human.x) * tileSize;
-    const float worldY = static_cast<float>(human.y) * tileSize;
+    const float tileWorldX = static_cast<float>(human.x) * tileSize;
+    const float tileWorldY = static_cast<float>(human.y) * tileSize;
+    float worldX = (human.px - 0.5f) * tileSize + human.personalOffsetX * tileSize;
+    float worldY = (human.py - 0.5f) * tileSize + human.personalOffsetY * tileSize;
 
     if (config.showSoldierTileMarkers && human.role == Role::Soldier) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
       SDL_SetRenderDrawColor(renderer, 40, 255, 80, 70);
-      SDL_FRect tileDst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
+      SDL_FRect tileDst = MakeDstRect(tileWorldX, tileWorldY, tileSize, tileSize, camera);
       SDL_RenderFillRectF(renderer, &tileDst);
     }
 

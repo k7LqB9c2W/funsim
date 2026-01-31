@@ -10,7 +10,7 @@
 class SettlementManager;
 enum class TaskType : uint8_t;
 
-enum class Goal : uint8_t { Wander, SeekFood, SeekWater, SeekMate, StayHome, FleeFire };
+enum class Goal : uint8_t { Wander, SeekFood, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
 enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War };
 enum class ArmyState : uint8_t { Idle, Rally, March, Siege, Defend, Retreat };
@@ -62,6 +62,13 @@ struct Human {
   int ageDays = 0;
   int x = 0;
   int y = 0;
+  // Continuous motion state (tile-space units, not pixel units).
+  float px = 0.0f;
+  float py = 0.0f;
+  float vx = 0.0f;
+  float vy = 0.0f;
+  float personalOffsetX = 0.0f;
+  float personalOffsetY = 0.0f;
   bool alive = true;
   bool pregnant = false;
   int gestationDays = 0;
@@ -69,7 +76,6 @@ struct Human {
   float nutritionMonthAccumulator = 0.0f;
   int maxHealth = 100;
   int health = 100;
-  int daysWithoutWater = 0;
   float animTimer = 0.0f;
   int animFrame = 0;
   bool moving = false;
@@ -81,8 +87,6 @@ struct Human {
   int homeY = 0;
   int lastFoodX = 0;
   int lastFoodY = 0;
-  int lastWaterX = 0;
-  int lastWaterY = 0;
   int rethinkCooldownTicks = 0;
   int mateCooldownDays = 0;
   int settlementId = -1;
@@ -147,6 +151,20 @@ class HumanManager {
   const DeathSummary& GetDeathSummary() const { return deathSummary_; }
 
  private:
+  struct FlowFieldEntry {
+    int targetX = 0;
+    int targetY = 0;
+    int minX = 0;
+    int minY = 0;
+    int width = 0;
+    int height = 0;
+    int radius = 0;
+    uint32_t terrainVersion = 0;
+    uint32_t lastUsedTick = 0;
+    std::vector<int8_t> dirX;
+    std::vector<int8_t> dirY;
+  };
+
   Human CreateHuman(int x, int y, bool female, Random& rng, int ageDays);
   void ReplanGoal(Human& human, const World& world, const SettlementManager& settlements,
                   Random& rng, int tickCount, int ticksPerDay);
@@ -154,6 +172,9 @@ class HumanManager {
   int FindMateTargetId(const Human& human, const World& world, Random& rng) const;
   void UpdateMoveStep(Human& human, World& world, SettlementManager& settlements, Random& rng,
                       int tickCount, int ticksPerDay);
+  const FlowFieldEntry* GetFlowField(const World& world, int targetX, int targetY, int radius,
+                                     int tickCount, int& ioBuildBudget);
+  static FlowFieldEntry BuildFlowField(const World& world, int targetX, int targetY, int radius);
   void RebuildIdMap();
   void RecordDeath(int humanId, int day, DeathReason reason);
 
@@ -187,6 +208,7 @@ class HumanManager {
   std::vector<uint16_t> unitCountByTile_;
   std::vector<int> unitSampleIdByTile_;
   std::vector<int> humanIdToIndex_;
+  std::vector<FlowFieldEntry> flowFields_;
   std::vector<Human> newborns_;
   std::vector<DeathRecord> deathLog_;
   DeathSummary deathSummary_;
