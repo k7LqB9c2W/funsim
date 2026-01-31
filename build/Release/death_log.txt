@@ -1,8 +1,8 @@
 funsim_death_log
-days=870
+days=2580
 total_births=0
 total_deaths=0
-final_population=32
+final_population=1936
 starvation=0
 dehydration=0
 old_age=0

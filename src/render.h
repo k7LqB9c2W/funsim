@@ -84,6 +84,7 @@ class Renderer {
   SDL_Texture* terrainOverlayTexture_ = nullptr;
   SDL_Texture* objectsTexture_ = nullptr;
   SDL_Texture* buildingsTexture_ = nullptr;
+  SDL_Texture* townHallTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
   SDL_Texture* fireTexture_ = nullptr;
   TTF_Font* labelFont_ = nullptr;
@@ -91,6 +92,8 @@ class Renderer {
   bool ttfOwned_ = false;
   int spriteWidth_ = 32;
   int spriteHeight_ = 32;
+  int townHallTexW_ = 0;
+  int townHallTexH_ = 0;
 
   int worldWidth_ = 0;
   int worldHeight_ = 0;
