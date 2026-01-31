@@ -25,6 +25,8 @@ constexpr int kObjectCols = 2;
 constexpr int kObjectRows = 2;
 constexpr int kShadowTexPx = 32;
 constexpr int kFireTexPx = 16;
+constexpr int kAOCornerTexPx = 16;
+constexpr int kVignetteTexPx = 256;
 
 constexpr uint32_t kDeepSeed = 0x3C6EF372u;
 constexpr uint32_t kMidSeed = 0x9E3779B9u;
@@ -187,24 +189,23 @@ TintMod MakeTintMods(float rMult, float gMult, float bMult, float expectedMaxExc
 }
 
 TintMod GrassTint(int tx, int ty) {
-  // Per-tile tiny tint (no speckle).
+  // Keep base calm: very small per-tile variation, rely on macro patches for interest.
   uint32_t ux = static_cast<uint32_t>(tx);
   uint32_t uy = static_cast<uint32_t>(ty);
-  float tileV = (Hash01(ux, uy, 0xA11CE5EDu) * 2.0f - 1.0f) * 0.030f;  // ±3%
-  float tileS = (Hash01(ux, uy, 0x7D3A2D11u) * 2.0f - 1.0f) * 0.020f;  // ±2%
+  float tileV = (Hash01(ux, uy, 0xA11CE5EDu) * 2.0f - 1.0f) * 0.012f;  // ±1.2%
+  float tileS = (Hash01(ux, uy, 0x7D3A2D11u) * 2.0f - 1.0f) * 0.010f;  // ±1.0%
 
   // Large-scale smooth tint (macro patches), rotated + domain-warped + fBm to avoid "grid cells".
   float baseX = static_cast<float>(tx);
   float baseY = static_cast<float>(ty);
   float rx = 0.0f, ry = 0.0f;
-  Rotate(baseX / 28.0f, baseY / 28.0f, 0.72f, rx, ry);
-  float warp = Fbm2D(rx * 0.25f, ry * 0.25f, 0xCB22A1D3u, 3) * 0.55f;
-  float macro = Fbm2D(rx + warp, ry - warp * 0.7f, 0xE3B0C442u, 5);
-  float macro2 = Fbm2D(rx - warp * 0.6f + 4.1f, ry + warp * 0.4f - 3.2f, 0x2F6E2B1Bu, 5);
-  float micro = Fbm2D(rx * 3.0f + 1.7f, ry * 3.0f - 2.3f, 0x31415927u, 2);
+  Rotate(baseX / 55.0f, baseY / 55.0f, 0.72f, rx, ry);
+  float warp = Fbm2D(rx * 0.35f, ry * 0.35f, 0xCB22A1D3u, 2) * 0.85f;
+  float macro = Fbm2D(rx + warp, ry - warp * 0.6f, 0xE3B0C442u, 4);
+  float macro2 = Fbm2D(rx - warp * 0.4f + 4.1f, ry + warp * 0.3f - 3.2f, 0x2F6E2B1Bu, 4);
 
-  float macroV = macro * 0.022f + micro * 0.008f;  // macro + faint detail
-  float macroS = macro2 * 0.016f;
+  float macroV = macro * 0.020f;  // ~1–3% feel
+  float macroS = macro2 * 0.012f;
 
   float value = std::clamp(1.0f + tileV + macroV, 0.92f, 1.06f);
   float sat = std::clamp(tileS + macroS, -0.06f, 0.06f);
@@ -217,7 +218,8 @@ TintMod GrassTint(int tx, int ty) {
   g = std::clamp(g, 0.85f, 1.08f);
   b = std::clamp(b, 0.85f, 1.08f);
 
-  return MakeTintMods(r, g, b, 0.06f, 22);
+  // Reduce additive "sparkle" to keep grass calm.
+  return MakeTintMods(r, g, b, 0.06f, 14);
 }
 
 TintMod WaterTint(int tx, int ty, int coastDist) {
@@ -235,7 +237,7 @@ TintMod WaterTint(int tx, int ty, int coastDist) {
   float value = 1.0f + n * amp;
 
   // Thin shoreline rim band (subtle brightening right at the coast).
-  if (coastDist <= 1) value *= 1.04f;
+  if (coastDist <= 1) value *= 1.02f;
 
   float cool = n2 * 0.010f;
   float r = value * (1.0f - 0.02f + cool * -0.2f);
@@ -289,7 +291,8 @@ SDL_Texture* CreateShadowTexture(SDL_Renderer* renderer) {
         float t = 1.0f - dist;
         alpha = static_cast<Uint8>(maxAlpha * t);
       }
-      pixels[y * kShadowTexPx + x] = SDL_MapRGBA(fmt, 0, 0, 0, alpha);
+      // White alpha mask so we can color-mod it for both black shadows and earthy ground AO.
+      pixels[y * kShadowTexPx + x] = SDL_MapRGBA(fmt, 255, 255, 255, alpha);
     }
   }
 
@@ -301,6 +304,86 @@ SDL_Texture* CreateShadowTexture(SDL_Renderer* renderer) {
   }
   SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
   SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+  return texture;
+}
+
+SDL_Texture* CreateAOCornerTexture(SDL_Renderer* renderer) {
+  SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, kAOCornerTexPx, kAOCornerTexPx, 32,
+                                                        SDL_PIXELFORMAT_RGBA32);
+  if (!surface) {
+    SDL_Log("Failed to create AO corner surface: %s", SDL_GetError());
+    return nullptr;
+  }
+
+  Uint32* pixels = static_cast<Uint32*>(surface->pixels);
+  SDL_PixelFormat* fmt = surface->format;
+
+  constexpr float kMaxAlpha = 220.0f;
+  const float denom = static_cast<float>(kAOCornerTexPx - 1);
+  for (int y = 0; y < kAOCornerTexPx; ++y) {
+    for (int x = 0; x < kAOCornerTexPx; ++x) {
+      float fx = static_cast<float>(x) / denom;
+      float fy = static_cast<float>(y) / denom;
+      float d = std::sqrt(fx * fx + fy * fy);
+      Uint8 a = 0;
+      if (d < 1.0f) {
+        float t = 1.0f - d;
+        t = t * t;
+        a = static_cast<Uint8>(std::lround(kMaxAlpha * t));
+      }
+      pixels[y * kAOCornerTexPx + x] = SDL_MapRGBA(fmt, 255, 255, 255, a);
+    }
+  }
+
+  SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+  SDL_FreeSurface(surface);
+  if (!texture) {
+    SDL_Log("Failed to create AO corner texture: %s", SDL_GetError());
+    return nullptr;
+  }
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+  return texture;
+}
+
+SDL_Texture* CreateVignetteTexture(SDL_Renderer* renderer) {
+  SDL_Surface* surface =
+      SDL_CreateRGBSurfaceWithFormat(0, kVignetteTexPx, kVignetteTexPx, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!surface) {
+    SDL_Log("Failed to create vignette surface: %s", SDL_GetError());
+    return nullptr;
+  }
+
+  Uint32* pixels = static_cast<Uint32*>(surface->pixels);
+  SDL_PixelFormat* fmt = surface->format;
+
+  const float cx = (kVignetteTexPx - 1) * 0.5f;
+  const float cy = (kVignetteTexPx - 1) * 0.5f;
+  const float maxR = std::sqrt(cx * cx + cy * cy);
+
+  // Keep center clean; only darken near edges.
+  constexpr float kInner = 0.62f;
+  constexpr float kOuter = 1.00f;
+  for (int y = 0; y < kVignetteTexPx; ++y) {
+    for (int x = 0; x < kVignetteTexPx; ++x) {
+      float dx = static_cast<float>(x) - cx;
+      float dy = static_cast<float>(y) - cy;
+      float r = std::sqrt(dx * dx + dy * dy) / maxR;
+      float t = std::clamp((r - kInner) / (kOuter - kInner), 0.0f, 1.0f);
+      t = t * t;
+      Uint8 a = static_cast<Uint8>(std::lround(255.0f * t));
+      pixels[y * kVignetteTexPx + x] = SDL_MapRGBA(fmt, 255, 255, 255, a);
+    }
+  }
+
+  SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+  SDL_FreeSurface(surface);
+  if (!texture) {
+    SDL_Log("Failed to create vignette texture: %s", SDL_GetError());
+    return nullptr;
+  }
+  SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+  SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
   return texture;
 }
 
@@ -490,6 +573,18 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     Shutdown();
     return false;
   }
+  aoCornerTexture_ = CreateAOCornerTexture(renderer);
+  if (!aoCornerTexture_) {
+    Shutdown();
+    return false;
+  }
+  vignetteTexW_ = kVignetteTexPx;
+  vignetteTexH_ = kVignetteTexPx;
+  vignetteTexture_ = CreateVignetteTexture(renderer);
+  if (!vignetteTexture_) {
+    Shutdown();
+    return false;
+  }
   fireTexture_ = CreateFireTexture(renderer);
   if (!fireTexture_) {
     Shutdown();
@@ -613,6 +708,10 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(shadowTexture_);
     shadowTexture_ = nullptr;
   }
+  if (aoCornerTexture_) {
+    SDL_DestroyTexture(aoCornerTexture_);
+    aoCornerTexture_ = nullptr;
+  }
   if (fireTexture_) {
     SDL_DestroyTexture(fireTexture_);
     fireTexture_ = nullptr;
@@ -621,6 +720,12 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(grainTexture_);
     grainTexture_ = nullptr;
   }
+  if (vignetteTexture_) {
+    SDL_DestroyTexture(vignetteTexture_);
+    vignetteTexture_ = nullptr;
+  }
+  vignetteTexW_ = 0;
+  vignetteTexH_ = 0;
 }
 
 void Renderer::OnRenderTargetsReset() {
@@ -898,6 +1003,22 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
     return kMaxLandDist + 1;
   };
 
+  auto jitteredCoastDist = [&](int x, int y, int coastDist) -> int {
+    if (coastDist < 2) return coastDist;
+    float n = Fbm2D(static_cast<float>(x) / 23.0f, static_cast<float>(y) / 23.0f, 0x4C11DB7Du, 3);
+    int j = 0;
+    if (n > 0.35f) j = 1;
+    else if (n < -0.35f) j = -1;
+    return std::max(0, coastDist + j);
+  };
+
+  auto waterBandFromCoastDist = [&](int coastDist) -> int {
+    // 0 = shallow, 1 = mid, 2 = deep
+    if (coastDist <= 1) return 0;
+    if (coastDist <= 4) return 1;
+    return 2;
+  };
+
   auto ensureChunkTexture = [&](int chunkIndex, TerrainChunk& chunk) {
     if (chunk.texture) return true;
     int texW = chunk.tilesWide * kTilePx;
@@ -933,53 +1054,142 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_RenderClear(renderer);
 
-        auto applyAdd = [&](const SDL_Rect& dst, const TintMod& tint) {
-          if (tint.addA == 0u) return;
-          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_ADD);
-          SDL_SetRenderDrawColor(renderer, tint.addR, tint.addG, tint.addB, tint.addA);
-          SDL_RenderFillRect(renderer, &dst);
-          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        };
+	        auto applyAdd = [&](const SDL_Rect& dst, const TintMod& tint) {
+	          if (tint.addA == 0u) return;
+	          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_ADD);
+	          SDL_SetRenderDrawColor(renderer, tint.addR, tint.addG, tint.addB, tint.addA);
+	          SDL_RenderFillRect(renderer, &dst);
+	          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	        };
+	
+	        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
+	          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+	            if (isLand(x, y)) continue;
+	
+	            int distToLand = coastDistance(x, y);
+	            int coastDist = std::max(0, distToLand - 1);
+	            int coastDistJ = jitteredCoastDist(x, y, coastDist);
+	            SDL_Rect src;
+	            uint32_t wh = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0x13579BDFu);
+	            if (coastDistJ <= 1) {
+	              src = PickTilesVariant(kShallowWaterCoords, wh);
+	            } else if (coastDistJ <= 4) {
+	              src = PickTilesVariant(kMidWaterCoords, wh);
+	            } else {
+	              // Deep water: only mild pattern variation.
+	              src = TilesRect(kDeepWaterCoords[wh & 1u]);
+	            }
+	
+	            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
+	                         kTilePx};
+	            TintMod tint = WaterTint(x, y, coastDistJ);
+	            SDL_SetTextureColorMod(tilesTexture_, tint.modR, tint.modG, tint.modB);
+	            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+	            applyAdd(dst, tint);
+	
+	            uint8_t mask = 0;
+	            if (isLand(x, y - 1)) mask |= 1u;
+	            if (isLand(x + 1, y)) mask |= 2u;
+	            if (isLand(x, y + 1)) mask |= 4u;
+	            if (isLand(x - 1, y)) mask |= 8u;
+	            if (mask != 0u) {
+	              SDL_Rect foam = FoamRect(mask);
+	              SDL_RenderCopy(renderer, terrainOverlayTexture_, &foam, &dst);
+	            }
+	
+	            // Depth band contour: subtle dark strip on the deeper side of band boundaries.
+	            int band = waterBandFromCoastDist(coastDistJ);
+	            if (band > 0 && (coastDistJ == 2 || coastDistJ == 5)) {
+	              SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	              SDL_SetRenderDrawColor(renderer, 0, 0, 10, 14);
+	              auto neighborBand = [&](int nx, int ny) -> int {
+	                if (nx < 0 || ny < 0 || nx >= worldWidth_ || ny >= worldHeight_) return band;
+	                if (isLand(nx, ny)) return band;
+	                int nd = std::max(0, coastDistance(nx, ny) - 1);
+	                nd = jitteredCoastDist(nx, ny, nd);
+	                return waterBandFromCoastDist(nd);
+	              };
+	              int up = neighborBand(x, y - 1);
+	              int right = neighborBand(x + 1, y);
+	              int down = neighborBand(x, y + 1);
+	              int left = neighborBand(x - 1, y);
+	              constexpr int kStrip = 2;
+	              if (up < band) {
+	                SDL_Rect strip{dst.x, dst.y, dst.w, kStrip};
+	                SDL_RenderFillRect(renderer, &strip);
+	              }
+	              if (down < band) {
+	                SDL_Rect strip{dst.x, dst.y + dst.h - kStrip, dst.w, kStrip};
+	                SDL_RenderFillRect(renderer, &strip);
+	              }
+	              if (left < band) {
+	                SDL_Rect strip{dst.x, dst.y, kStrip, dst.h};
+	                SDL_RenderFillRect(renderer, &strip);
+	              }
+	              if (right < band) {
+	                SDL_Rect strip{dst.x + dst.w - kStrip, dst.y, kStrip, dst.h};
+	                SDL_RenderFillRect(renderer, &strip);
+	              }
+	            }
+	          }
+	        }
+	
+	        auto applyTerrainAO = [&](int tx, int ty, const SDL_Rect& dst) {
+	          if (!aoCornerTexture_) return;
+	          bool upWater = !isLand(tx, ty - 1);
+	          bool rightWater = !isLand(tx + 1, ty);
+	          bool downWater = !isLand(tx, ty + 1);
+	          bool leftWater = !isLand(tx - 1, ty);
+	          if (!(upWater || rightWater || downWater || leftWater)) return;
+	
+	          SDL_SetTextureColorMod(aoCornerTexture_, 0, 0, 0);
+	          SDL_SetTextureAlphaMod(aoCornerTexture_, 26);
+	          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	
+	          SDL_Rect src{0, 0, kAOCornerTexPx, kAOCornerTexPx};
+	          constexpr int kCornerPx = 12;
+	          if (upWater || leftWater) {
+	            SDL_Rect tl{dst.x, dst.y, kCornerPx, kCornerPx};
+	            SDL_RenderCopyEx(renderer, aoCornerTexture_, &src, &tl, 0.0, nullptr, SDL_FLIP_NONE);
+	          }
+	          if (upWater || rightWater) {
+	            SDL_Rect tr{dst.x + dst.w - kCornerPx, dst.y, kCornerPx, kCornerPx};
+	            SDL_RenderCopyEx(renderer, aoCornerTexture_, &src, &tr, 0.0, nullptr, SDL_FLIP_HORIZONTAL);
+	          }
+	          if (downWater || leftWater) {
+	            SDL_Rect bl{dst.x, dst.y + dst.h - kCornerPx, kCornerPx, kCornerPx};
+	            SDL_RenderCopyEx(renderer, aoCornerTexture_, &src, &bl, 0.0, nullptr, SDL_FLIP_VERTICAL);
+	          }
+	          if (downWater || rightWater) {
+	            SDL_Rect br{dst.x + dst.w - kCornerPx, dst.y + dst.h - kCornerPx, kCornerPx, kCornerPx};
+	            SDL_RenderCopyEx(renderer, aoCornerTexture_, &src, &br, 0.0, nullptr,
+	                             static_cast<SDL_RendererFlip>(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL));
+	          }
+	
+	          // Extra tiny edge darkening near water to soften square boundaries.
+	          SDL_SetRenderDrawColor(renderer, 0, 0, 0, 10);
+	          constexpr int kEdge = 2;
+	          if (upWater) {
+	            SDL_Rect edge{dst.x, dst.y, dst.w, kEdge};
+	            SDL_RenderFillRect(renderer, &edge);
+	          }
+	          if (downWater) {
+	            SDL_Rect edge{dst.x, dst.y + dst.h - kEdge, dst.w, kEdge};
+	            SDL_RenderFillRect(renderer, &edge);
+	          }
+	          if (leftWater) {
+	            SDL_Rect edge{dst.x, dst.y, kEdge, dst.h};
+	            SDL_RenderFillRect(renderer, &edge);
+	          }
+	          if (rightWater) {
+	            SDL_Rect edge{dst.x + dst.w - kEdge, dst.y, kEdge, dst.h};
+	            SDL_RenderFillRect(renderer, &edge);
+	          }
+	        };
 
-        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-            if (isLand(x, y)) continue;
-
-            int distToLand = coastDistance(x, y);
-            int coastDist = std::max(0, distToLand - 1);
-            SDL_Rect src;
-            uint32_t wh = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), 0x13579BDFu);
-            if (coastDist <= 1) {
-              src = PickTilesVariant(kShallowWaterCoords, wh);
-            } else if (coastDist <= 4) {
-              src = PickTilesVariant(kMidWaterCoords, wh);
-            } else {
-              // Deep water: only mild pattern variation.
-              src = TilesRect(kDeepWaterCoords[wh & 1u]);
-            }
-
-            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
-                         kTilePx};
-            TintMod tint = WaterTint(x, y, coastDist);
-            SDL_SetTextureColorMod(tilesTexture_, tint.modR, tint.modG, tint.modB);
-            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
-            applyAdd(dst, tint);
-
-            uint8_t mask = 0;
-            if (isLand(x, y - 1)) mask |= 1u;
-            if (isLand(x + 1, y)) mask |= 2u;
-            if (isLand(x, y + 1)) mask |= 4u;
-            if (isLand(x - 1, y)) mask |= 8u;
-            if (mask != 0u) {
-              SDL_Rect foam = FoamRect(mask);
-              SDL_RenderCopy(renderer, terrainOverlayTexture_, &foam, &dst);
-            }
-          }
-        }
-
-        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
-            if (!isLand(x, y)) continue;
+	        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
+	          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+	            if (!isLand(x, y)) continue;
 
             bool beach =
                 !isLand(x, y - 1) || !isLand(x + 1, y) || !isLand(x, y + 1) || !isLand(x - 1, y);
@@ -1020,17 +1230,34 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
               TintMod tint = GrassTint(x, y);
               SDL_SetTextureColorMod(tilesTexture_, tint.modR, tint.modG, tint.modB);
               // Note: additive brightening happens after the tile is drawn.
-              SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
-                           kTilePx};
-              SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
-              applyAdd(dst, tint);
-              continue;
-            }
-            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
-                         kTilePx};
-            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
-          }
-        }
+	              SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
+	                           kTilePx};
+	              SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+	              applyAdd(dst, tint);
+	              // Calming color wash to compress contrast (WorldBox-style "flat first").
+	              float washN =
+	                  Fbm2D(static_cast<float>(x) / 60.0f, static_cast<float>(y) / 60.0f, 0x9B05688Cu, 3);
+	              float washA = std::clamp(0.08f + washN * 0.03f, 0.05f, 0.12f);
+	              Uint8 alpha = static_cast<Uint8>(std::lround(washA * 255.0f));
+	              SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	              SDL_SetRenderDrawColor(renderer, 85, 150, 85, alpha);
+	              SDL_RenderFillRect(renderer, &dst);
+
+	              applyTerrainAO(x, y, dst);
+	              continue;
+	            }
+	            SDL_Rect dst{(x - chunk.originX) * kTilePx, (y - chunk.originY) * kTilePx, kTilePx,
+	                         kTilePx};
+	            SDL_RenderCopy(renderer, tilesTexture_, &src, &dst);
+	            // Subtle shoreline land darkening (keeps foam, adds depth).
+	            if (beach) {
+	              SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	              SDL_SetRenderDrawColor(renderer, 0, 0, 0, 10);
+	              SDL_RenderFillRect(renderer, &dst);
+	            }
+	            applyTerrainAO(x, y, dst);
+	          }
+	        }
 
         SDL_SetTextureColorMod(tilesTexture_, 255, 255, 255);
       }
@@ -1266,80 +1493,111 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
   }
 
-  CrashContextSetStage("Render::Buildings");
-  if (buildingsTexture_) {
-    SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
-    const int buildMinX = std::max(0, minX - 6);
-    const int buildMinY = std::max(0, minY - 6);
-    const int buildMaxX = std::min(world.width() - 1, maxX + 6);
-    const int buildMaxY = std::min(world.height() - 1, maxY + 6);
-    SDL_SetTextureAlphaMod(shadowTexture_, 105);
-    for (int y = buildMinY; y <= buildMaxY; ++y) {
-      for (int x = buildMinX; x <= buildMaxX; ++x) {
-        const Tile& tile = world.At(x, y);
-        if (tile.building == BuildingType::None) continue;
-
-        if (tile.building == BuildingType::TownHall && townHallTexture_) {
-          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
-          continue;
-        }
-
-        AtlasCoord coord{0, 0};
-        switch (tile.building) {
-          case BuildingType::House:
-            coord = AtlasCoord{0, 0};
-            break;
-          case BuildingType::TownHall:
-            coord = AtlasCoord{0, 1};
-            break;
-          case BuildingType::Farm:
-            coord = AtlasCoord{0, 2};
-            break;
-          case BuildingType::Granary:
-            coord = AtlasCoord{1, 2};
-            break;
-          case BuildingType::Well:
-            coord = AtlasCoord{1, 1};
-            break;
-          default:
-            coord = AtlasCoord{0, 0};
-            break;
-        }
-        buildingSrc.x = coord.col * kTilePx;
-        buildingSrc.y = coord.row * kTilePx;
-
-        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
-                            0xB17D1E5Eu ^ static_cast<uint32_t>(tile.building));
-        int jitterX = static_cast<int>(h % 5u) - 2;
-        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
-        const float worldX = static_cast<float>(x) * tileSize + static_cast<float>(jitterX);
-        const float worldY = static_cast<float>(y) * tileSize + static_cast<float>(jitterY);
-
-        float shadowW = tileSize * 0.70f;
-        float shadowH = tileSize * 0.28f;
-        if (tile.building == BuildingType::Well) {
-          shadowW = tileSize * 0.55f;
-          shadowH = tileSize * 0.22f;
-        } else if (tile.building == BuildingType::Granary) {
-          shadowW = tileSize * 0.80f;
-          shadowH = tileSize * 0.30f;
-        } else if (tile.building == BuildingType::TownHall) {
-          shadowW = tileSize * 0.95f;
-          shadowH = tileSize * 0.33f;
-        }
-        const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
-        const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.5f;
-        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-
-        SDL_Rect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
-        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &dst);
-      }
-    }
-    SDL_SetTextureAlphaMod(shadowTexture_, 90);
-  }
+	  CrashContextSetStage("Render::Buildings");
+	  if (buildingsTexture_) {
+	    SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
+	    const int buildMinX = std::max(0, minX - 6);
+	    const int buildMinY = std::max(0, minY - 6);
+	    const int buildMaxX = std::min(world.width() - 1, maxX + 6);
+	    const int buildMaxY = std::min(world.height() - 1, maxY + 6);
+	    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+	    SDL_SetTextureAlphaMod(shadowTexture_, 105);
+	    for (int y = buildMinY; y <= buildMaxY; ++y) {
+	      for (int x = buildMinX; x <= buildMaxX; ++x) {
+	        const Tile& tile = world.At(x, y);
+	        if (tile.building == BuildingType::None) continue;
+	
+	        if (tile.building == BuildingType::TownHall && townHallTexture_) {
+	          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
+	          continue;
+	        }
+	
+	        AtlasCoord coord{0, 0};
+	        switch (tile.building) {
+	          case BuildingType::House:
+	            coord = AtlasCoord{0, 0};
+	            break;
+	          case BuildingType::TownHall:
+	            coord = AtlasCoord{0, 1};
+	            break;
+	          case BuildingType::Farm:
+	            coord = AtlasCoord{0, 2};
+	            break;
+	          case BuildingType::Granary:
+	            coord = AtlasCoord{1, 2};
+	            break;
+	          case BuildingType::Well:
+	            coord = AtlasCoord{1, 1};
+	            break;
+	          default:
+	            coord = AtlasCoord{0, 0};
+	            break;
+	        }
+	        buildingSrc.x = coord.col * kTilePx;
+	        buildingSrc.y = coord.row * kTilePx;
+	
+	        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+	                            0xB17D1E5Eu ^ static_cast<uint32_t>(tile.building));
+	        int jitterX = static_cast<int>(h % 5u) - 2;
+	        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+	        const float worldX = static_cast<float>(x) * tileSize + static_cast<float>(jitterX);
+	        const float worldY = static_cast<float>(y) * tileSize + static_cast<float>(jitterY);
+	
+	        float shadowW = tileSize * 0.70f;
+	        float shadowH = tileSize * 0.28f;
+	        if (tile.building == BuildingType::Well) {
+	          shadowW = tileSize * 0.55f;
+	          shadowH = tileSize * 0.22f;
+	        } else if (tile.building == BuildingType::Granary) {
+	          shadowW = tileSize * 0.80f;
+	          shadowH = tileSize * 0.30f;
+	        } else if (tile.building == BuildingType::TownHall) {
+	          shadowW = tileSize * 0.95f;
+	          shadowH = tileSize * 0.33f;
+	        }
+	        const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
+	        const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.5f;
+	        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+	        // Earthy ground AO under footprint (glues objects to terrain).
+	        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+	        SDL_SetTextureAlphaMod(shadowTexture_, 55);
+	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+	        // Soft shadow.
+	        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(shadowTexture_, 110);
+	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+	
+	        SDL_Rect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
+	        // 1px drop shadow + cheap outline (lighter than units).
+	        SDL_SetTextureColorMod(buildingsTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(buildingsTexture_, 70);
+	        SDL_Rect drop = dst;
+	        drop.x += 1;
+	        drop.y += 1;
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &drop);
+	        SDL_SetTextureAlphaMod(buildingsTexture_, 55);
+	        SDL_Rect o1 = dst;
+	        SDL_Rect o2 = dst;
+	        SDL_Rect o3 = dst;
+	        SDL_Rect o4 = dst;
+	        o1.x += 1;
+	        o2.x -= 1;
+	        o3.y += 1;
+	        o4.y -= 1;
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &o1);
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &o2);
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &o3);
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &o4);
+	        SDL_SetTextureColorMod(buildingsTexture_, 255, 255, 255);
+	        SDL_SetTextureAlphaMod(buildingsTexture_, 255);
+	        SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &dst);
+	      }
+	    }
+	    SDL_SetTextureAlphaMod(shadowTexture_, 90);
+	  }
 
   CrashContextSetStage("Render::Objects");
+  SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
   SDL_SetTextureAlphaMod(shadowTexture_, 90);
   for (int y = minY; y <= maxY; ++y) {
     for (int x = minX; x <= maxX; ++x) {
@@ -1356,6 +1614,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
         const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.5f;
         SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+        // Earthy ground AO.
+        SDL_SetTextureColorMod(shadowTexture_, 80, 92, 55);
+        SDL_SetTextureAlphaMod(shadowTexture_, 55);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        // Soft shadow.
+        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(shadowTexture_, 95);
         SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
 
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kTreeSeed);
@@ -1365,8 +1630,31 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         const float objX = worldX + static_cast<float>(jitterX);
         const float objY = worldY + static_cast<float>(jitterY);
         SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr,
-                         (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+
+        // 1px drop shadow + cheap outline (lighter than units).
+        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(objectsTexture_, 70);
+        SDL_Rect drop = dst;
+        drop.x += 1;
+        drop.y += 1;
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &drop, 0.0, nullptr, flip);
+        SDL_SetTextureAlphaMod(objectsTexture_, 55);
+        SDL_Rect o1 = dst;
+        SDL_Rect o2 = dst;
+        SDL_Rect o3 = dst;
+        SDL_Rect o4 = dst;
+        o1.x += 1;
+        o2.x -= 1;
+        o3.y += 1;
+        o4.y -= 1;
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
+        SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
+        SDL_SetTextureAlphaMod(objectsTexture_, 255);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
       }
 
       if (tile.food > 0) {
@@ -1375,6 +1663,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.0f;
         const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.0f;
         SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+        // Earthy ground AO.
+        SDL_SetTextureColorMod(shadowTexture_, 88, 92, 55);
+        SDL_SetTextureAlphaMod(shadowTexture_, 50);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        // Soft shadow.
+        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(shadowTexture_, 80);
         SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
 
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kFoodSeed);
@@ -1384,46 +1679,94 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         const float objX = worldX + static_cast<float>(jitterX);
         const float objY = worldY + static_cast<float>(jitterY);
         SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr,
-                         (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
+        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(objectsTexture_, 65);
+        SDL_Rect drop = dst;
+        drop.x += 1;
+        drop.y += 1;
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &drop, 0.0, nullptr, flip);
+        SDL_SetTextureAlphaMod(objectsTexture_, 48);
+        SDL_Rect o1 = dst;
+        SDL_Rect o2 = dst;
+        SDL_Rect o3 = dst;
+        SDL_Rect o4 = dst;
+        o1.x += 1;
+        o2.x -= 1;
+        o3.y += 1;
+        o4.y -= 1;
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
+        SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
+        SDL_SetTextureAlphaMod(objectsTexture_, 255);
+        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
       }
     }
   }
 
-  // Large town hall sprite pass: render above objects and below fire/humans.
-  CrashContextSetStage("Render::TownHall");
-  if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
-    float scale = tileSize / static_cast<float>(kTilePx);
-    float drawW = static_cast<float>(townHallTexW_) * scale;
-    float drawH = static_cast<float>(townHallTexH_) * scale;
-    int pad = 6;
-    pad = std::max(pad, static_cast<int>(std::ceil(drawW / tileSize)) + 2);
-    pad = std::max(pad, static_cast<int>(std::ceil(drawH / tileSize)) + 2);
-    const int buildMinX = std::max(0, minX - pad);
-    const int buildMinY = std::max(0, minY - pad);
-    const int buildMaxX = std::min(world.width() - 1, maxX + pad);
-    const int buildMaxY = std::min(world.height() - 1, maxY + pad);
-    SDL_SetTextureAlphaMod(shadowTexture_, 130);
-    for (int y = buildMinY; y <= buildMaxY; ++y) {
-      for (int x = buildMinX; x <= buildMaxX; ++x) {
-        const Tile& tile = world.At(x, y);
-        if (tile.building != BuildingType::TownHall) continue;
-        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
-        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
-        float worldX = anchorX - drawW * 0.5f;
-        float worldY = anchorY - drawH;
-        float shadowW = drawW * 0.58f;
-        float shadowH = tileSize * 0.55f;
-        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
-        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
-        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
-        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &dst);
-      }
-    }
-    SDL_SetTextureAlphaMod(shadowTexture_, 90);
-  }
+	  // Large town hall sprite pass: render above objects and below fire/humans.
+	  CrashContextSetStage("Render::TownHall");
+	  if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
+	    float scale = tileSize / static_cast<float>(kTilePx);
+	    float drawW = static_cast<float>(townHallTexW_) * scale;
+	    float drawH = static_cast<float>(townHallTexH_) * scale;
+	    int pad = 6;
+	    pad = std::max(pad, static_cast<int>(std::ceil(drawW / tileSize)) + 2);
+	    pad = std::max(pad, static_cast<int>(std::ceil(drawH / tileSize)) + 2);
+	    const int buildMinX = std::max(0, minX - pad);
+	    const int buildMinY = std::max(0, minY - pad);
+	    const int buildMaxX = std::min(world.width() - 1, maxX + pad);
+	    const int buildMaxY = std::min(world.height() - 1, maxY + pad);
+	    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+	    SDL_SetTextureAlphaMod(shadowTexture_, 130);
+	    for (int y = buildMinY; y <= buildMaxY; ++y) {
+	      for (int x = buildMinX; x <= buildMaxX; ++x) {
+	        const Tile& tile = world.At(x, y);
+	        if (tile.building != BuildingType::TownHall) continue;
+	        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+	        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+	        float worldX = anchorX - drawW * 0.5f;
+	        float worldY = anchorY - drawH;
+	        float shadowW = drawW * 0.58f;
+	        float shadowH = tileSize * 0.55f;
+	        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
+	        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
+	        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+	        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+	        SDL_SetTextureAlphaMod(shadowTexture_, 60);
+	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+	        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(shadowTexture_, 135);
+	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+	        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+	        SDL_SetTextureColorMod(townHallTexture_, 0, 0, 0);
+	        SDL_SetTextureAlphaMod(townHallTexture_, 70);
+	        SDL_Rect drop = dst;
+	        drop.x += 1;
+	        drop.y += 1;
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &drop);
+	        SDL_SetTextureAlphaMod(townHallTexture_, 50);
+	        SDL_Rect o1 = dst;
+	        SDL_Rect o2 = dst;
+	        SDL_Rect o3 = dst;
+	        SDL_Rect o4 = dst;
+	        o1.x += 1;
+	        o2.x -= 1;
+	        o3.y += 1;
+	        o4.y -= 1;
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o1);
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o2);
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o3);
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o4);
+	        SDL_SetTextureColorMod(townHallTexture_, 255, 255, 255);
+	        SDL_SetTextureAlphaMod(townHallTexture_, 255);
+	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &dst);
+	      }
+	    }
+	    SDL_SetTextureAlphaMod(shadowTexture_, 90);
+	  }
 
   CrashContextSetStage("Render::Fire");
   SDL_Rect fireSrc = FireSrc();
@@ -1445,6 +1788,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     }
   }
 
+  SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
   SDL_SetTextureAlphaMod(shadowTexture_, 110);
   SDL_Rect humanSrc{0, 0, spriteWidth_, spriteHeight_};
   const auto& list = humans.Humans();
@@ -1536,7 +1880,28 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     }
   }
 
-  // Full-screen post: ultra-subtle grain.
+  // Full-screen post: tiny grade + vignette + ultra-subtle grain.
+  CrashContextSetStage("Render::Grade");
+  {
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_Rect full{0, 0, windowWidth, windowHeight};
+    // Slight desaturation: blend toward a neutral gray.
+    SDL_SetRenderDrawColor(renderer, 128, 128, 128, 10);
+    SDL_RenderFillRect(renderer, &full);
+    // Slight warm bias to unify palette (keep water cooling via WaterTint()).
+    SDL_SetRenderDrawColor(renderer, 255, 235, 220, 6);
+    SDL_RenderFillRect(renderer, &full);
+  }
+
+  CrashContextSetStage("Render::Vignette");
+  if (vignetteTexture_) {
+    SDL_SetTextureColorMod(vignetteTexture_, 0, 0, 0);
+    SDL_SetTextureAlphaMod(vignetteTexture_, 34);
+    SDL_Rect dst{0, 0, windowWidth, windowHeight};
+    SDL_RenderCopy(renderer, vignetteTexture_, nullptr, &dst);
+    SDL_SetTextureAlphaMod(vignetteTexture_, 255);
+  }
+
   CrashContextSetStage("Render::Grain");
   if (grainTexture_ && grainTexW_ > 0 && grainTexH_ > 0) {
     SDL_SetTextureAlphaMod(grainTexture_, 6);  // ~2%

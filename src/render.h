@@ -88,6 +88,8 @@ class Renderer {
   SDL_Texture* townHallTexture_ = nullptr;
   SDL_Texture* grainTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
+  SDL_Texture* aoCornerTexture_ = nullptr;
+  SDL_Texture* vignetteTexture_ = nullptr;
   SDL_Texture* fireTexture_ = nullptr;
   TTF_Font* labelFont_ = nullptr;
   bool ttfReady_ = false;
@@ -98,6 +100,8 @@ class Renderer {
   int townHallTexH_ = 0;
   int grainTexW_ = 0;
   int grainTexH_ = 0;
+  int vignetteTexW_ = 0;
+  int vignetteTexH_ = 0;
 
   int worldWidth_ = 0;
   int worldHeight_ = 0;
