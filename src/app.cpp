@@ -58,16 +58,19 @@ bool App::Init() {
   CrashContextSetWorld(world_.width(), world_.height());
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
+  CrashContextSetStage("App::Init SDL_Init");
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
     SDL_Log("SDL_Init failed: %s", SDL_GetError());
     return false;
   }
 
+  CrashContextSetStage("App::Init IMG_Init");
   if ((IMG_Init(IMG_INIT_PNG) & IMG_INIT_PNG) == 0) {
     SDL_Log("IMG_Init failed: %s", IMG_GetError());
     return false;
   }
 
+  CrashContextSetStage("App::Init CreateWindow");
   window_ = SDL_CreateWindow("funsim", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280,
                              720, SDL_WINDOW_RESIZABLE);
   if (!window_) {
@@ -75,6 +78,7 @@ bool App::Init() {
     return false;
   }
 
+  CrashContextSetStage("App::Init CreateRenderer");
   renderer_ = SDL_CreateRenderer(window_, -1,
                                  SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (!renderer_) {
@@ -84,6 +88,7 @@ bool App::Init() {
 
   SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
 
+  CrashContextSetStage("App::Init ImGui");
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::StyleColorsDark();
@@ -97,6 +102,7 @@ bool App::Init() {
     io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 18.0f);
   }
 
+  CrashContextSetStage("App::Init RendererAssets::Load");
   if (!rendererAssets_.Load(renderer_, "assets/sprites/humans.png", "assets/sprites/tiles.png",
                             "assets/sprites/terrain_tiles.png",
                             "assets/sprites/object_tiles.png",
@@ -337,6 +343,7 @@ void App::RenderFrame() {
   overlayConfig.showTroopCounts = ui_.showTroopCounts;
   overlayConfig.showTroopCountsAllZones = ui_.showTroopCountsAllZones;
   overlayConfig.showSoldierTileMarkers = ui_.showSoldierTileMarkers;
+  overlayConfig.showChunkBoundaries = ui_.showChunkBoundaries;
   rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
                          villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
                          ui_.overlayMode, overlayConfig);

@@ -1384,7 +1384,10 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
   EnsureCrowdGrids(w, h);
   const float stepsPerTick = kStepsPerDay / static_cast<float>(ticksPerDay);
   const float daySeconds = tickSeconds * static_cast<float>(ticksPerDay);
-  const float baseSpeedTilesPerSecond = (daySeconds > 0.0f) ? (kStepsPerDay / daySeconds) : 0.0f;
+  // Movement feel is tuned via steering/avoidance; this scales overall travel speed.
+  constexpr float kMoveSpeedMultiplier = 3.0f;
+  const float baseSpeedTilesPerSecond =
+      (daySeconds > 0.0f) ? ((kStepsPerDay / daySeconds) * kMoveSpeedMultiplier) : 0.0f;
 
   // Update crowd density every tick for separation/flow feel.
   if (crowdGridW_ > 0 && crowdGridH_ > 0) {
@@ -2068,9 +2071,11 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
   for (auto& human : humans_) {
     if (!human.alive) continue;
     CrashContextSetHuman(human.id, human.x, human.y);
+    CrashContextSetNote("daily:begin");
 
     if (static_cast<unsigned>(human.x) >= static_cast<unsigned>(w) ||
         static_cast<unsigned>(human.y) >= static_cast<unsigned>(h)) {
+      CrashContextSetNote("daily:clamp_pos");
       human.x = ClampInt(human.x, 0, w - 1);
       human.y = ClampInt(human.y, 0, h - 1);
       human.px = static_cast<float>(human.x) + 0.5f;
@@ -2079,11 +2084,13 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       human.vy = 0.0f;
     }
 
+    CrashContextSetNote("daily:age_cooldowns");
     int ageDaysStart = human.ageDays;
     human.ageDays += dayDelta;
     human.mateCooldownDays = std::max(0, human.mateCooldownDays - dayDelta);
 
     if (human.pregnant) {
+      CrashContextSetNote("daily:pregnancy");
       human.gestationDays += dayDelta;
       if (human.gestationDays >= kGestationDays) {
         human.pregnant = false;
@@ -2111,6 +2118,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
 
     const Tile& tile = world.At(human.x, human.y);
+    CrashContextSetNote("daily:nutrition_tick");
     const float monthDelta = static_cast<float>(dayDelta) / 30.0f;
     human.nutritionMonthAccumulator += monthDelta;
     while (human.nutritionMonthAccumulator >= kNutritionMonthsPerPoint) {
@@ -2134,6 +2142,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     if (!human.alive) continue;
 
     if (human.nutrition <= kNutritionEatThreshold) {
+      CrashContextSetNote("daily:eat");
       bool ate = false;
       int eatX = human.x;
       int eatY = human.y;
@@ -2248,6 +2257,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     bool adult = human.ageDays >= Human::kAdultAgeDays;
     if (human.female && adult && !human.pregnant && human.mateCooldownDays == 0 &&
         human.nutrition >= 50) {
+      CrashContextSetNote("daily:mate");
       bool canMate = true;
       if (settlement && (settlement->stockFood < settlement->population * kMateFoodReservePerPop ||
                          settlement->housingCap <= settlement->population)) {
@@ -2277,6 +2287,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
       }
     }
 
+    CrashContextSetNote("daily:oldage");
     if (RollOldAgeDeathWindow(rng, ageDaysStart, dayDelta, human.legendary)) {
       RecordDeath(human.id, dayCount, DeathReason::OldAge);
       human.alive = false;
@@ -2285,10 +2296,12 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
   }
 
+  CrashContextSetNote("daily:append_newborns");
   if (!newborns_.empty()) {
     humans_.insert(humans_.end(), newborns_.begin(), newborns_.end());
   }
 
+  CrashContextSetNote("daily:compact");
   size_t write = 0;
   for (size_t read = 0; read < humans_.size(); ++read) {
     if (!humans_[read].alive) continue;
@@ -2299,7 +2312,9 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
   }
   humans_.resize(write);
 
+  CrashContextSetNote("daily:rebuild_id_map");
   RebuildIdMap();
+  CrashContextSetNote("");
 }
 
 void HumanManager::EnterMacro(SettlementManager& settlements) {

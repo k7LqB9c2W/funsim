@@ -67,6 +67,7 @@ struct UIState {
   bool showTroopCounts = true;
   bool showTroopCountsAllZones = false;
   bool showSoldierTileMarkers = true;
+  bool showChunkBoundaries = false;
   int worldSizeIndex = 0;
   bool newWorld = false;
   bool saveMap = false;

@@ -35,6 +35,7 @@ struct RenderOverlayConfig {
   bool showTroopCounts = true;      // Draw soldier counts over zones.
   bool showTroopCountsAllZones = false;  // Otherwise only conflict zones.
   bool showSoldierTileMarkers = true;    // Draw green tile highlights under soldiers.
+  bool showChunkBoundaries = false;      // Debug: draw terrain cache chunk boundaries.
 };
 
 class Renderer {
@@ -85,6 +86,7 @@ class Renderer {
   SDL_Texture* objectsTexture_ = nullptr;
   SDL_Texture* buildingsTexture_ = nullptr;
   SDL_Texture* townHallTexture_ = nullptr;
+  SDL_Texture* grainTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
   SDL_Texture* fireTexture_ = nullptr;
   TTF_Font* labelFont_ = nullptr;
@@ -94,6 +96,8 @@ class Renderer {
   int spriteHeight_ = 32;
   int townHallTexW_ = 0;
   int townHallTexH_ = 0;
+  int grainTexW_ = 0;
+  int grainTexH_ = 0;
 
   int worldWidth_ = 0;
   int worldHeight_ = 0;

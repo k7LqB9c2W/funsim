@@ -124,6 +124,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Checkbox("War Zone Glow", &state.showWarZones);
   ImGui::Checkbox("War Arrows", &state.showWarArrows);
   ImGui::Checkbox("Soldier Tile Markers", &state.showSoldierTileMarkers);
+  ImGui::Checkbox("Debug: Chunk Boundaries", &state.showChunkBoundaries);
   ImGui::Checkbox("Troop Counts", &state.showTroopCounts);
   if (state.showTroopCounts) {
     ImGui::SameLine();
