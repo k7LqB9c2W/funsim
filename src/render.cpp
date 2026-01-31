@@ -1597,8 +1597,6 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	  }
 
   CrashContextSetStage("Render::Objects");
-  SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
-  SDL_SetTextureAlphaMod(shadowTexture_, 90);
   for (int y = minY; y <= maxY; ++y) {
     for (int x = minX; x <= maxX; ++x) {
       const Tile& tile = world.At(x, y);
@@ -1608,21 +1606,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       const float worldX = static_cast<float>(x) * tileSize;
       const float worldY = static_cast<float>(y) * tileSize;
 
-	      if (tile.trees > 0) {
-        const float shadowW = tileSize * 0.6f;
-        const float shadowH = tileSize * 0.25f;
-        const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
-        const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.5f;
-        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
-        // Earthy ground AO.
-        SDL_SetTextureColorMod(shadowTexture_, 80, 92, 55);
-        SDL_SetTextureAlphaMod(shadowTexture_, 55);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-        // Soft shadow.
-        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(shadowTexture_, 95);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-
+      if (tile.trees > 0) {
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kTreeSeed);
         SDL_Rect src = PickObjectVariant(kTreeCoords, h);
         int jitterX = static_cast<int>(h % 5u) - 2;
@@ -1652,21 +1636,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
       }
 
-	      if (tile.food > 0) {
-        const float shadowW = tileSize * 0.5f;
-        const float shadowH = tileSize * 0.2f;
-        const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.0f;
-        const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.0f;
-        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
-        // Earthy ground AO.
-        SDL_SetTextureColorMod(shadowTexture_, 88, 92, 55);
-        SDL_SetTextureAlphaMod(shadowTexture_, 50);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-        // Soft shadow.
-        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(shadowTexture_, 80);
-        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-
+      if (tile.food > 0) {
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kFoodSeed);
         SDL_Rect src = PickObjectVariant(kFoodCoords, h);
         int jitterX = static_cast<int>(h % 5u) - 2;
