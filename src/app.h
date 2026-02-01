@@ -36,6 +36,7 @@ class App {
   bool ScreenToTile(int screenX, int screenY, int& tileX, int& tileY) const;
   void ResetSimulationState();
   void ResetCameraToWorld();
+  float ComputeFitZoom() const;
   void FitCameraToWorld();
   void UpdateWholeMapView();
   void CreateNewWorld(int scale);

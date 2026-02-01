@@ -8,6 +8,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <string>
 #include <system_error>
 
@@ -159,6 +160,11 @@ void App::HandleEvents() {
     } else if (event.type == SDL_RENDER_DEVICE_RESET) {
       rendererAssets_.OnRenderTargetsReset();
 #endif
+    } else if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+               event.key.keysym.scancode == SDL_SCANCODE_SPACE) {
+      if (!ImGui::GetIO().WantCaptureKeyboard) {
+        ui_.paused = !ui_.paused;
+      }
     } else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
       if (ui_.wholeMapView) {
         FitCameraToWorld();
@@ -172,13 +178,60 @@ void App::HandleEvents() {
       int mouseX = 0;
       int mouseY = 0;
       SDL_GetMouseState(&mouseX, &mouseY);
-      int zoomStep = static_cast<int>(std::floor(camera_.zoom + 0.5f));
-      if (event.wheel.y > 0) {
-        zoomStep = std::min(4, zoomStep + 1);
-      } else if (event.wheel.y < 0) {
-        zoomStep = std::max(1, zoomStep - 1);
+      float minZoom = std::min(1.0f, ComputeFitZoom());
+      if (!(minZoom > 0.0f)) {
+        minZoom = 1.0f;
       }
-      float newZoom = static_cast<float>(zoomStep);
+      constexpr float maxZoom = 8.0f;
+
+      std::vector<float> levels;
+      levels.reserve(12);
+      levels.push_back(minZoom);
+      levels.push_back(0.125f);
+      levels.push_back(0.25f);
+      levels.push_back(0.5f);
+      levels.push_back(1.0f);
+      levels.push_back(2.0f);
+      levels.push_back(3.0f);
+      levels.push_back(4.0f);
+      levels.push_back(6.0f);
+      levels.push_back(8.0f);
+
+      std::sort(levels.begin(), levels.end());
+      levels.erase(std::remove_if(levels.begin(), levels.end(),
+                                  [&](float v) { return !(v >= minZoom && v <= maxZoom); }),
+                   levels.end());
+      levels.erase(std::unique(levels.begin(), levels.end(),
+                               [](float a, float b) { return std::fabs(a - b) < 0.0001f; }),
+                   levels.end());
+      if (levels.empty()) {
+        levels.push_back(minZoom);
+      }
+
+      auto pickNextZoom = [&](float current, int direction) -> float {
+        constexpr float eps = 0.0001f;
+        if (direction > 0) {
+          for (float v : levels) {
+            if (v > current + eps) return v;
+          }
+          return levels.back();
+        }
+        if (direction < 0) {
+          for (auto it = levels.rbegin(); it != levels.rend(); ++it) {
+            if (*it < current - eps) return *it;
+          }
+          return levels.front();
+        }
+        return current;
+      };
+
+      float newZoom = camera_.zoom;
+      if (event.wheel.y > 0) {
+        newZoom = pickNextZoom(camera_.zoom, +1);
+      } else if (event.wheel.y < 0) {
+        newZoom = pickNextZoom(camera_.zoom, -1);
+      }
+      newZoom = Clamp(newZoom, minZoom, maxZoom);
       float worldX = mouseX / camera_.zoom + camera_.x;
       float worldY = mouseY / camera_.zoom + camera_.y;
       camera_.zoom = newZoom;
@@ -755,6 +808,26 @@ void App::ResetCameraToWorld() {
   ClampCamera();
 }
 
+float App::ComputeFitZoom() const {
+  int winW = 0;
+  int winH = 0;
+  SDL_GetWindowSize(window_, &winW, &winH);
+
+  float worldW = world_.width() * static_cast<float>(kTileSize);
+  float worldH = world_.height() * static_cast<float>(kTileSize);
+  if (worldW <= 0.0f || worldH <= 0.0f || winW <= 0 || winH <= 0) {
+    return 1.0f;
+  }
+
+  float zoomX = static_cast<float>(winW) / worldW;
+  float zoomY = static_cast<float>(winH) / worldH;
+  float zoom = std::min(zoomX, zoomY);
+  if (!(zoom > 0.0f)) {
+    return 1.0f;
+  }
+  return zoom;
+}
+
 void App::FitCameraToWorld() {
   int winW = 0;
   int winH = 0;
@@ -766,9 +839,7 @@ void App::FitCameraToWorld() {
     return;
   }
 
-  float zoomX = static_cast<float>(winW) / worldW;
-  float zoomY = static_cast<float>(winH) / worldH;
-  float zoom = std::min(zoomX, zoomY);
+  float zoom = ComputeFitZoom();
   if (zoom <= 0.0f) {
     return;
   }
@@ -864,21 +935,44 @@ void App::ClampCamera() {
   int winH = 0;
   SDL_GetWindowSize(window_, &winW, &winH);
 
+  float minZoom = std::min(1.0f, ComputeFitZoom());
+  if (!(minZoom > 0.0f)) {
+    minZoom = 1.0f;
+  }
+  camera_.zoom = Clamp(camera_.zoom, minZoom, 8.0f);
+
   float worldW = world_.width() * static_cast<float>(kTileSize);
   float worldH = world_.height() * static_cast<float>(kTileSize);
   float viewW = winW / camera_.zoom;
   float viewH = winH / camera_.zoom;
 
-  float maxX = std::max(0.0f, worldW - viewW);
-  float maxY = std::max(0.0f, worldH - viewH);
+  const bool centerX = (viewW >= worldW);
+  const bool centerY = (viewH >= worldH);
+  float maxX = worldW - viewW;
+  float maxY = worldH - viewH;
 
-  camera_.x = Clamp(camera_.x, 0.0f, maxX);
-  camera_.y = Clamp(camera_.y, 0.0f, maxY);
+  if (centerX) {
+    camera_.x = (worldW - viewW) * 0.5f;
+  } else {
+    maxX = std::max(0.0f, maxX);
+    camera_.x = Clamp(camera_.x, 0.0f, maxX);
+  }
+
+  if (centerY) {
+    camera_.y = (worldH - viewH) * 0.5f;
+  } else {
+    maxY = std::max(0.0f, maxY);
+    camera_.y = Clamp(camera_.y, 0.0f, maxY);
+  }
 
   camera_.x = std::floor(camera_.x + 0.5f);
   camera_.y = std::floor(camera_.y + 0.5f);
-  camera_.x = Clamp(camera_.x, 0.0f, maxX);
-  camera_.y = Clamp(camera_.y, 0.0f, maxY);
+  if (!centerX) {
+    camera_.x = Clamp(camera_.x, 0.0f, maxX);
+  }
+  if (!centerY) {
+    camera_.y = Clamp(camera_.y, 0.0f, maxY);
+  }
 }
 
 void App::RefreshTotals() {
