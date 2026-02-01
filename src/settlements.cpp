@@ -8,6 +8,7 @@
 
 #include "factions.h"
 #include "humans.h"
+#include "tree_rules.h"
 #include "util.h"
 #include "world.h"
 
@@ -79,6 +80,7 @@ bool IsBuildableTile(const World& world, int x, int y) {
   if (tile.type != TileType::Land) return false;
   if (tile.burning) return false;
   if (tile.building != BuildingType::None) return false;
+  if (TreeRules::BlocksBuildingPlacement(world, x, y)) return false;
   return true;
 }
 

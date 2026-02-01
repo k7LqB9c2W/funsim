@@ -17,6 +17,16 @@
 #include <unistd.h>
 #endif
 
+uint32_t Hash2D(uint32_t x, uint32_t y, uint32_t seed) {
+  uint32_t h = x * 0x8DA6B343u;
+  h ^= y * 0xD8163841u;
+  h ^= seed;
+  h ^= (h >> 13);
+  h *= 0x85EBCA6Bu;
+  h ^= (h >> 16);
+  return h;
+}
+
 namespace {
 std::atomic<bool> g_handling_crash{false};
 

@@ -86,6 +86,7 @@ class Renderer {
   SDL_Texture* objectsTexture_ = nullptr;
   SDL_Texture* buildingsTexture_ = nullptr;
   SDL_Texture* townHallTexture_ = nullptr;
+  SDL_Texture* treeTexture_ = nullptr;
   SDL_Texture* grainTexture_ = nullptr;
   SDL_Texture* shadowTexture_ = nullptr;
   SDL_Texture* aoCornerTexture_ = nullptr;
@@ -98,6 +99,8 @@ class Renderer {
   int spriteHeight_ = 32;
   int townHallTexW_ = 0;
   int townHallTexH_ = 0;
+  int treeTexW_ = 0;
+  int treeTexH_ = 0;
   int grainTexW_ = 0;
   int grainTexH_ = 0;
   int vignetteTexW_ = 0;

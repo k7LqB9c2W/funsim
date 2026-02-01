@@ -13,6 +13,7 @@
 
 #include "factions.h"
 #include "settlements.h"
+#include "tree_rules.h"
 #include "util.h"
 
 namespace {
@@ -33,7 +34,6 @@ constexpr uint32_t kMidSeed = 0x9E3779B9u;
 constexpr uint32_t kShallowSeed = 0xBB67AE85u;
 constexpr uint32_t kGrassSeed = 0xA54FF53Au;
 constexpr uint32_t kSandSeed = 0x510E527Fu;
-constexpr uint32_t kTreeSeed = 0x1F83D9ABu;
 constexpr uint32_t kFoodSeed = 0x5BE0CD19u;
 constexpr uint32_t kFireSeed = 0xC1059ED8u;
 
@@ -90,16 +90,6 @@ SDL_Rect PickTilesVariant(const std::array<AtlasCoord, N>& coords, uint32_t h) {
 template <size_t N>
 SDL_Rect PickObjectVariant(const std::array<AtlasCoord, N>& coords, uint32_t h) {
   return ObjectRect(coords[h % N]);
-}
-
-uint32_t Hash2D(uint32_t x, uint32_t y, uint32_t seed) {
-  uint32_t h = x * 0x8DA6B343u;
-  h ^= y * 0xD8163841u;
-  h ^= seed;
-  h ^= (h >> 13);
-  h *= 0x85EBCA6Bu;
-  h ^= (h >> 16);
-  return h;
 }
 
 float Hash01(uint32_t x, uint32_t y, uint32_t seed) {
@@ -562,6 +552,24 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     }
   }
 
+  // Optional large tree sprite (replaces the atlas tree).
+  {
+    CrashContextSetStage("Renderer::Load IMG tree");
+    const std::string treePath = "assets/sprites/Tree.png";
+    treeTexture_ = IMG_LoadTexture(renderer, treePath.c_str());
+    if (!treeTexture_) {
+      SDL_Log("Failed to load tree texture (%s): %s", treePath.c_str(), IMG_GetError());
+    } else {
+      SDL_SetTextureScaleMode(treeTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(treeTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(treeTexture_, nullptr, nullptr, &treeTexW_, &treeTexH_) != 0) {
+        SDL_Log("Failed to query tree texture: %s", SDL_GetError());
+        treeTexW_ = 0;
+        treeTexH_ = 0;
+      }
+    }
+  }
+
   SDL_SetTextureBlendMode(humansTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(tilesTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(terrainOverlayTexture_, SDL_BLENDMODE_BLEND);
@@ -704,6 +712,10 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(townHallTexture_);
     townHallTexture_ = nullptr;
   }
+  if (treeTexture_) {
+    SDL_DestroyTexture(treeTexture_);
+    treeTexture_ = nullptr;
+  }
   if (shadowTexture_) {
     SDL_DestroyTexture(shadowTexture_);
     shadowTexture_ = nullptr;
@@ -726,6 +738,8 @@ void Renderer::Shutdown() {
   }
   vignetteTexW_ = 0;
   vignetteTexH_ = 0;
+  treeTexW_ = 0;
+  treeTexH_ = 0;
 }
 
 void Renderer::OnRenderTargetsReset() {
@@ -1606,22 +1620,23 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       const float worldX = static_cast<float>(x) * tileSize;
       const float worldY = static_cast<float>(y) * tileSize;
 
-      if (tile.trees > 0) {
-        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kTreeSeed);
+      // Fallback: if the large tree sprite is missing, render the old atlas tree.
+      if (tile.trees > 0 && !(treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0)) {
+        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+                            TreeRules::kLargeTreeSeed);
         SDL_Rect src = PickObjectVariant(kTreeCoords, h);
         int jitterX = static_cast<int>(h % 5u) - 2;
         int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
         const float objX = worldX + static_cast<float>(jitterX);
         const float objY = worldY + static_cast<float>(jitterY);
         SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-	        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
 
-	        // Cheap outline (lighter than units).
-	        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
-	        SDL_SetTextureAlphaMod(objectsTexture_, 55);
-	        SDL_Rect o1 = dst;
-	        SDL_Rect o2 = dst;
-	        SDL_Rect o3 = dst;
+        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(objectsTexture_, 55);
+        SDL_Rect o1 = dst;
+        SDL_Rect o2 = dst;
+        SDL_Rect o3 = dst;
         SDL_Rect o4 = dst;
         o1.x += 1;
         o2.x -= 1;
@@ -1665,6 +1680,77 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
       }
     }
+  }
+
+  // Large tree sprite pass: render above objects and below town hall/fire/humans.
+  CrashContextSetStage("Render::Trees");
+  if (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) {
+    float scale = tileSize / static_cast<float>(kTilePx);
+    float drawW = static_cast<float>(treeTexW_) * scale;
+    float drawH = static_cast<float>(treeTexH_) * scale;
+    int pad = 6;
+    pad = std::max(pad, static_cast<int>(std::ceil(drawW / tileSize)) + 2);
+    pad = std::max(pad, static_cast<int>(std::ceil(drawH / tileSize)) + 2);
+    const int objMinX = std::max(0, minX - pad);
+    const int objMinY = std::max(0, minY - pad);
+    const int objMaxX = std::min(world.width() - 1, maxX + pad);
+    const int objMaxY = std::min(world.height() - 1, maxY + pad);
+    // Ground shadow mod.
+    SDL_Rect shadowSrc = ShadowSrc();
+    for (int y = objMinY; y <= objMaxY; ++y) {
+      for (int x = objMinX; x <= objMaxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        if (tile.type != TileType::Land) continue;
+        if (tile.trees <= 0) continue;
+        if (!TreeRules::IsLargeTreeAnchor(world, x, y)) continue;
+
+        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+                            TreeRules::kLargeTreeSeed);
+        int jitterX = static_cast<int>(h % 5u) - 2;
+        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+
+        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+        float worldX = anchorX - drawW * 0.5f + static_cast<float>(jitterX);
+        float worldY = anchorY - drawH + static_cast<float>(jitterY);
+
+        float shadowW = tileSize * 1.35f;
+        float shadowH = tileSize * 0.55f;
+        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
+        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
+        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+        // Earthy ground AO under footprint.
+        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+        SDL_SetTextureAlphaMod(shadowTexture_, 55);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        // Soft shadow.
+        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(shadowTexture_, 110);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+        // Cheap outline (lighter than units).
+        SDL_SetTextureColorMod(treeTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(treeTexture_, 55);
+        SDL_Rect o1 = dst;
+        SDL_Rect o2 = dst;
+        SDL_Rect o3 = dst;
+        SDL_Rect o4 = dst;
+        o1.x += 1;
+        o2.x -= 1;
+        o3.y += 1;
+        o4.y -= 1;
+        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o1, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o2, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o3, 0.0, nullptr, flip);
+        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o4, 0.0, nullptr, flip);
+        SDL_SetTextureColorMod(treeTexture_, 255, 255, 255);
+        SDL_SetTextureAlphaMod(treeTexture_, 255);
+        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &dst, 0.0, nullptr, flip);
+      }
+    }
+    SDL_SetTextureAlphaMod(shadowTexture_, 90);
   }
 
 	  // Large town hall sprite pass: render above objects and below fire/humans.

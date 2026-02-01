@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "settlements.h"
+#include "tree_rules.h"
 
 namespace {
 constexpr int kGestationDays = 90;
@@ -1325,7 +1326,8 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
         Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
         int cost = BuildWoodCost(human.taskBuildType);
         if (settlement && tile.type == TileType::Land && !tile.burning &&
-            tile.building == BuildingType::None && settlement->stockWood >= cost) {
+            tile.building == BuildingType::None && settlement->stockWood >= cost &&
+            !TreeRules::BlocksBuildingPlacement(world, human.x, human.y)) {
           settlement->stockWood = std::max(0, settlement->stockWood - cost);
           uint8_t farmStage = (human.taskBuildType == BuildingType::Farm) ? 1u : 0u;
           world.PlaceBuilding(human.x, human.y, human.taskBuildType, settlement->id, farmStage);

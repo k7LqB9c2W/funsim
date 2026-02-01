@@ -16,6 +16,8 @@ class Random {
   std::mt19937 rng_;
 };
 
+uint32_t Hash2D(uint32_t x, uint32_t y, uint32_t seed);
+
 void InstallCrashHandlers();
 void CrashContextSetStage(const char* stage);
 void CrashContextSetWorld(int width, int height);
