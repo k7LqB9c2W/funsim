@@ -446,16 +446,15 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     int bestX = -1;
     int bestY = -1;
 
-    for (int y = startY; y < endY; ++y) {
-      for (int x = startX; x < endX; ++x) {
-        const Tile& tile = world.At(x, y);
-        if (tile.type != TileType::Land) continue;
-        if (tile.burning) continue;
-
-        int score = static_cast<int>(world.WaterScentAt(x, y)) * 2 +
-                    static_cast<int>(world.FoodScentAt(x, y)) + tile.trees * 50 -
-                    static_cast<int>(world.FireRiskAt(x, y)) * 3;
-        if (score > bestScore) {
+	    for (int y = startY; y < endY; ++y) {
+	      for (int x = startX; x < endX; ++x) {
+	        if (!world.TownHallFootprintAllLand(x, y)) continue;
+	        const Tile& tile = world.At(x, y);
+	
+	        int score = static_cast<int>(world.WaterScentAt(x, y)) * 2 +
+	                    static_cast<int>(world.FoodScentAt(x, y)) + tile.trees * 50 -
+	                    static_cast<int>(world.FireRiskAt(x, y)) * 3;
+	        if (score > bestScore) {
           bestScore = score;
           bestX = x;
           bestY = y;
@@ -464,6 +463,10 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     }
 
     if (bestX == -1 || bestY == -1) {
+      denseIndex++;
+      continue;
+    }
+    if (!world.TownHallFootprintAllLand(bestX, bestY)) {
       denseIndex++;
       continue;
     }
@@ -2843,20 +2846,21 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   UpdateSettlementRoleStatsMacro(world, factions, dayCount);
   UpdateArmiesAndSiegesMacro(world, rng, dayCount, 1, factions);
 
-  auto placeBuilding = [&](Settlement& settlement, BuildingType type, int radius) {
-    int bestX = -1;
-    int bestY = -1;
-    int bestScore = std::numeric_limits<int>::min();
-    for (int attempt = 0; attempt < 20; ++attempt) {
-      int dx = rng.RangeInt(-radius, radius);
-      int dy = rng.RangeInt(-radius, radius);
-      int x = settlement.centerX + dx;
-      int y = settlement.centerY + dy;
-      if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
-      int score = 0;
-      if (type == BuildingType::Farm) {
-        score = static_cast<int>(world.WaterScentAt(x, y));
-      } else {
+	  auto placeBuilding = [&](Settlement& settlement, BuildingType type, int radius) {
+	    int bestX = -1;
+	    int bestY = -1;
+	    int bestScore = std::numeric_limits<int>::min();
+	    for (int attempt = 0; attempt < 20; ++attempt) {
+	      int dx = rng.RangeInt(-radius, radius);
+	      int dy = rng.RangeInt(-radius, radius);
+	      int x = settlement.centerX + dx;
+	      int y = settlement.centerY + dy;
+	      if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
+	      if (type == BuildingType::TownHall && !world.TownHallFootprintAllLand(x, y)) continue;
+	      int score = 0;
+	      if (type == BuildingType::Farm) {
+	        score = static_cast<int>(world.WaterScentAt(x, y));
+	      } else {
         score = -(std::abs(dx) + std::abs(dy)) * 10;
       }
       if (score > bestScore) {
@@ -2864,12 +2868,13 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
         bestX = x;
         bestY = y;
       }
-    }
-    if (bestX == -1 || bestY == -1) return false;
-    uint8_t farmStage = (type == BuildingType::Farm) ? 1u : 0u;
-    world.PlaceBuilding(bestX, bestY, type, settlement.id, farmStage);
-    return true;
-  };
+	    }
+	    if (bestX == -1 || bestY == -1) return false;
+	    uint8_t farmStage = (type == BuildingType::Farm) ? 1u : 0u;
+	    world.PlaceBuilding(bestX, bestY, type, settlement.id, farmStage);
+	    if (world.At(bestX, bestY).building != type) return false;
+	    return true;
+	  };
 
   for (auto& settlement : settlements_) {
     int pop = settlement.population;

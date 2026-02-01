@@ -103,7 +103,27 @@ class World {
     MarkBuildingDirty();
   }
 
+  bool TownHallFootprintAllLand(int x, int y) const {
+    // Town hall sprites (TH.png, Capital.png) are big-sprites anchored on the bottom-center tile (x, y).
+    // Footprint: 5 tiles wide by 4 tiles tall.
+    for (int dy = -3; dy <= 0; ++dy) {
+      for (int dx = -2; dx <= 2; ++dx) {
+        const int tx = x + dx;
+        const int ty = y + dy;
+        if (!InBounds(tx, ty)) return false;
+        const Tile& tile = At(tx, ty);
+        if (tile.type != TileType::Land) return false;
+        if (tile.burning) return false;
+        if (tile.building != BuildingType::None) return false;
+      }
+    }
+    return true;
+  }
+
   void PlaceBuilding(int x, int y, BuildingType type, int ownerId, uint8_t farmStage) {
+    if (type == BuildingType::TownHall) {
+      if (!TownHallFootprintAllLand(x, y)) return;
+    }
     EditTile(x, y, [&](Tile& tile) {
       tile.building = type;
       tile.buildingOwnerId = ownerId;
@@ -113,6 +133,20 @@ class World {
       tile.burning = false;
       tile.burnDaysRemaining = 0;
     });
+
+    if (type == BuildingType::TownHall) {
+      // Clear trees in a larger rectangle so nearby canopies never cover the building sprite.
+      for (int dy = -4; dy <= 1; ++dy) {
+        for (int dx = -3; dx <= 3; ++dx) {
+          EditTile(x + dx, y + dy, [&](Tile& tile) {
+            tile.trees = 0;
+            tile.food = 0;
+            tile.burning = false;
+            tile.burnDaysRemaining = 0;
+          });
+        }
+      }
+    }
     MarkBuildingDirty();
   }
 

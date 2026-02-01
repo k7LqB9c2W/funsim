@@ -1320,22 +1320,24 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
         human.hasTask = false;
         human.forceReplan = true;
       }
-    } else if (human.taskType == TaskType::BuildStructure) {
-      if (human.x == human.taskX && human.y == human.taskY) {
-        const Tile& tile = world.At(human.x, human.y);
-        Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
-        int cost = BuildWoodCost(human.taskBuildType);
-        if (settlement && tile.type == TileType::Land && !tile.burning &&
-            tile.building == BuildingType::None && settlement->stockWood >= cost &&
-            !TreeRules::BlocksBuildingPlacement(world, human.x, human.y)) {
-          settlement->stockWood = std::max(0, settlement->stockWood - cost);
-          uint8_t farmStage = (human.taskBuildType == BuildingType::Farm) ? 1u : 0u;
-          world.PlaceBuilding(human.x, human.y, human.taskBuildType, settlement->id, farmStage);
-        }
-        human.hasTask = false;
-        human.forceReplan = true;
-      }
-    } else if (human.taskType == TaskType::HaulToStockpile) {
+	    } else if (human.taskType == TaskType::BuildStructure) {
+	      if (human.x == human.taskX && human.y == human.taskY) {
+	        const Tile& tile = world.At(human.x, human.y);
+	        Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
+	        int cost = BuildWoodCost(human.taskBuildType);
+	        const bool footprintOk =
+	            (human.taskBuildType != BuildingType::TownHall) || world.TownHallFootprintAllLand(human.x, human.y);
+	        if (settlement && tile.type == TileType::Land && !tile.burning &&
+	            tile.building == BuildingType::None && settlement->stockWood >= cost &&
+	            !TreeRules::BlocksBuildingPlacement(world, human.x, human.y) && footprintOk) {
+	          settlement->stockWood = std::max(0, settlement->stockWood - cost);
+	          uint8_t farmStage = (human.taskBuildType == BuildingType::Farm) ? 1u : 0u;
+	          world.PlaceBuilding(human.x, human.y, human.taskBuildType, settlement->id, farmStage);
+	        }
+	        human.hasTask = false;
+	        human.forceReplan = true;
+	      }
+	    } else if (human.taskType == TaskType::HaulToStockpile) {
       bool dropoffReady = (human.x == human.taskX && human.y == human.taskY);
       Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
       if (!dropoffReady && settlement) {

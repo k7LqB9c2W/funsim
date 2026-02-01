@@ -37,6 +37,10 @@ constexpr uint32_t kSandSeed = 0x510E527Fu;
 constexpr uint32_t kFoodSeed = 0x5BE0CD19u;
 constexpr uint32_t kFireSeed = 0xC1059ED8u;
 
+constexpr int kTreeTrunkHeightFromBottomPx = 73;
+constexpr int kTree1TrunkHeightFromBottomPx = 53;
+constexpr int kTreeSeamOverlapPx = 1;
+
 struct AtlasCoord {
   int col = 0;
   int row = 0;
@@ -78,6 +82,61 @@ const std::array<AtlasCoord, 8> kSandCoords = {
 
 const std::array<AtlasCoord, 2> kTreeCoords = {AtlasCoord{0, 0}, AtlasCoord{1, 0}};
 const std::array<AtlasCoord, 2> kFoodCoords = {AtlasCoord{0, 1}, AtlasCoord{1, 1}};
+
+int AutoDetectCanopyOccludeSrcY(const std::string& path, int canopySrcH) {
+  if (canopySrcH <= 0) return 0;
+  SDL_Surface* loaded = IMG_Load(path.c_str());
+  if (!loaded) return canopySrcH;
+  SDL_Surface* surface = SDL_ConvertSurfaceFormat(loaded, SDL_PIXELFORMAT_RGBA32, 0);
+  SDL_FreeSurface(loaded);
+  if (!surface) return canopySrcH;
+
+  const int w = surface->w;
+  const int h = surface->h;
+  const int scanH = std::min(canopySrcH, h);
+  if (w <= 0 || scanH <= 0) {
+    SDL_FreeSurface(surface);
+    return canopySrcH;
+  }
+
+  const int x0 = std::max(0, std::min(w, static_cast<int>(std::floor(w * 0.35f))));
+  const int x1 = std::max(0, std::min(w, static_cast<int>(std::ceil(w * 0.65f))));
+  if (x1 <= x0) {
+    SDL_FreeSurface(surface);
+    return canopySrcH;
+  }
+
+  constexpr uint8_t kAlphaThreshold = 32;
+  constexpr int kMinOpaqueCount = 10;
+
+  if (SDL_MUSTLOCK(surface)) SDL_LockSurface(surface);
+  const int pitchPixels = surface->pitch / static_cast<int>(sizeof(uint32_t));
+  const uint32_t* pixels = static_cast<const uint32_t*>(surface->pixels);
+
+  int foundRowY = -1;
+  for (int y = scanH - 1; y >= 0; --y) {
+    int count = 0;
+    const uint32_t* row = pixels + y * pitchPixels;
+    for (int x = x0; x < x1; ++x) {
+      uint8_t r = 0, g = 0, b = 0, a = 0;
+      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &a);
+      if (a > kAlphaThreshold) {
+        ++count;
+        if (count >= kMinOpaqueCount) break;
+      }
+    }
+    if (count >= kMinOpaqueCount) {
+      foundRowY = y;
+      break;
+    }
+  }
+
+  if (SDL_MUSTLOCK(surface)) SDL_UnlockSurface(surface);
+  SDL_FreeSurface(surface);
+
+  if (foundRowY < 0) return canopySrcH;
+  return std::max(0, std::min(canopySrcH, foundRowY + 1));
+}
 
 SDL_Rect ShadowSrc() { return SDL_Rect{0, 0, kShadowTexPx, kShadowTexPx}; }
 SDL_Rect FireSrc() { return SDL_Rect{0, 0, kFireTexPx, kFireTexPx}; }
@@ -448,6 +507,7 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
                     const std::string& tilesPath, const std::string& terrainOverlayPath,
                     const std::string& objectsPath, const std::string& buildingsPath,
                     const std::string& labelFontPath, int labelFontSize) {
+  CrashContextSetStage("Renderer::Load:Shutdown");
   Shutdown();
 
   CrashContextSetStage("Renderer::Load");
@@ -541,6 +601,8 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     townHallTexture_ = IMG_LoadTexture(renderer, townHallPath.c_str());
     if (!townHallTexture_) {
       SDL_Log("Failed to load town hall texture (%s): %s", townHallPath.c_str(), IMG_GetError());
+      townHallTexW_ = 0;
+      townHallTexH_ = 0;
     } else {
       SDL_SetTextureScaleMode(townHallTexture_, SDL_ScaleModeNearest);
       SDL_SetTextureBlendMode(townHallTexture_, SDL_BLENDMODE_BLEND);
@@ -552,6 +614,26 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     }
   }
 
+  // Optional capital sprite (used for the first settlement of a faction).
+  {
+    CrashContextSetStage("Renderer::Load IMG capital");
+    const std::string capitalPath = "assets/sprites/Capital.png";
+    capitalTexture_ = IMG_LoadTexture(renderer, capitalPath.c_str());
+    if (!capitalTexture_) {
+      SDL_Log("Failed to load capital texture (%s): %s", capitalPath.c_str(), IMG_GetError());
+      capitalTexW_ = 0;
+      capitalTexH_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(capitalTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(capitalTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(capitalTexture_, nullptr, nullptr, &capitalTexW_, &capitalTexH_) != 0) {
+        SDL_Log("Failed to query capital texture: %s", SDL_GetError());
+        capitalTexW_ = 0;
+        capitalTexH_ = 0;
+      }
+    }
+  }
+
   // Optional large tree sprite (replaces the atlas tree).
   {
     CrashContextSetStage("Renderer::Load IMG tree");
@@ -559,6 +641,11 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     treeTexture_ = IMG_LoadTexture(renderer, treePath.c_str());
     if (!treeTexture_) {
       SDL_Log("Failed to load tree texture (%s): %s", treePath.c_str(), IMG_GetError());
+      treeTexW_ = 0;
+      treeTexH_ = 0;
+      treeTrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+      treeCanopySrc_ = SDL_Rect{0, 0, 0, 0};
+      treeCanopyOccludeSrcY_ = 0;
     } else {
       SDL_SetTextureScaleMode(treeTexture_, SDL_ScaleModeNearest);
       SDL_SetTextureBlendMode(treeTexture_, SDL_BLENDMODE_BLEND);
@@ -566,6 +653,65 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
         SDL_Log("Failed to query tree texture: %s", SDL_GetError());
         treeTexW_ = 0;
         treeTexH_ = 0;
+        treeTrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+        treeCanopySrc_ = SDL_Rect{0, 0, 0, 0};
+        treeCanopyOccludeSrcY_ = 0;
+      } else {
+        const int trunkSrcYBase = treeTexH_ - kTreeTrunkHeightFromBottomPx;  // no overlap
+        if (treeTexW_ <= 0 || treeTexH_ <= 0 || trunkSrcYBase <= 0 || trunkSrcYBase >= treeTexH_) {
+          treeTrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+          treeCanopySrc_ = SDL_Rect{0, 0, 0, 0};
+          treeCanopyOccludeSrcY_ = 0;
+        } else {
+          const int trunkSrcY = std::max(0, trunkSrcYBase - kTreeSeamOverlapPx);
+          const int canopySrcH = std::min(treeTexH_, trunkSrcYBase + kTreeSeamOverlapPx);
+          const int trunkSrcH = std::max(0, treeTexH_ - trunkSrcY);
+          treeTrunkSrc_ = SDL_Rect{0, trunkSrcY, treeTexW_, trunkSrcH};
+          treeCanopySrc_ = SDL_Rect{0, 0, treeTexW_, canopySrcH};
+          treeCanopyOccludeSrcY_ = AutoDetectCanopyOccludeSrcY(treePath, canopySrcH);
+          if (treeCanopyOccludeSrcY_ <= 0) treeCanopyOccludeSrcY_ = canopySrcH;
+        }
+      }
+    }
+  }
+
+  // Optional large tree sprite variant (used alongside Tree.png).
+  {
+    CrashContextSetStage("Renderer::Load IMG tree1");
+    const std::string tree1Path = "assets/sprites/Tree1.png";
+    tree1Texture_ = IMG_LoadTexture(renderer, tree1Path.c_str());
+    if (!tree1Texture_) {
+      SDL_Log("Failed to load tree1 texture (%s): %s", tree1Path.c_str(), IMG_GetError());
+      tree1TexW_ = 0;
+      tree1TexH_ = 0;
+      tree1TrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+      tree1CanopySrc_ = SDL_Rect{0, 0, 0, 0};
+      tree1CanopyOccludeSrcY_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(tree1Texture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(tree1Texture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(tree1Texture_, nullptr, nullptr, &tree1TexW_, &tree1TexH_) != 0) {
+        SDL_Log("Failed to query tree1 texture: %s", SDL_GetError());
+        tree1TexW_ = 0;
+        tree1TexH_ = 0;
+        tree1TrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+        tree1CanopySrc_ = SDL_Rect{0, 0, 0, 0};
+        tree1CanopyOccludeSrcY_ = 0;
+      } else {
+        const int trunkSrcYBase = tree1TexH_ - kTree1TrunkHeightFromBottomPx;  // no overlap
+        if (tree1TexW_ <= 0 || tree1TexH_ <= 0 || trunkSrcYBase <= 0 || trunkSrcYBase >= tree1TexH_) {
+          tree1TrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+          tree1CanopySrc_ = SDL_Rect{0, 0, 0, 0};
+          tree1CanopyOccludeSrcY_ = 0;
+        } else {
+          const int trunkSrcY = std::max(0, trunkSrcYBase - kTreeSeamOverlapPx);
+          const int canopySrcH = std::min(tree1TexH_, trunkSrcYBase + kTreeSeamOverlapPx);
+          const int trunkSrcH = std::max(0, tree1TexH_ - trunkSrcY);
+          tree1TrunkSrc_ = SDL_Rect{0, trunkSrcY, tree1TexW_, trunkSrcH};
+          tree1CanopySrc_ = SDL_Rect{0, 0, tree1TexW_, canopySrcH};
+          tree1CanopyOccludeSrcY_ = AutoDetectCanopyOccludeSrcY(tree1Path, canopySrcH);
+          if (tree1CanopyOccludeSrcY_ <= 0) tree1CanopyOccludeSrcY_ = canopySrcH;
+        }
       }
     }
   }
@@ -675,6 +821,7 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
 }
 
 void Renderer::Shutdown() {
+  CrashContextSetStage("Renderer::Shutdown");
   DestroyTerrainCache();
   ClearLabelCache();
 
@@ -712,9 +859,17 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(townHallTexture_);
     townHallTexture_ = nullptr;
   }
+  if (capitalTexture_) {
+    SDL_DestroyTexture(capitalTexture_);
+    capitalTexture_ = nullptr;
+  }
   if (treeTexture_) {
     SDL_DestroyTexture(treeTexture_);
     treeTexture_ = nullptr;
+  }
+  if (tree1Texture_) {
+    SDL_DestroyTexture(tree1Texture_);
+    tree1Texture_ = nullptr;
   }
   if (shadowTexture_) {
     SDL_DestroyTexture(shadowTexture_);
@@ -738,8 +893,20 @@ void Renderer::Shutdown() {
   }
   vignetteTexW_ = 0;
   vignetteTexH_ = 0;
+  townHallTexW_ = 0;
+  townHallTexH_ = 0;
+  capitalTexW_ = 0;
+  capitalTexH_ = 0;
   treeTexW_ = 0;
   treeTexH_ = 0;
+  treeTrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+  treeCanopySrc_ = SDL_Rect{0, 0, 0, 0};
+  treeCanopyOccludeSrcY_ = 0;
+  tree1TexW_ = 0;
+  tree1TexH_ = 0;
+  tree1TrunkSrc_ = SDL_Rect{0, 0, 0, 0};
+  tree1CanopySrc_ = SDL_Rect{0, 0, 0, 0};
+  tree1CanopyOccludeSrcY_ = 0;
 }
 
 void Renderer::OnRenderTargetsReset() {
@@ -1521,10 +1688,10 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	        const Tile& tile = world.At(x, y);
 	        if (tile.building == BuildingType::None) continue;
 	
-	        if (tile.building == BuildingType::TownHall && townHallTexture_) {
-	          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
-	          continue;
-	        }
+		        if (tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) {
+		          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
+		          continue;
+		        }
 	
 	        AtlasCoord coord{0, 0};
 	        switch (tile.building) {
@@ -1620,8 +1787,10 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       const float worldX = static_cast<float>(x) * tileSize;
       const float worldY = static_cast<float>(y) * tileSize;
 
-      // Fallback: if the large tree sprite is missing, render the old atlas tree.
-      if (tile.trees > 0 && !(treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0)) {
+      // Fallback: if the large tree sprites are missing, render the old atlas tree.
+      const bool hasLargeTreeSprite =
+          (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) || (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
+      if (tile.trees > 0 && !hasLargeTreeSprite) {
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
                             TreeRules::kLargeTreeSeed);
         SDL_Rect src = PickObjectVariant(kTreeCoords, h);
@@ -1682,15 +1851,60 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     }
   }
 
+  struct TreeCanopyDrawItem {
+    SDL_Texture* texture = nullptr;
+    SDL_Rect src{0, 0, 0, 0};
+    SDL_Rect dst{0, 0, 0, 0};
+    SDL_RendererFlip flip = SDL_FLIP_NONE;
+    float depthKey = 0.0f;  // world-space Y used for occlusion ordering
+  };
+  std::vector<TreeCanopyDrawItem> treeCanopies;
+  int treePadTiles = 2;
+
   // Large tree sprite pass: render above objects and below town hall/fire/humans.
   CrashContextSetStage("Render::Trees");
-  if (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) {
+  const bool hasTree0 = (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0);
+  const bool hasTree1 = (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
+  if (hasTree0 || hasTree1) {
+    struct LargeTreeSprite {
+      SDL_Texture* texture = nullptr;
+      int texW = 0;
+      int texH = 0;
+      SDL_Rect trunkSrc{0, 0, 0, 0};
+      SDL_Rect canopySrc{0, 0, 0, 0};
+      int canopyOccludeSrcY = 0;
+      bool allowFlip = true;
+    };
+
+    const LargeTreeSprite tree0{treeTexture_, treeTexW_, treeTexH_, treeTrunkSrc_, treeCanopySrc_,
+                                treeCanopyOccludeSrcY_, true};
+    const LargeTreeSprite tree1{tree1Texture_, tree1TexW_, tree1TexH_, tree1TrunkSrc_, tree1CanopySrc_,
+                                tree1CanopyOccludeSrcY_, false};
+
+    auto pickTree = [&](int x, int y) -> const LargeTreeSprite& {
+      if (hasTree0 && hasTree1) {
+        uint32_t choice =
+            Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), TreeRules::kLargeTreeSeed ^ 0x7A24B31Fu);
+        return ((choice % 100u) < 70u) ? tree1 : tree0;
+      }
+      return hasTree1 ? tree1 : tree0;
+    };
+
     float scale = tileSize / static_cast<float>(kTilePx);
-    float drawW = static_cast<float>(treeTexW_) * scale;
-    float drawH = static_cast<float>(treeTexH_) * scale;
+    float maxDrawW = 0.0f;
+    float maxDrawH = 0.0f;
+    if (hasTree0) {
+      maxDrawW = std::max(maxDrawW, static_cast<float>(tree0.texW) * scale);
+      maxDrawH = std::max(maxDrawH, static_cast<float>(tree0.texH) * scale);
+    }
+    if (hasTree1) {
+      maxDrawW = std::max(maxDrawW, static_cast<float>(tree1.texW) * scale);
+      maxDrawH = std::max(maxDrawH, static_cast<float>(tree1.texH) * scale);
+    }
     int pad = 6;
-    pad = std::max(pad, static_cast<int>(std::ceil(drawW / tileSize)) + 2);
-    pad = std::max(pad, static_cast<int>(std::ceil(drawH / tileSize)) + 2);
+    pad = std::max(pad, static_cast<int>(std::ceil(maxDrawW / tileSize)) + 2);
+    pad = std::max(pad, static_cast<int>(std::ceil(maxDrawH / tileSize)) + 2);
+    treePadTiles = pad;
     const int objMinX = std::max(0, minX - pad);
     const int objMinY = std::max(0, minY - pad);
     const int objMaxX = std::min(world.width() - 1, maxX + pad);
@@ -1706,9 +1920,18 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
         uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
                             TreeRules::kLargeTreeSeed);
+        const LargeTreeSprite& tree = pickTree(x, y);
         int jitterX = static_cast<int>(h % 5u) - 2;
         int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
-        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        SDL_RendererFlip flip = SDL_FLIP_NONE;
+        if (tree.allowFlip) {
+          flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        }
+
+        const bool splitTree =
+            (tree.trunkSrc.h > 0 && tree.canopySrc.h > 0 && tree.canopyOccludeSrcY > 0);
+        const float drawW = static_cast<float>(tree.texW) * scale;
+        const float drawH = static_cast<float>(tree.texH) * scale;
 
         float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
         float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
@@ -1729,91 +1952,165 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_SetTextureAlphaMod(shadowTexture_, 110);
         SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
 
-        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
-        // Cheap outline (lighter than units).
-        SDL_SetTextureColorMod(treeTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(treeTexture_, 55);
-        SDL_Rect o1 = dst;
-        SDL_Rect o2 = dst;
-        SDL_Rect o3 = dst;
-        SDL_Rect o4 = dst;
-        o1.x += 1;
-        o2.x -= 1;
-        o3.y += 1;
-        o4.y -= 1;
-        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o1, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o2, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o3, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &o4, 0.0, nullptr, flip);
-        SDL_SetTextureColorMod(treeTexture_, 255, 255, 255);
-        SDL_SetTextureAlphaMod(treeTexture_, 255);
-        SDL_RenderCopyEx(renderer, treeTexture_, nullptr, &dst, 0.0, nullptr, flip);
+        if (!splitTree) {
+          SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+          // Cheap outline (lighter than units).
+          SDL_SetTextureColorMod(tree.texture, 0, 0, 0);
+          SDL_SetTextureAlphaMod(tree.texture, 55);
+          SDL_Rect o1 = dst;
+          SDL_Rect o2 = dst;
+          SDL_Rect o3 = dst;
+          SDL_Rect o4 = dst;
+          o1.x += 1;
+          o2.x -= 1;
+          o3.y += 1;
+          o4.y -= 1;
+          SDL_RenderCopyEx(renderer, tree.texture, nullptr, &o1, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, nullptr, &o2, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, nullptr, &o3, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, nullptr, &o4, 0.0, nullptr, flip);
+          SDL_SetTextureColorMod(tree.texture, 255, 255, 255);
+          SDL_SetTextureAlphaMod(tree.texture, 255);
+          SDL_RenderCopyEx(renderer, tree.texture, nullptr, &dst, 0.0, nullptr, flip);
+        } else {
+          const float trunkHWorld = static_cast<float>(tree.trunkSrc.h) * scale;
+          const float canopyHWorld = static_cast<float>(tree.canopySrc.h) * scale;
+          const float trunkWorldY = worldY + (drawH - trunkHWorld);
+
+          SDL_Rect trunkDst = MakeDstRect(worldX, trunkWorldY, drawW, trunkHWorld, camera);
+          SDL_SetTextureColorMod(tree.texture, 0, 0, 0);
+          SDL_SetTextureAlphaMod(tree.texture, 55);
+          SDL_Rect o1 = trunkDst;
+          SDL_Rect o2 = trunkDst;
+          SDL_Rect o3 = trunkDst;
+          SDL_Rect o4 = trunkDst;
+          o1.x += 1;
+          o2.x -= 1;
+          o3.y += 1;
+          o4.y -= 1;
+          SDL_RenderCopyEx(renderer, tree.texture, &tree.trunkSrc, &o1, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, &tree.trunkSrc, &o2, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, &tree.trunkSrc, &o3, 0.0, nullptr, flip);
+          SDL_RenderCopyEx(renderer, tree.texture, &tree.trunkSrc, &o4, 0.0, nullptr, flip);
+          SDL_SetTextureColorMod(tree.texture, 255, 255, 255);
+          SDL_SetTextureAlphaMod(tree.texture, 255);
+          SDL_RenderCopyEx(renderer, tree.texture, &tree.trunkSrc, &trunkDst, 0.0, nullptr, flip);
+
+          TreeCanopyDrawItem canopy;
+          canopy.texture = tree.texture;
+          canopy.src = tree.canopySrc;
+          canopy.dst = MakeDstRect(worldX, worldY, drawW, canopyHWorld, camera);
+          canopy.flip = flip;
+          canopy.depthKey = worldY + static_cast<float>(tree.canopyOccludeSrcY) * scale;
+          treeCanopies.push_back(canopy);
+        }
       }
     }
     SDL_SetTextureAlphaMod(shadowTexture_, 90);
   }
 
-	  // Large town hall sprite pass: render above objects and below fire/humans.
-	  CrashContextSetStage("Render::TownHall");
-	  if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
-	    float scale = tileSize / static_cast<float>(kTilePx);
-	    float drawW = static_cast<float>(townHallTexW_) * scale;
-	    float drawH = static_cast<float>(townHallTexH_) * scale;
-	    int pad = 6;
-	    pad = std::max(pad, static_cast<int>(std::ceil(drawW / tileSize)) + 2);
-	    pad = std::max(pad, static_cast<int>(std::ceil(drawH / tileSize)) + 2);
-	    const int buildMinX = std::max(0, minX - pad);
-	    const int buildMinY = std::max(0, minY - pad);
-	    const int buildMaxX = std::min(world.width() - 1, maxX + pad);
-	    const int buildMaxY = std::min(world.height() - 1, maxY + pad);
-	    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
-	    SDL_SetTextureAlphaMod(shadowTexture_, 130);
-	    for (int y = buildMinY; y <= buildMaxY; ++y) {
-	      for (int x = buildMinX; x <= buildMaxX; ++x) {
-	        const Tile& tile = world.At(x, y);
-	        if (tile.building != BuildingType::TownHall) continue;
-	        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
-	        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
-	        float worldX = anchorX - drawW * 0.5f;
-	        float worldY = anchorY - drawH;
-	        float shadowW = drawW * 0.58f;
-	        float shadowH = tileSize * 0.55f;
-	        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
-	        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
-	        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
-	        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
-	        SDL_SetTextureAlphaMod(shadowTexture_, 60);
-	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-	        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
-	        SDL_SetTextureAlphaMod(shadowTexture_, 135);
-	        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
-	        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
-	        SDL_SetTextureColorMod(townHallTexture_, 0, 0, 0);
-	        SDL_SetTextureAlphaMod(townHallTexture_, 70);
-	        SDL_Rect drop = dst;
-	        drop.x += 1;
-	        drop.y += 1;
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &drop);
-	        SDL_SetTextureAlphaMod(townHallTexture_, 50);
-	        SDL_Rect o1 = dst;
-	        SDL_Rect o2 = dst;
-	        SDL_Rect o3 = dst;
-	        SDL_Rect o4 = dst;
-	        o1.x += 1;
-	        o2.x -= 1;
-	        o3.y += 1;
-	        o4.y -= 1;
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o1);
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o2);
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o3);
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &o4);
-	        SDL_SetTextureColorMod(townHallTexture_, 255, 255, 255);
-	        SDL_SetTextureAlphaMod(townHallTexture_, 255);
-	        SDL_RenderCopy(renderer, townHallTexture_, nullptr, &dst);
-	      }
-	    }
-	    SDL_SetTextureAlphaMod(shadowTexture_, 90);
-	  }
+		  // Large town hall sprite pass: render above objects and below fire/humans.
+		  // Uses Capital.png for the founding settlement's original town hall tile; all other town halls use TH.png.
+		  CrashContextSetStage("Render::TownHall");
+		  if ((townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) ||
+		      (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0)) {
+		    float scale = tileSize / static_cast<float>(kTilePx);
+
+		    int maxW = 0;
+		    int maxH = 0;
+		    if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
+		      maxW = std::max(maxW, townHallTexW_);
+		      maxH = std::max(maxH, townHallTexH_);
+		    }
+		    if (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0) {
+		      maxW = std::max(maxW, capitalTexW_);
+		      maxH = std::max(maxH, capitalTexH_);
+		    }
+		    float maxDrawW = static_cast<float>(maxW) * scale;
+		    float maxDrawH = static_cast<float>(maxH) * scale;
+
+		    int pad = 6;
+		    pad = std::max(pad, static_cast<int>(std::ceil(maxDrawW / tileSize)) + 2);
+		    pad = std::max(pad, static_cast<int>(std::ceil(maxDrawH / tileSize)) + 2);
+		    const int buildMinX = std::max(0, minX - pad);
+		    const int buildMinY = std::max(0, minY - pad);
+		    const int buildMaxX = std::min(world.width() - 1, maxX + pad);
+		    const int buildMaxY = std::min(world.height() - 1, maxY + pad);
+
+		    auto resolveTownHallSprite = [&](int tileX, int tileY, const Tile& tile, int& outW, int& outH)
+		        -> SDL_Texture* {
+		      SDL_Texture* base = townHallTexture_ ? townHallTexture_ : capitalTexture_;
+		      outW = townHallTexture_ ? townHallTexW_ : capitalTexW_;
+		      outH = townHallTexture_ ? townHallTexH_ : capitalTexH_;
+
+		      if (!capitalTexture_ || capitalTexW_ <= 0 || capitalTexH_ <= 0) return base;
+		      const Settlement* owner = settlements.Get(tile.buildingOwnerId);
+		      if (!owner) return base;
+		      if (!owner->isCapital) return base;
+		      if (tileX != owner->centerX || tileY != owner->centerY) return base;
+
+		      outW = capitalTexW_;
+		      outH = capitalTexH_;
+		      return capitalTexture_;
+		    };
+
+		    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+		    SDL_SetTextureAlphaMod(shadowTexture_, 130);
+		    for (int y = buildMinY; y <= buildMaxY; ++y) {
+		      for (int x = buildMinX; x <= buildMaxX; ++x) {
+		        const Tile& tile = world.At(x, y);
+		        if (tile.building != BuildingType::TownHall) continue;
+
+		        int texW = 0;
+		        int texH = 0;
+		        SDL_Texture* tex = resolveTownHallSprite(x, y, tile, texW, texH);
+		        if (!tex || texW <= 0 || texH <= 0) continue;
+
+		        float drawW = static_cast<float>(texW) * scale;
+		        float drawH = static_cast<float>(texH) * scale;
+		        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+		        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+		        float worldX = anchorX - drawW * 0.5f;
+		        float worldY = anchorY - drawH;
+		        float shadowW = drawW * 0.58f;
+		        float shadowH = tileSize * 0.55f;
+		        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
+		        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
+		        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+		        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+		        SDL_SetTextureAlphaMod(shadowTexture_, 60);
+		        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+		        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+		        SDL_SetTextureAlphaMod(shadowTexture_, 135);
+		        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+		        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+		        SDL_SetTextureColorMod(tex, 0, 0, 0);
+		        SDL_SetTextureAlphaMod(tex, 70);
+		        SDL_Rect drop = dst;
+		        drop.x += 1;
+		        drop.y += 1;
+		        SDL_RenderCopy(renderer, tex, nullptr, &drop);
+		        SDL_SetTextureAlphaMod(tex, 50);
+		        SDL_Rect o1 = dst;
+		        SDL_Rect o2 = dst;
+		        SDL_Rect o3 = dst;
+		        SDL_Rect o4 = dst;
+		        o1.x += 1;
+		        o2.x -= 1;
+		        o3.y += 1;
+		        o4.y -= 1;
+		        SDL_RenderCopy(renderer, tex, nullptr, &o1);
+		        SDL_RenderCopy(renderer, tex, nullptr, &o2);
+		        SDL_RenderCopy(renderer, tex, nullptr, &o3);
+		        SDL_RenderCopy(renderer, tex, nullptr, &o4);
+		        SDL_SetTextureColorMod(tex, 255, 255, 255);
+		        SDL_SetTextureAlphaMod(tex, 255);
+		        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+		      }
+		    }
+		    SDL_SetTextureAlphaMod(shadowTexture_, 90);
+		  }
 
   CrashContextSetStage("Render::Fire");
   SDL_Rect fireSrc = FireSrc();
@@ -1837,58 +2134,29 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
   SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
   SDL_SetTextureAlphaMod(shadowTexture_, 110);
+
+  struct HumanBodyDrawItem {
+    SDL_Rect src{0, 0, 0, 0};
+    SDL_Rect dst{0, 0, 0, 0};
+    bool hasSoldierDot = false;
+    SDL_Rect dotDst{0, 0, 0, 0};
+    SDL_Color dotColor{0, 0, 0, 0};
+    float depthKey = 0.0f;  // world-space feet Y
+  };
+  std::vector<HumanBodyDrawItem> humanBodies;
+
+  CrashContextSetStage("Render::HumanGround");
   SDL_Rect humanSrc{0, 0, spriteWidth_, spriteHeight_};
   const auto& list = humans.Humans();
-
-  // Cheap 1px outline for readability.
-  CrashContextSetStage("Render::UnitOutline");
-  if (humansTexture_) {
-    SDL_SetTextureColorMod(humansTexture_, 0, 0, 0);
-    SDL_SetTextureAlphaMod(humansTexture_, 130);
-    for (const auto& human : list) {
-      if (!human.alive) continue;
-      if (human.x < minX || human.x > maxX || human.y < minY || human.y > maxY) continue;
-
-      int row = human.female ? 1 : 0;
-      int col = human.animFrame + (human.moving ? 2 : 0);
-      humanSrc.x = col * spriteWidth_;
-      humanSrc.y = row * spriteHeight_;
-
-      float worldX = (human.px - 0.5f) * tileSize + human.personalOffsetX * tileSize;
-      float worldY = (human.py - 0.5f) * tileSize + human.personalOffsetY * tileSize;
-
-      SDL_Rect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
-      SDL_Rect d1 = dst;
-      SDL_Rect d2 = dst;
-      SDL_Rect d3 = dst;
-      SDL_Rect d4 = dst;
-      d1.x += 1;
-      d2.x -= 1;
-      d3.y += 1;
-      d4.y -= 1;
-      SDL_RenderCopy(renderer, humansTexture_, &humanSrc, &d1);
-      SDL_RenderCopy(renderer, humansTexture_, &humanSrc, &d2);
-      SDL_RenderCopy(renderer, humansTexture_, &humanSrc, &d3);
-      SDL_RenderCopy(renderer, humansTexture_, &humanSrc, &d4);
-    }
-    SDL_SetTextureColorMod(humansTexture_, 255, 255, 255);
-    SDL_SetTextureAlphaMod(humansTexture_, 255);
-  }
-
-  CrashContextSetStage("Render::Humans");
+  humanBodies.reserve(list.size());
   for (const auto& human : list) {
     if (!human.alive) continue;
     if (human.x < minX || human.x > maxX || human.y < minY || human.y > maxY) continue;
 
-    int row = human.female ? 1 : 0;
-    int col = human.animFrame + (human.moving ? 2 : 0);
-    humanSrc.x = col * spriteWidth_;
-    humanSrc.y = row * spriteHeight_;
-
     const float tileWorldX = static_cast<float>(human.x) * tileSize;
     const float tileWorldY = static_cast<float>(human.y) * tileSize;
-    float worldX = (human.px - 0.5f) * tileSize + human.personalOffsetX * tileSize;
-    float worldY = (human.py - 0.5f) * tileSize + human.personalOffsetY * tileSize;
+    const float worldX = (human.px - 0.5f) * tileSize + human.personalOffsetX * tileSize;
+    const float worldY = (human.py - 0.5f) * tileSize + human.personalOffsetY * tileSize;
 
     if (config.showSoldierTileMarkers && human.role == Role::Soldier) {
       SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -1904,26 +2172,134 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
     SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
 
-    SDL_Rect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
-    SDL_RenderCopy(renderer, humansTexture_, &humanSrc, &dst);
+    if (!humansTexture_) continue;
+
+    int row = human.female ? 1 : 0;
+    int col = human.animFrame + (human.moving ? 2 : 0);
+    humanSrc.x = col * spriteWidth_;
+    humanSrc.y = row * spriteHeight_;
+
+    HumanBodyDrawItem item;
+    item.src = humanSrc;
+    item.dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
+    item.depthKey = worldY + tileSize;
 
     if (human.role == Role::Soldier) {
       SDL_Color color{220, 220, 220, 220};
       if (human.settlementId > 0) {
         const Settlement* settlement = settlements.Get(human.settlementId);
-        const Faction* faction = (settlement && settlement->factionId > 0) ? factions.Get(settlement->factionId)
-                                                                           : nullptr;
+        const Faction* faction =
+            (settlement && settlement->factionId > 0) ? factions.Get(settlement->factionId) : nullptr;
         if (faction) {
           color = SDL_Color{faction->color.r, faction->color.g, faction->color.b, 220};
         }
       }
-      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-      SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+      item.hasSoldierDot = true;
+      item.dotColor = color;
       const float dotSize = human.isGeneral ? (tileSize * 0.22f) : (tileSize * 0.12f);
       const float dotX = worldX + tileSize * 0.5f - dotSize * 0.5f;
       const float dotY = worldY + tileSize * 0.05f;
-      SDL_Rect dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
-      SDL_RenderFillRect(renderer, &dotDst);
+      item.dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
+    }
+
+    humanBodies.push_back(item);
+  }
+
+  CrashContextSetStage("Render::YInterleave");
+  if (!treeCanopies.empty() || (!humanBodies.empty() && humansTexture_)) {
+    struct YDrawRef {
+      float depthKey = 0.0f;
+      uint32_t index = 0;
+      bool isHuman = false;
+    };
+
+    const int bucketPad = std::max(4, treePadTiles + 2);
+    const int baseBucket = minY - bucketPad;
+    const int bucketCount = (maxY - minY + 1) + bucketPad * 2;
+    if (bucketCount > 0) {
+      std::vector<std::vector<YDrawRef>> buckets(static_cast<size_t>(bucketCount));
+
+      auto bucketIndexForDepth = [&](float depthKey) -> int {
+        const int bucket = static_cast<int>(std::floor(depthKey / tileSize));
+        int idx = bucket - baseBucket;
+        if (idx < 0) idx = 0;
+        if (idx >= bucketCount) idx = bucketCount - 1;
+        return idx;
+      };
+
+      for (size_t i = 0; i < treeCanopies.size(); ++i) {
+        const int b = bucketIndexForDepth(treeCanopies[i].depthKey);
+        buckets[static_cast<size_t>(b)].push_back(
+            YDrawRef{treeCanopies[i].depthKey, static_cast<uint32_t>(i), false});
+      }
+      for (size_t i = 0; i < humanBodies.size(); ++i) {
+        const int b = bucketIndexForDepth(humanBodies[i].depthKey);
+        buckets[static_cast<size_t>(b)].push_back(
+            YDrawRef{humanBodies[i].depthKey, static_cast<uint32_t>(i), true});
+      }
+
+      auto drawTreeCanopy = [&](const TreeCanopyDrawItem& canopy) {
+        if (!canopy.texture) return;
+        SDL_SetTextureColorMod(canopy.texture, 0, 0, 0);
+        SDL_SetTextureAlphaMod(canopy.texture, 55);
+        SDL_Rect o1 = canopy.dst;
+        SDL_Rect o2 = canopy.dst;
+        SDL_Rect o3 = canopy.dst;
+        SDL_Rect o4 = canopy.dst;
+        o1.x += 1;
+        o2.x -= 1;
+        o3.y += 1;
+        o4.y -= 1;
+        SDL_RenderCopyEx(renderer, canopy.texture, &canopy.src, &o1, 0.0, nullptr, canopy.flip);
+        SDL_RenderCopyEx(renderer, canopy.texture, &canopy.src, &o2, 0.0, nullptr, canopy.flip);
+        SDL_RenderCopyEx(renderer, canopy.texture, &canopy.src, &o3, 0.0, nullptr, canopy.flip);
+        SDL_RenderCopyEx(renderer, canopy.texture, &canopy.src, &o4, 0.0, nullptr, canopy.flip);
+        SDL_SetTextureColorMod(canopy.texture, 255, 255, 255);
+        SDL_SetTextureAlphaMod(canopy.texture, 255);
+        SDL_RenderCopyEx(renderer, canopy.texture, &canopy.src, &canopy.dst, 0.0, nullptr, canopy.flip);
+      };
+
+      auto drawHumanBody = [&](const HumanBodyDrawItem& human) {
+        if (!humansTexture_) return;
+        SDL_SetTextureColorMod(humansTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(humansTexture_, 130);
+        SDL_Rect d1 = human.dst;
+        SDL_Rect d2 = human.dst;
+        SDL_Rect d3 = human.dst;
+        SDL_Rect d4 = human.dst;
+        d1.x += 1;
+        d2.x -= 1;
+        d3.y += 1;
+        d4.y -= 1;
+        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d1);
+        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d2);
+        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d3);
+        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d4);
+        SDL_SetTextureColorMod(humansTexture_, 255, 255, 255);
+        SDL_SetTextureAlphaMod(humansTexture_, 255);
+        SDL_RenderCopy(renderer, humansTexture_, &human.src, &human.dst);
+
+        if (human.hasSoldierDot) {
+          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(renderer, human.dotColor.r, human.dotColor.g, human.dotColor.b,
+                                 human.dotColor.a);
+          SDL_RenderFillRect(renderer, &human.dotDst);
+        }
+      };
+
+      for (auto& bucket : buckets) {
+        if (bucket.size() > 1) {
+          std::stable_sort(bucket.begin(), bucket.end(),
+                           [](const YDrawRef& a, const YDrawRef& b) { return a.depthKey < b.depthKey; });
+        }
+        for (const auto& item : bucket) {
+          if (item.isHuman) {
+            drawHumanBody(humanBodies[static_cast<size_t>(item.index)]);
+          } else {
+            drawTreeCanopy(treeCanopies[static_cast<size_t>(item.index)]);
+          }
+        }
+      }
     }
   }
 
