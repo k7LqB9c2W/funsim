@@ -20,6 +20,7 @@ namespace {
 constexpr int kTileSize = 32;
 constexpr int kDefaultWidth = 256;
 constexpr int kDefaultHeight = 144;
+constexpr int kDefaultWorldScale = 4;
 constexpr int kCalendarDaysPerCoarseDay = 30;
 
 float Clamp(float value, float min_value, float max_value) {
@@ -27,9 +28,17 @@ float Clamp(float value, float min_value, float max_value) {
   if (value > max_value) return max_value;
   return value;
 }
+
+int WorldScaleFromIndex(int index) {
+  constexpr int kScales[] = {2, 4, 8, 16};
+  if (index < 0) return kScales[0];
+  int maxIndex = static_cast<int>(sizeof(kScales) / sizeof(kScales[0])) - 1;
+  if (index > maxIndex) return kScales[maxIndex];
+  return kScales[index];
+}
 }  // namespace
 
-App::App() : world_(kDefaultWidth, kDefaultHeight) {
+App::App() : world_(kDefaultWidth * kDefaultWorldScale, kDefaultHeight * kDefaultWorldScale) {
   tickSeconds_ = daySeconds_ / static_cast<double>(ticksPerDay_);
 }
 
@@ -256,7 +265,7 @@ void App::Update(float dt) {
     }
   }
   if (ui_.newWorld) {
-    int scale = (ui_.worldSizeIndex == 1) ? 4 : 1;
+    int scale = WorldScaleFromIndex(ui_.worldSizeIndex);
     CreateNewWorld(scale);
   }
 

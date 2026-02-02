@@ -88,7 +88,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   if (ImGui::Button("Load Map")) {
     state.loadMap = true;
   }
-  const char* worldSizes[] = {"1x", "4x"};
+  const char* worldSizes[] = {"2x", "4x", "8x", "16x"};
   ImGui::Combo("New World Size", &state.worldSizeIndex, worldSizes,
                static_cast<int>(sizeof(worldSizes) / sizeof(worldSizes[0])));
   if (ImGui::Button("New World")) {

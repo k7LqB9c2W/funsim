@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\funsim\build\vs2022\CMakeFiles\e72caf398e7597aaff42bdfdc2b033c8\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{7845EFE1-F6AC-37AA-8520-0B24AD25ADC5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
