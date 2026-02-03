@@ -81,6 +81,7 @@ class Renderer {
   };
 
   SDL_Texture* humansTexture_ = nullptr;
+  SDL_Texture* soldierTexture_ = nullptr;
   SDL_Texture* tilesTexture_ = nullptr;
   SDL_Texture* terrainOverlayTexture_ = nullptr;
   SDL_Texture* objectsTexture_ = nullptr;
@@ -99,6 +100,8 @@ class Renderer {
   bool ttfOwned_ = false;
   int spriteWidth_ = 32;
   int spriteHeight_ = 32;
+  int soldierSpriteWidth_ = 16;
+  int soldierSpriteHeight_ = 16;
   int townHallTexW_ = 0;
   int townHallTexH_ = 0;
   int capitalTexW_ = 0;

@@ -79,6 +79,8 @@ struct Human {
   float animTimer = 0.0f;
   int animFrame = 0;
   bool moving = false;
+  // 0=Front, 1=Back, 2=Left, 3=Right (used for directional sprites, e.g. soldiers).
+  uint8_t facing = 0;
   Goal goal = Goal::Wander;
   Role role = Role::Idle;
   int targetX = 0;

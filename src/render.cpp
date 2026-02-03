@@ -577,6 +577,40 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
   if (!loadTexture(humanSpritesPath, humansTexture_, "humans")) {
     return false;
   }
+
+  // Optional soldier sprites (4 frames in a row: Front, Back, Left, Right).
+  {
+    CrashContextSetStage("Renderer::Load IMG soldier");
+    const std::string soldierPath = "assets/sprites/soldier_sprite.png";
+    soldierTexture_ = IMG_LoadTexture(renderer, soldierPath.c_str());
+    if (!soldierTexture_) {
+      SDL_Log("Failed to load soldier texture (%s): %s", soldierPath.c_str(), IMG_GetError());
+      soldierSpriteWidth_ = 16;
+      soldierSpriteHeight_ = 16;
+    } else {
+      SDL_SetTextureScaleMode(soldierTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(soldierTexture_, SDL_BLENDMODE_BLEND);
+      int texW = 0;
+      int texH = 0;
+      if (SDL_QueryTexture(soldierTexture_, nullptr, nullptr, &texW, &texH) != 0) {
+        SDL_Log("Failed to query soldier texture: %s", SDL_GetError());
+        soldierSpriteWidth_ = 16;
+        soldierSpriteHeight_ = 16;
+      } else if (texW >= 4 && texH >= 1) {
+        soldierSpriteWidth_ = std::max(1, texW / 4);
+        soldierSpriteHeight_ = texH;
+        if (texW % 4 != 0) {
+          SDL_Log("Soldier spritesheet size (%dx%d) is not divisible by 4; using %dx%d sprites",
+                  texW, texH, soldierSpriteWidth_, soldierSpriteHeight_);
+        }
+      } else {
+        SDL_Log("Soldier spritesheet size (%dx%d) too small; defaulting to 16x16 sprites", texW, texH);
+        soldierSpriteWidth_ = 16;
+        soldierSpriteHeight_ = 16;
+      }
+    }
+  }
+
   if (!loadTexture(tilesPath, tilesTexture_, "tiles")) {
     Shutdown();
     return false;
@@ -717,6 +751,7 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
   }
 
   SDL_SetTextureBlendMode(humansTexture_, SDL_BLENDMODE_BLEND);
+  if (soldierTexture_) SDL_SetTextureBlendMode(soldierTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(tilesTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(terrainOverlayTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(objectsTexture_, SDL_BLENDMODE_BLEND);
@@ -838,6 +873,10 @@ void Renderer::Shutdown() {
   if (humansTexture_) {
     SDL_DestroyTexture(humansTexture_);
     humansTexture_ = nullptr;
+  }
+  if (soldierTexture_) {
+    SDL_DestroyTexture(soldierTexture_);
+    soldierTexture_ = nullptr;
   }
   if (tilesTexture_) {
     SDL_DestroyTexture(tilesTexture_);
@@ -2136,6 +2175,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   SDL_SetTextureAlphaMod(shadowTexture_, 110);
 
   struct HumanBodyDrawItem {
+    SDL_Texture* texture = nullptr;
     SDL_Rect src{0, 0, 0, 0};
     SDL_Rect dst{0, 0, 0, 0};
     bool hasSoldierDot = false;
@@ -2172,15 +2212,27 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
     SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
 
-    if (!humansTexture_) continue;
-
-    int row = human.female ? 1 : 0;
-    int col = human.animFrame + (human.moving ? 2 : 0);
-    humanSrc.x = col * spriteWidth_;
-    humanSrc.y = row * spriteHeight_;
+    SDL_Texture* bodyTex = humansTexture_;
+    SDL_Rect bodySrc = humanSrc;
+    if (human.role == Role::Soldier && soldierTexture_) {
+      bodyTex = soldierTexture_;
+      bodySrc.w = soldierSpriteWidth_;
+      bodySrc.h = soldierSpriteHeight_;
+      int dir = static_cast<int>(human.facing);
+      if (dir > 3) dir = 3;
+      bodySrc.x = dir * soldierSpriteWidth_;
+      bodySrc.y = 0;
+    } else {
+      int row = human.female ? 1 : 0;
+      int col = human.animFrame + (human.moving ? 2 : 0);
+      bodySrc.x = col * spriteWidth_;
+      bodySrc.y = row * spriteHeight_;
+    }
+    if (!bodyTex) continue;
 
     HumanBodyDrawItem item;
-    item.src = humanSrc;
+    item.texture = bodyTex;
+    item.src = bodySrc;
     item.dst = MakeDstRect(worldX, worldY, tileSize, tileSize, camera);
     item.depthKey = worldY + tileSize;
 
@@ -2206,7 +2258,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   }
 
   CrashContextSetStage("Render::YInterleave");
-  if (!treeCanopies.empty() || (!humanBodies.empty() && humansTexture_)) {
+  if (!treeCanopies.empty() || !humanBodies.empty()) {
     struct YDrawRef {
       float depthKey = 0.0f;
       uint32_t index = 0;
@@ -2260,9 +2312,10 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       };
 
       auto drawHumanBody = [&](const HumanBodyDrawItem& human) {
-        if (!humansTexture_) return;
-        SDL_SetTextureColorMod(humansTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(humansTexture_, 130);
+        SDL_Texture* tex = human.texture;
+        if (!tex) return;
+        SDL_SetTextureColorMod(tex, 0, 0, 0);
+        SDL_SetTextureAlphaMod(tex, 130);
         SDL_Rect d1 = human.dst;
         SDL_Rect d2 = human.dst;
         SDL_Rect d3 = human.dst;
@@ -2271,13 +2324,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         d2.x -= 1;
         d3.y += 1;
         d4.y -= 1;
-        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d1);
-        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d2);
-        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d3);
-        SDL_RenderCopy(renderer, humansTexture_, &human.src, &d4);
-        SDL_SetTextureColorMod(humansTexture_, 255, 255, 255);
-        SDL_SetTextureAlphaMod(humansTexture_, 255);
-        SDL_RenderCopy(renderer, humansTexture_, &human.src, &human.dst);
+        SDL_RenderCopy(renderer, tex, &human.src, &d1);
+        SDL_RenderCopy(renderer, tex, &human.src, &d2);
+        SDL_RenderCopy(renderer, tex, &human.src, &d3);
+        SDL_RenderCopy(renderer, tex, &human.src, &d4);
+        SDL_SetTextureColorMod(tex, 255, 255, 255);
+        SDL_SetTextureAlphaMod(tex, 255);
+        SDL_RenderCopy(renderer, tex, &human.src, &human.dst);
 
         if (human.hasSoldierDot) {
           SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);

@@ -584,6 +584,7 @@ Human HumanManager::CreateHuman(int x, int y, bool female, Random& rng, int ageD
   human.animTimer = 0.0f;
   human.animFrame = 0;
   human.moving = false;
+  human.facing = 0;
   human.goal = Goal::Wander;
   human.role = Role::Idle;
   human.targetX = x;
@@ -1732,6 +1733,15 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
 
       float speedSq = human.vx * human.vx + human.vy * human.vy;
       human.moving = speedSq > 0.02f * 0.02f;
+      if (speedSq > 0.001f * 0.001f) {
+        float ax = std::fabs(human.vx);
+        float ay = std::fabs(human.vy);
+        if (ax > ay) {
+          human.facing = (human.vx < 0.0f) ? 2u : 3u;  // Left/Right
+        } else {
+          human.facing = (human.vy < 0.0f) ? 1u : 0u;  // Back/Front
+        }
+      }
 
       float movedSq = (human.px - oldPx) * (human.px - oldPx) + (human.py - oldPy) * (human.py - oldPy);
       if (LenSq(desiredVel) > 0.05f * 0.05f && movedSq < 1e-6f) {
