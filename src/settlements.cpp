@@ -213,6 +213,16 @@ int SettlementManager::ZonePopAt(int zx, int zy) const {
              : 0;
 }
 
+int SettlementManager::ZoneFoundingPopAt(int zx, int zy) const {
+  if (zonesX_ == 0 || zonesY_ == 0) return 0;
+  if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
+  int idx = zy * zonesX_ + zx;
+  if (idx < 0 || idx >= static_cast<int>(zonePopStampByIndex_.size())) return 0;
+  return (zonePopStampByIndex_[static_cast<size_t>(idx)] == zonePopGeneration_)
+             ? zoneFoundingPopByIndex_[static_cast<size_t>(idx)]
+             : 0;
+}
+
 int SettlementManager::ZoneConflictAt(int zx, int zy) const {
   if (zonesX_ == 0 || zonesY_ == 0) return 0;
   if (zx < 0 || zy < 0 || zx >= zonesX_ || zy >= zonesY_) return 0;
@@ -241,6 +251,7 @@ void SettlementManager::EnsureZoneBuffers(const World& world) {
   zonePopGeneration_ = 1;
   zonePopStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
   zonePopByIndex_.assign(static_cast<size_t>(totalZones), 0);
+  zoneFoundingPopByIndex_.assign(static_cast<size_t>(totalZones), 0);
 
   zoneDenseGeneration_ = 1;
   zoneDenseStampByIndex_.assign(static_cast<size_t>(totalZones), 0u);
@@ -289,14 +300,22 @@ void SettlementManager::RecomputeZonePop(const World& world, const HumanManager&
     if (zonePopStampByIndex_[static_cast<size_t>(idx)] != zonePopGeneration_) {
       zonePopStampByIndex_[static_cast<size_t>(idx)] = zonePopGeneration_;
       zonePopByIndex_[static_cast<size_t>(idx)] = 0;
+      zoneFoundingPopByIndex_[static_cast<size_t>(idx)] = 0;
       touchedZones.push_back(idx);
     }
     zonePopByIndex_[static_cast<size_t>(idx)]++;
+    bool contributesToFounding = true;
+    if (human.role == Role::Soldier && human.armyState != ArmyState::Idle) {
+      contributesToFounding = false;
+    }
+    if (contributesToFounding) {
+      zoneFoundingPopByIndex_[static_cast<size_t>(idx)]++;
+    }
   }
 
   denseZoneIndices_.reserve(touchedZones.size());
   for (int idx : touchedZones) {
-    int pop = zonePopByIndex_[static_cast<size_t>(idx)];
+    int pop = zoneFoundingPopByIndex_[static_cast<size_t>(idx)];
     if (pop < kZonePopThreshold) continue;
     zoneDenseStampByIndex_[static_cast<size_t>(idx)] = zoneDenseGeneration_;
     zoneDenseDaysByIndex_[static_cast<size_t>(idx)] += dayDelta;
@@ -341,14 +360,16 @@ void SettlementManager::RecomputeZonePopMacro() {
     if (zonePopStampByIndex_[static_cast<size_t>(idx)] != zonePopGeneration_) {
       zonePopStampByIndex_[static_cast<size_t>(idx)] = zonePopGeneration_;
       zonePopByIndex_[static_cast<size_t>(idx)] = 0;
+      zoneFoundingPopByIndex_[static_cast<size_t>(idx)] = 0;
       touchedZones.push_back(idx);
     }
     zonePopByIndex_[static_cast<size_t>(idx)] += settlement.population;
+    zoneFoundingPopByIndex_[static_cast<size_t>(idx)] += settlement.population;
   }
 
   denseZoneIndices_.reserve(touchedZones.size());
   for (int idx : touchedZones) {
-    int pop = zonePopByIndex_[static_cast<size_t>(idx)];
+    int pop = zoneFoundingPopByIndex_[static_cast<size_t>(idx)];
     if (pop < kZonePopThreshold) continue;
     zoneDenseStampByIndex_[static_cast<size_t>(idx)] = zoneDenseGeneration_;
     zoneDenseDaysByIndex_[static_cast<size_t>(idx)]++;
@@ -403,7 +424,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
       continue;
     }
 
-    int zonePop = ZonePopAt(zx, zy);
+    int zonePop = ZoneFoundingPopAt(zx, zy);
     int sourceFactionId = 0;
     const Settlement* nearestSettlement = Get(nearestId);
     if (nearestSettlement) {

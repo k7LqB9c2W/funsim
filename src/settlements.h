@@ -193,6 +193,7 @@ class SettlementManager {
   int ZoneOwnerForTile(int x, int y) const;
   int ZoneOwnerAt(int zx, int zy) const;
   int ZonePopAt(int zx, int zy) const;
+  int ZoneFoundingPopAt(int zx, int zy) const;
   int ZoneConflictAt(int zx, int zy) const;
   int ZoneSize() const { return zoneSize_; }
   int ZonesX() const { return zonesX_; }
@@ -255,6 +256,7 @@ class SettlementManager {
   uint32_t zonePopGeneration_ = 1;
   std::vector<uint32_t> zonePopStampByIndex_;
   std::vector<int> zonePopByIndex_;
+  std::vector<int> zoneFoundingPopByIndex_;
 
   uint32_t zoneDenseGeneration_ = 1;
   std::vector<uint32_t> zoneDenseStampByIndex_;

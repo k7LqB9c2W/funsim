@@ -22,6 +22,7 @@ constexpr int kDefaultWidth = 256;
 constexpr int kDefaultHeight = 144;
 constexpr int kDefaultWorldScale = 4;
 constexpr int kCalendarDaysPerCoarseDay = 30;
+constexpr float kLandFoodSpawnChance = 0.30f;
 
 float Clamp(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
@@ -707,9 +708,18 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
         world_.EraseAt(x, y);
       } else {
         switch (ui_.tool) {
-          case ToolType::PlaceLand:
+          case ToolType::PlaceLand: {
+            const TileType beforeType = world_.At(x, y).type;
             world_.SetTileType(x, y, TileType::Land);
+            if (ui_.spawnFoodOnLandPlacement && beforeType != TileType::Land &&
+                rng_.Chance(kLandFoodSpawnChance)) {
+              world_.EditTile(x, y, [&](Tile& tile) {
+                if (tile.type != TileType::Land) return;
+                tile.food = 50;
+              });
+            }
             break;
+          }
           case ToolType::PlaceFreshWater:
             world_.EditTile(x, y, [&](Tile& tile) {
               tile.type = TileType::FreshWater;

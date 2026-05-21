@@ -58,6 +58,7 @@ struct UIState {
   bool warEnabled = true;
   bool rebellionsEnabled = true;
   bool starvationDeathEnabled = true;
+  bool spawnFoodOnLandPlacement = true;
   OverlayMode overlayMode = OverlayMode::FactionTerritory;
   bool wholeMapView = false;
   int territoryOverlayAlpha = 90;

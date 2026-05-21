@@ -47,6 +47,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Separator();
   ImGui::Text("Debug");
   ImGui::Checkbox("War Debug Window", &state.warDebugOpen);
+  ImGui::Checkbox("Spawn Food When Placing Land", &state.spawnFoodOnLandPlacement);
   ImGui::Separator();
   for (ToolType tool : kToolOrder) {
     bool selected = (state.tool == tool);
