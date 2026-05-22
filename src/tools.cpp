@@ -26,6 +26,8 @@ const char* ToolName(ToolType tool) {
       return "Gift Food";
     case ToolType::InspireResearch:
       return "Inspire Research";
+    case ToolType::StartDisease:
+      return "Start Disease";
     default:
       return "Unknown";
   }

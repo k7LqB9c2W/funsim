@@ -159,6 +159,10 @@ struct Settlement {
   float macroBirthAccum = 0.0f;
   float macroFarmFoodAccum = 0.0f;
   float macroFoodNeedAccum = 0.0f;
+  int diseaseInfected = 0;
+  int diseaseRecovered = 0;
+  int diseaseDeathsToday = 0;
+  int diseaseEverInfected = 0;
 
   Task tasks[kTaskCap];
   int taskHead = 0;

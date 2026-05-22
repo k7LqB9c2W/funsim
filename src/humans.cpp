@@ -65,6 +65,16 @@ constexpr int kMacroBinDays[kMacroBins] = {
 };
 constexpr float kMacroDeathRate[kMacroBins] = {0.0020f, 0.0003f, 0.00008f, 0.00012f, 0.0006f, 0.0025f};
 constexpr float kMacroBirthRatePerDay = 0.0014f;
+constexpr int kDiseaseCellSize = 8;
+constexpr int kDiseaseContagiousDays = 12;
+constexpr int kDiseaseRecoveryStartDays = 10;
+constexpr int kDiseaseMaxDays = 28;
+constexpr float kDiseaseTransmissionPerContact = 0.015f;
+constexpr float kDiseaseMaxInfectionChance = 0.38f;
+constexpr float kDiseaseDeathPerDay = 0.006f;
+constexpr float kDiseaseRecoveryPerDay = 0.16f;
+constexpr float kDiseaseSirBaseTransmission = 0.18f;
+constexpr float kDiseaseRandomOutbreakChancePerDay = 0.0007f;
 
 bool IsWalkable(const Tile& tile) {
   return tile.type != TileType::Ocean;
@@ -326,6 +336,39 @@ int ApplyRate(int count, float rate, Random& rng) {
   return total;
 }
 
+int RemoveMacroPopulation(Settlement& settlement, int count, Random& rng) {
+  if (count <= 0) return 0;
+  int removed = 0;
+  for (int bin = kMacroBins - 1; bin >= 0 && removed < count; --bin) {
+    int want = count - removed;
+    int takeM = std::min(settlement.macroPopM[bin], (want + 1) / 2);
+    settlement.macroPopM[bin] -= takeM;
+    removed += takeM;
+    want = count - removed;
+    int takeF = std::min(settlement.macroPopF[bin], want);
+    settlement.macroPopF[bin] -= takeF;
+    removed += takeF;
+  }
+  while (removed < count) {
+    bool found = false;
+    for (int bin = 0; bin < kMacroBins && removed < count; ++bin) {
+      if (settlement.macroPopM[bin] > 0 && rng.Chance(0.5f)) {
+        settlement.macroPopM[bin]--;
+        removed++;
+        found = true;
+      }
+      if (settlement.macroPopF[bin] > 0 && removed < count) {
+        settlement.macroPopF[bin]--;
+        removed++;
+        found = true;
+      }
+    }
+    if (!found) break;
+  }
+  settlement.population = settlement.MacroTotal();
+  return removed;
+}
+
 bool TaskTargetsTile(TaskType type) {
   switch (type) {
     case TaskType::CollectFood:
@@ -482,6 +525,8 @@ const char* DeathReasonName(DeathReason reason) {
       return "old_age";
     case DeathReason::War:
       return "war";
+    case DeathReason::Disease:
+      return "disease";
     default:
       return "unknown";
   }
@@ -664,6 +709,9 @@ void HumanManager::RecordDeath(int humanId, int day, DeathReason reason) {
       break;
     case DeathReason::War:
       deathSummary_.war++;
+      break;
+    case DeathReason::Disease:
+      deathSummary_.disease++;
       break;
   }
 }
@@ -2048,9 +2096,337 @@ void HumanManager::RecordWarDeaths(int count) {
   deathSummary_.war += count;
 }
 
+void HumanManager::StartDiseaseAtSettlement(SettlementManager& settlements, int settlementId,
+                                            Random& rng, int seedCount) {
+  if (settlementId <= 0 || seedCount <= 0) return;
+  Settlement* settlement = settlements.GetMutable(settlementId);
+  if (!settlement) return;
+
+  int seeded = 0;
+  for (auto& human : humans_) {
+    if (seeded >= seedCount) break;
+    if (!human.alive || human.settlementId != settlementId) continue;
+    if (human.diseaseState == DiseaseState::Infected) continue;
+    human.diseaseState = DiseaseState::Infected;
+    human.diseaseDays = static_cast<uint8_t>(rng.RangeInt(0, 2));
+    seeded++;
+  }
+
+  int total = macroActive_ ? settlement->MacroTotal() : settlement->population;
+  if (total <= 0 && seeded == 0) return;
+  int add = std::max(seedCount - seeded, seeded > 0 ? 0 : std::min(seedCount, std::max(1, total / 20)));
+  settlement->diseaseInfected = std::min(total > 0 ? total : seedCount,
+                                         settlement->diseaseInfected + seeded + add);
+  settlement->diseaseRecovered = std::max(0, std::min(settlement->diseaseRecovered,
+                                                      std::max(0, total - settlement->diseaseInfected)));
+  settlement->diseaseEverInfected += seeded + add;
+  settlement->diseaseDeathsToday = 0;
+  (void)rng;
+}
+
+void HumanManager::AggregateDiseaseToSettlements(SettlementManager& settlements) {
+  for (auto& settlement : settlements.SettlementsMutable()) {
+    settlement.diseaseInfected = 0;
+    settlement.diseaseRecovered = 0;
+  }
+
+  for (const auto& human : humans_) {
+    if (!human.alive || human.settlementId <= 0) continue;
+    Settlement* settlement = settlements.GetMutable(human.settlementId);
+    if (!settlement) continue;
+    if (human.diseaseState == DiseaseState::Infected) {
+      settlement->diseaseInfected++;
+    } else if (human.diseaseState == DiseaseState::Recovered) {
+      settlement->diseaseRecovered++;
+    }
+  }
+}
+
+void HumanManager::ReconcileDiseaseFromSettlements(SettlementManager& settlements, Random& rng,
+                                                   int dayCount, int& deathsToday,
+                                                   bool applyDeaths) {
+  struct DiseaseReconcileBucket {
+    int infectedTarget = 0;
+    int recoveredTarget = 0;
+    int deathsToApply = 0;
+    int infectedNow = 0;
+    int recoveredNow = 0;
+    bool active = false;
+  };
+
+  int maxSettlementId = 0;
+  for (auto& settlement : settlements.SettlementsMutable()) {
+    maxSettlementId = std::max(maxSettlementId, settlement.id);
+  }
+  std::vector<DiseaseReconcileBucket> buckets(static_cast<size_t>(maxSettlementId + 1));
+  for (const auto& settlement : settlements.Settlements()) {
+    DiseaseReconcileBucket& bucket = buckets[static_cast<size_t>(settlement.id)];
+    bucket.infectedTarget = std::max(0, settlement.diseaseInfected);
+    bucket.recoveredTarget = std::max(0, settlement.diseaseRecovered);
+    bucket.deathsToApply = applyDeaths ? std::max(0, settlement.diseaseDeathsToday) : 0;
+    bucket.active = true;
+  }
+
+  for (auto& human : humans_) {
+    if (!human.alive || human.settlementId <= 0 || human.settlementId > maxSettlementId) continue;
+    DiseaseReconcileBucket& bucket = buckets[static_cast<size_t>(human.settlementId)];
+    if (!bucket.active) continue;
+    if (bucket.deathsToApply > 0 &&
+        (human.diseaseState == DiseaseState::Infected || rng.Chance(0.08f))) {
+      RecordDeath(human.id, dayCount, DeathReason::Disease);
+      human.alive = false;
+      deathsToday++;
+      bucket.deathsToApply--;
+      continue;
+    }
+    if (human.diseaseState == DiseaseState::Infected) bucket.infectedNow++;
+    if (human.diseaseState == DiseaseState::Recovered) bucket.recoveredNow++;
+  }
+
+  for (auto& human : humans_) {
+    if (!human.alive || human.settlementId <= 0 || human.settlementId > maxSettlementId) continue;
+    DiseaseReconcileBucket& bucket = buckets[static_cast<size_t>(human.settlementId)];
+    if (!bucket.active) continue;
+    if (bucket.infectedNow < bucket.infectedTarget &&
+        human.diseaseState != DiseaseState::Infected) {
+      bool wasRecovered = human.diseaseState == DiseaseState::Recovered;
+      human.diseaseState = DiseaseState::Infected;
+      human.diseaseDays = static_cast<uint8_t>(rng.RangeInt(0, kDiseaseContagiousDays / 2));
+      bucket.infectedNow++;
+      if (wasRecovered) bucket.recoveredNow--;
+    } else if (bucket.infectedNow > bucket.infectedTarget &&
+               human.diseaseState == DiseaseState::Infected) {
+      human.diseaseState = DiseaseState::Recovered;
+      human.diseaseDays = 0;
+      bucket.infectedNow--;
+      bucket.recoveredNow++;
+    }
+  }
+
+  for (auto& human : humans_) {
+    if (!human.alive || human.settlementId <= 0 || human.settlementId > maxSettlementId) continue;
+    DiseaseReconcileBucket& bucket = buckets[static_cast<size_t>(human.settlementId)];
+    if (!bucket.active) continue;
+    if (bucket.recoveredNow < bucket.recoveredTarget &&
+        human.diseaseState == DiseaseState::Susceptible) {
+      human.diseaseState = DiseaseState::Recovered;
+      human.diseaseDays = 0;
+      bucket.recoveredNow++;
+    } else if (bucket.recoveredNow > bucket.recoveredTarget &&
+               human.diseaseState == DiseaseState::Recovered) {
+      human.diseaseState = DiseaseState::Susceptible;
+      human.diseaseDays = 0;
+      bucket.recoveredNow--;
+    }
+  }
+
+  size_t write = 0;
+  for (size_t read = 0; read < humans_.size(); ++read) {
+    if (!humans_[read].alive) continue;
+    if (write != read) humans_[write] = humans_[read];
+    write++;
+  }
+  humans_.resize(write);
+  RebuildIdMap();
+}
+
+void HumanManager::UpdateDisease(World& world, SettlementManager& settlements, Random& rng,
+                                 int dayCount, int dayDelta, bool useSirModel,
+                                 int& deathsToday) {
+  bool anyInfected = false;
+  for (const auto& settlement : settlements.Settlements()) {
+    if (settlement.diseaseInfected > 0) {
+      anyInfected = true;
+      break;
+    }
+  }
+  if (!anyInfected) {
+    for (const auto& human : humans_) {
+      if (human.alive && human.diseaseState == DiseaseState::Infected) {
+        anyInfected = true;
+        break;
+      }
+    }
+  }
+
+  if (!anyInfected && settlements.Count() > 0 &&
+      rng.Chance(ChanceWindow(kDiseaseRandomOutbreakChancePerDay, dayDelta))) {
+    int attempts = std::min(12, std::max(1, settlements.Count()));
+    for (int i = 0; i < attempts; ++i) {
+      const auto& list = settlements.Settlements();
+      const Settlement& settlement = list[static_cast<size_t>(rng.RangeInt(0, static_cast<int>(list.size()) - 1))];
+      int pop = macroActive_ ? settlement.MacroTotal() : settlement.population;
+      if (pop <= 0) continue;
+      StartDiseaseAtSettlement(settlements, settlement.id, rng, std::max(2, std::min(6, pop / 15)));
+      break;
+    }
+  }
+
+  if (useSirModel || macroActive_) {
+    UpdateDiseaseSir(settlements, rng, dayCount, dayDelta, !macroActive_, deathsToday);
+  } else {
+    UpdateDiseaseIndividual(world, settlements, rng, dayCount, dayDelta, deathsToday);
+  }
+}
+
+void HumanManager::UpdateDiseaseIndividual(const World& world, SettlementManager& settlements,
+                                           Random& rng, int dayCount, int dayDelta,
+                                           int& deathsToday) {
+  for (auto& settlement : settlements.SettlementsMutable()) {
+    settlement.diseaseInfected = 0;
+    settlement.diseaseRecovered = 0;
+    settlement.diseaseDeathsToday = 0;
+  }
+
+  for (auto& human : humans_) {
+    if (!human.alive || human.diseaseState != DiseaseState::Infected) continue;
+    int oldDays = human.diseaseDays;
+    int newDays = std::min(255, oldDays + dayDelta);
+    human.diseaseDays = static_cast<uint8_t>(newDays);
+    if (newDays >= 4 && rng.Chance(ChanceWindow(kDiseaseDeathPerDay, dayDelta))) {
+      RecordDeath(human.id, dayCount, DeathReason::Disease);
+      human.alive = false;
+      deathsToday++;
+      if (human.settlementId > 0) {
+        Settlement* settlement = settlements.GetMutable(human.settlementId);
+        if (settlement) settlement->diseaseDeathsToday++;
+      }
+      continue;
+    }
+    if (newDays >= kDiseaseMaxDays ||
+        (newDays >= kDiseaseRecoveryStartDays &&
+         rng.Chance(ChanceWindow(kDiseaseRecoveryPerDay, dayDelta)))) {
+      human.diseaseState = DiseaseState::Recovered;
+      human.diseaseDays = 0;
+    }
+  }
+
+  const int gridW = std::max(1, (world.width() + kDiseaseCellSize - 1) / kDiseaseCellSize);
+  const int gridH = std::max(1, (world.height() + kDiseaseCellSize - 1) / kDiseaseCellSize);
+  std::vector<uint16_t> contagious(static_cast<size_t>(gridW * gridH), 0u);
+
+  for (const auto& human : humans_) {
+    if (!human.alive || human.diseaseState != DiseaseState::Infected) continue;
+    if (human.diseaseDays > kDiseaseContagiousDays) continue;
+    int cx = std::max(0, std::min(gridW - 1, human.x / kDiseaseCellSize));
+    int cy = std::max(0, std::min(gridH - 1, human.y / kDiseaseCellSize));
+    uint16_t& cell = contagious[static_cast<size_t>(cy * gridW + cx)];
+    if (cell < 65535u) cell++;
+  }
+
+  for (auto& human : humans_) {
+    if (!human.alive || human.diseaseState != DiseaseState::Susceptible) continue;
+    int cx = std::max(0, std::min(gridW - 1, human.x / kDiseaseCellSize));
+    int cy = std::max(0, std::min(gridH - 1, human.y / kDiseaseCellSize));
+    int nearby = 0;
+    for (int dy = -1; dy <= 1; ++dy) {
+      int y = cy + dy;
+      if (y < 0 || y >= gridH) continue;
+      for (int dx = -1; dx <= 1; ++dx) {
+        int x = cx + dx;
+        if (x < 0 || x >= gridW) continue;
+        nearby += contagious[static_cast<size_t>(y * gridW + x)];
+      }
+    }
+    if (nearby <= 0) continue;
+    float chance = std::min(kDiseaseMaxInfectionChance,
+                            kDiseaseTransmissionPerContact * static_cast<float>(nearby));
+    if (!rng.Chance(ChanceWindow(chance, dayDelta))) continue;
+    human.diseaseState = DiseaseState::Infected;
+    human.diseaseDays = 0;
+    if (human.settlementId > 0) {
+      Settlement* settlement = settlements.GetMutable(human.settlementId);
+      if (settlement) settlement->diseaseEverInfected++;
+    }
+  }
+
+  for (const auto& human : humans_) {
+    if (!human.alive || human.settlementId <= 0) continue;
+    Settlement* settlement = settlements.GetMutable(human.settlementId);
+    if (!settlement) continue;
+    if (human.diseaseState == DiseaseState::Infected) {
+      settlement->diseaseInfected++;
+    } else if (human.diseaseState == DiseaseState::Recovered) {
+      settlement->diseaseRecovered++;
+    }
+  }
+}
+
+void HumanManager::UpdateDiseaseSir(SettlementManager& settlements, Random& rng, int dayCount,
+                                    int dayDelta, bool reconcileHumans, int& deathsToday) {
+  if (reconcileHumans) {
+    AggregateDiseaseToSettlements(settlements);
+  }
+
+  bool anyInfected = false;
+  for (const auto& settlement : settlements.Settlements()) {
+    if (settlement.diseaseInfected > 0) {
+      anyInfected = true;
+      break;
+    }
+  }
+  if (!anyInfected && settlements.Count() > 0 &&
+      rng.Chance(ChanceWindow(kDiseaseRandomOutbreakChancePerDay, dayDelta))) {
+    const auto& list = settlements.Settlements();
+    for (int attempt = 0; attempt < std::min(12, static_cast<int>(list.size())); ++attempt) {
+      const Settlement& candidate =
+          list[static_cast<size_t>(rng.RangeInt(0, static_cast<int>(list.size()) - 1))];
+      int pop = macroActive_ ? candidate.MacroTotal() : candidate.population;
+      if (pop <= 0) continue;
+      StartDiseaseAtSettlement(settlements, candidate.id, rng, std::max(2, std::min(6, pop / 15)));
+      break;
+    }
+  }
+
+  for (auto& settlement : settlements.SettlementsMutable()) {
+    settlement.diseaseDeathsToday = 0;
+    int total = macroActive_ ? settlement.MacroTotal() : settlement.population;
+    if (total <= 0) {
+      settlement.diseaseInfected = 0;
+      settlement.diseaseRecovered = 0;
+      continue;
+    }
+
+    settlement.diseaseInfected = std::max(0, std::min(settlement.diseaseInfected, total));
+    settlement.diseaseRecovered =
+        std::max(0, std::min(settlement.diseaseRecovered, total - settlement.diseaseInfected));
+
+    int susceptible = std::max(0, total - settlement.diseaseInfected - settlement.diseaseRecovered);
+    int infected = settlement.diseaseInfected;
+    if (infected <= 0) continue;
+
+    float density = std::min(2.2f, 0.75f + static_cast<float>(total) / 160.0f);
+    float perDayInfection =
+        kDiseaseSirBaseTransmission * density * static_cast<float>(infected) /
+        static_cast<float>(std::max(1, total));
+    perDayInfection = std::max(0.0f, std::min(0.65f, perDayInfection));
+    int newInfections = ApplyRate(susceptible, ChanceWindow(perDayInfection, dayDelta), rng);
+    int deaths = ApplyRate(infected, ChanceWindow(kDiseaseDeathPerDay, dayDelta), rng);
+    int remainingInfected = std::max(0, infected + newInfections - deaths);
+    int recoveries =
+        ApplyRate(remainingInfected, ChanceWindow(kDiseaseRecoveryPerDay, dayDelta), rng);
+
+    settlement.diseaseInfected = std::max(0, remainingInfected - recoveries);
+    settlement.diseaseRecovered =
+        std::max(0, std::min(total, settlement.diseaseRecovered + recoveries));
+    settlement.diseaseEverInfected += newInfections;
+    settlement.diseaseDeathsToday = deaths;
+
+    if (macroActive_ && deaths > 0) {
+      int removed = RemoveMacroPopulation(settlement, deaths, rng);
+      deathsToday += removed;
+      deathSummary_.macroDisease += removed;
+    }
+  }
+
+  if (reconcileHumans) {
+    ReconcileDiseaseFromSettlements(settlements, rng, dayCount, deathsToday, true);
+  }
+}
+
 void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng,
-                                     int dayCount, int dayDelta, int& birthsToday,
-                                     int& deathsToday) {
+                                     int dayCount, int dayDelta, bool useSirDiseaseModel,
+                                     int& birthsToday, int& deathsToday) {
   if (macroActive_) return;
   CrashContextSetStage("Humans::UpdateDailyCoarse begin");
   CrashContextSetPopulation(static_cast<int>(humans_.size()));
@@ -2330,6 +2706,9 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
     }
   }
 
+  CrashContextSetNote("daily:disease");
+  UpdateDisease(world, settlements, rng, dayCount, dayDelta, useSirDiseaseModel, deathsToday);
+
   CrashContextSetNote("daily:append_newborns");
   if (!newborns_.empty()) {
     humans_.insert(humans_.end(), newborns_.begin(), newborns_.end());
@@ -2353,6 +2732,7 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
 
 void HumanManager::EnterMacro(SettlementManager& settlements) {
   if (macroActive_) return;
+  AggregateDiseaseToSettlements(settlements);
   macroActive_ = true;
   arrows_.clear();
 
@@ -2431,8 +2811,30 @@ void HumanManager::ExitMacro(SettlementManager& settlements, Random& rng) {
     int total = settlement.MacroTotal();
     if (total <= 0) {
       settlement.ClearMacroPools();
+      settlement.diseaseInfected = 0;
+      settlement.diseaseRecovered = 0;
+      settlement.diseaseDeathsToday = 0;
       continue;
     }
+
+    int remainingToSpawn = total;
+    int infectedLeft = std::max(0, std::min(settlement.diseaseInfected, total));
+    int recoveredLeft = std::max(0, std::min(settlement.diseaseRecovered, total - infectedLeft));
+    auto applyDisease = [&](Human& human) {
+      if (remainingToSpawn <= 0) return;
+      if (infectedLeft > 0 && rng.Chance(static_cast<float>(infectedLeft) /
+                                         static_cast<float>(remainingToSpawn))) {
+        human.diseaseState = DiseaseState::Infected;
+        human.diseaseDays = static_cast<uint8_t>(rng.RangeInt(0, kDiseaseContagiousDays));
+        infectedLeft--;
+      } else if (recoveredLeft > 0 && rng.Chance(static_cast<float>(recoveredLeft) /
+                                                 static_cast<float>(remainingToSpawn))) {
+        human.diseaseState = DiseaseState::Recovered;
+        human.diseaseDays = 0;
+        recoveredLeft--;
+      }
+      remainingToSpawn--;
+    };
 
     for (int bin = 0; bin < kMacroBins; ++bin) {
       for (int i = 0; i < settlement.macroPopM[bin]; ++i) {
@@ -2445,6 +2847,7 @@ void HumanManager::ExitMacro(SettlementManager& settlements, Random& rng) {
         human.settlementId = settlement.id;
         human.homeX = settlement.centerX;
         human.homeY = settlement.centerY;
+        applyDisease(human);
         humans_.push_back(human);
       }
       for (int i = 0; i < settlement.macroPopF[bin]; ++i) {
@@ -2457,6 +2860,7 @@ void HumanManager::ExitMacro(SettlementManager& settlements, Random& rng) {
         human.settlementId = settlement.id;
         human.homeX = settlement.centerX;
         human.homeY = settlement.centerY;
+        applyDisease(human);
         humans_.push_back(human);
       }
     }
@@ -2618,6 +3022,8 @@ void HumanManager::AdvanceMacro(World& world, SettlementManager& settlements, Ra
       settlement.population = settlement.MacroTotal();
       settlement.ageDays++;
     }
+
+    UpdateDiseaseSir(settlements, rng, currentDay_, 1, false, deathsToday);
 
     if (macroHasFallback_) {
       int popTotal = 0;

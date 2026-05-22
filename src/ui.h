@@ -24,6 +24,9 @@ struct SimStats {
   int64_t totalStockStone = 0;
   int64_t totalStockMetal = 0;
   int64_t totalStockGold = 0;
+  int64_t totalDiseaseInfected = 0;
+  int64_t totalDiseaseRecovered = 0;
+  int64_t totalDiseaseDeathsToday = 0;
   int64_t totalHouses = 0;
   int64_t totalFarms = 0;
   int64_t totalGranaries = 0;

@@ -343,6 +343,20 @@ void App::Update(float dt) {
   humans_.UpdateAnimation(dt);
 
   const bool wantsMacro = (ui_.speedIndex == 4);
+  const bool wantsDiseaseSir = macroActive_ || wantsMacro || ui_.speedIndex >= 2 ||
+                               humans_.CountAlive() >= 100000;
+  if (wantsDiseaseSir && !diseaseSirActive_) {
+    humans_.AggregateDiseaseToSettlements(settlements_);
+    diseaseSirActive_ = true;
+  } else if (!wantsDiseaseSir && diseaseSirActive_ && !macroActive_) {
+    int diseaseDeaths = 0;
+    humans_.ReconcileDiseaseFromSettlements(settlements_, rng_, stats_.dayCount, diseaseDeaths);
+    if (diseaseDeaths > 0) {
+      stats_.deathsToday += diseaseDeaths;
+      stats_.totalDeaths += diseaseDeaths;
+    }
+    diseaseSirActive_ = false;
+  }
   if (wantsMacro && !macroActive_) {
     EnterMacroMode();
   } else if (!wantsMacro && macroActive_) {
@@ -443,8 +457,8 @@ void App::StepDayCoarse(int dayDelta) {
   settlements_.UpdateDaily(world_, humans_, rng_, stats_.dayCount, dayDelta, villageMarkers_, factions_);
   int warDeathsToday = settlements_.ConsumeWarDeaths();
   CrashContextSetStage("StepDay:Humans");
-  humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, dayDelta, stats_.birthsToday,
-                            stats_.deathsToday);
+  humans_.UpdateDailyCoarse(world_, settlements_, rng_, stats_.dayCount, dayDelta,
+                            diseaseSirActive_, stats_.birthsToday, stats_.deathsToday);
   stats_.deathsToday += warDeathsToday;
   stats_.totalBirths += stats_.birthsToday;
   stats_.totalDeaths += stats_.deathsToday;
@@ -686,6 +700,8 @@ void App::AdvanceMacro(int days) {
 
 void App::EnterMacroMode() {
   if (macroActive_) return;
+  humans_.AggregateDiseaseToSettlements(settlements_);
+  diseaseSirActive_ = true;
   macroActive_ = true;
   humans_.EnterMacro(settlements_);
   RefreshTotals();
@@ -695,6 +711,13 @@ void App::ExitMacroMode() {
   if (!macroActive_) return;
   macroActive_ = false;
   humans_.ExitMacro(settlements_, rng_);
+  if (ui_.speedIndex < 2 && humans_.CountAlive() < 100000) {
+    int diseaseDeaths = 0;
+    humans_.ReconcileDiseaseFromSettlements(settlements_, rng_, stats_.dayCount, diseaseDeaths);
+    diseaseSirActive_ = false;
+  } else {
+    diseaseSirActive_ = true;
+  }
   RefreshTotals();
 }
 
@@ -702,6 +725,8 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
   CrashContextSetNote("ApplyToolAt");
   int radius = ui_.brushSize / 2;
   bool spawned = false;
+  bool diseaseSeeded = false;
+  std::unordered_set<int> diseaseSettlementsSeeded;
 
   for (int dy = -radius; dy <= radius; ++dy) {
     for (int dx = -radius; dx <= radius; ++dx) {
@@ -814,6 +839,15 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
             }
             break;
           }
+          case ToolType::StartDisease: {
+            int ownerId = settlements_.ZoneOwnerForTile(x, y);
+            if (ownerId > 0 && diseaseSettlementsSeeded.insert(ownerId).second) {
+              humans_.StartDiseaseAtSettlement(settlements_, ownerId, rng_, 5);
+              villageMarkers_.push_back(VillageMarker{x, y, 16, 2});
+              diseaseSeeded = true;
+            }
+            break;
+          }
         }
       }
     }
@@ -823,6 +857,9 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
   stats_.totalTrees = world_.TotalTrees();
   if (spawned) {
     stats_.totalPop = macroActive_ ? humans_.MacroPopulation(settlements_) : humans_.CountAlive();
+  }
+  if (diseaseSeeded) {
+    RefreshTotals();
   }
   CrashContextSetNote("");
 }
@@ -836,6 +873,7 @@ void App::ResetSimulationState() {
   tickCount_ = 0;
   accumulator_ = 0.0;
   macroActive_ = false;
+  diseaseSirActive_ = false;
   hoverValid_ = false;
   hoverInfo_ = HoverInfo{};
   worldDirty_ = true;
@@ -1031,6 +1069,9 @@ void App::RefreshTotals() {
   stats_.totalStockStone = 0;
   stats_.totalStockMetal = 0;
   stats_.totalStockGold = 0;
+  stats_.totalDiseaseInfected = 0;
+  stats_.totalDiseaseRecovered = 0;
+  stats_.totalDiseaseDeathsToday = 0;
   stats_.totalHouses = 0;
   stats_.totalFarms = 0;
   stats_.totalGranaries = 0;
@@ -1056,6 +1097,9 @@ void App::RefreshTotals() {
     stats_.totalStockStone += settlement.stockStone;
     stats_.totalStockMetal += settlement.stockMetal;
     stats_.totalStockGold += settlement.stockGold;
+    stats_.totalDiseaseInfected += settlement.diseaseInfected;
+    stats_.totalDiseaseRecovered += settlement.diseaseRecovered;
+    stats_.totalDiseaseDeathsToday += settlement.diseaseDeathsToday;
     stats_.totalHouses += settlement.houses;
     stats_.totalFarms += settlement.farms;
     stats_.totalGranaries += settlement.granaries;
@@ -1119,9 +1163,11 @@ void App::WriteDeathLog() const {
   out << "dehydration=" << deathStats.dehydration << "\n";
   out << "old_age=" << deathStats.oldAge << "\n";
   out << "war=" << deathStats.war << "\n";
+  out << "disease=" << deathStats.disease << "\n";
   out << "macro_natural=" << deathStats.macroNatural << "\n";
   out << "macro_starvation=" << deathStats.macroStarvation << "\n";
   out << "macro_fire=" << deathStats.macroFire << "\n";
+  out << "macro_disease=" << deathStats.macroDisease << "\n";
 
   out << "\n# micro_deaths\n";
   out << "day,id,reason\n";

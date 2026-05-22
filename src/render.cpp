@@ -3389,7 +3389,11 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       continue;
     }
 
-    SDL_SetRenderDrawColor(renderer, 255, 40, 40, static_cast<Uint8>(alpha));
+    if (marker.kind == 2) {
+      SDL_SetRenderDrawColor(renderer, 110, 230, 90, static_cast<Uint8>(alpha));
+    } else {
+      SDL_SetRenderDrawColor(renderer, 255, 40, 40, static_cast<Uint8>(alpha));
+    }
 
     const float markerSize = 6.0f;
     float worldX = marker.x * tileSize + tileSize * 0.5f - markerSize * 0.5f;

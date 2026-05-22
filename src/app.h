@@ -73,6 +73,7 @@ class App {
   int maxTickStepsPerFrame_ = 200;
   int maxMacroDaysPerFrame_ = 2000;
   bool macroActive_ = false;
+  bool diseaseSirActive_ = false;
 
   int hoverTileX_ = 0;
   int hoverTileY_ = 0;

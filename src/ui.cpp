@@ -19,7 +19,7 @@ const ToolType kToolOrder[] = {
     ToolType::AddTrees,
     ToolType::AddFood,       ToolType::SpawnMale,       ToolType::SpawnFemale,
     ToolType::Fire,          ToolType::Meteor,          ToolType::GiftFood,
-    ToolType::InspireResearch,
+    ToolType::InspireResearch, ToolType::StartDisease,
 };
 
 void CopyToBuf(char* dst, size_t dstSize, const std::string& src) {
@@ -206,6 +206,10 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
               static_cast<long long>(stats.totalStockStone),
               static_cast<long long>(stats.totalStockMetal),
               static_cast<long long>(stats.totalStockGold));
+  ImGui::Text("Disease Infected/Recovered: %lld/%lld | Deaths: %lld",
+              static_cast<long long>(stats.totalDiseaseInfected),
+              static_cast<long long>(stats.totalDiseaseRecovered),
+              static_cast<long long>(stats.totalDiseaseDeathsToday));
   ImGui::Text("Houses: %lld", static_cast<long long>(stats.totalHouses));
   ImGui::Text("Farms: %lld", static_cast<long long>(stats.totalFarms));
   ImGui::Text("Granaries: %lld", static_cast<long long>(stats.totalGranaries));
@@ -228,6 +232,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
     ImGui::Text("Left click: select kingdom");
   } else if (state.tool == ToolType::InspireResearch) {
     ImGui::Text("Left click: inspire local kingdom research");
+  } else if (state.tool == ToolType::StartDisease) {
+    ImGui::Text("Left click: start disease in a town");
   } else {
     ImGui::Text("Left click: apply tool");
     ImGui::Text("Right click: erase");
@@ -248,6 +254,12 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Settlement %d | Pop %d | Stock F/W/S/M/G %d/%d/%d/%d/%d", settlement->id,
                   settlement->population, settlement->stockFood, settlement->stockWood,
                   settlement->stockStone, settlement->stockMetal, settlement->stockGold);
+      if (settlement->diseaseInfected > 0 || settlement->diseaseRecovered > 0 ||
+          settlement->diseaseDeathsToday > 0) {
+        ImGui::Text("Disease: %d infected | %d recovered | %d deaths",
+                    settlement->diseaseInfected, settlement->diseaseRecovered,
+                    settlement->diseaseDeathsToday);
+      }
       ImGui::Text("Tier: %s | Era %s | Stability %d", SettlementTierName(settlement->tier),
                   TechSystem::EraNameForLevel(settlement->techTier), settlement->stability);
       ImGui::Text("Border Pressure: %d | War Pressure: %d | Claim Radius %d",
@@ -699,6 +711,12 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
     }
 
     ImGui::Text("Population: %d | Status: %s", settlement.population, EconomyLabel(settlement));
+    if (settlement.diseaseInfected > 0 || settlement.diseaseRecovered > 0 ||
+        settlement.diseaseDeathsToday > 0) {
+      ImGui::Text("Disease: %d infected | %d recovered | %d deaths today",
+                  settlement.diseaseInfected, settlement.diseaseRecovered,
+                  settlement.diseaseDeathsToday);
+    }
     ImGui::Text("Stock F/W/S/M/G: %d/%d/%d/%d/%d", settlement.stockFood, settlement.stockWood,
                 settlement.stockStone, settlement.stockMetal, settlement.stockGold);
     ImGui::Text("Deposits S/M/G: %d/%d/%d | Today +%d/+%d/+%d", settlement.stoneDeposit,

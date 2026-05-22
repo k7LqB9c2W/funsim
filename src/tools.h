@@ -13,6 +13,7 @@ enum class ToolType {
   Meteor,
   GiftFood,
   InspireResearch,
+  StartDisease,
 };
 
 const char* ToolName(ToolType tool);

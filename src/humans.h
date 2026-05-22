@@ -12,7 +12,8 @@ enum class TaskType : uint8_t;
 
 enum class Goal : uint8_t { Wander, SeekFood, GoToTask, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
-enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War };
+enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War, Disease };
+enum class DiseaseState : uint8_t { Susceptible, Infected, Recovered };
 enum class ArmyState : uint8_t { Idle, Rally, March, Siege, Defend, Retreat };
 
 enum class HumanTrait : uint16_t {
@@ -36,9 +37,11 @@ struct DeathSummary {
   int dehydration = 0;
   int oldAge = 0;
   int war = 0;
+  int disease = 0;
   int macroNatural = 0;
   int macroStarvation = 0;
   int macroFire = 0;
+  int macroDisease = 0;
 };
 
 struct ArrowProjectile {
@@ -76,6 +79,8 @@ struct Human {
   float nutritionMonthAccumulator = 0.0f;
   int maxHealth = 100;
   int health = 100;
+  DiseaseState diseaseState = DiseaseState::Susceptible;
+  uint8_t diseaseDays = 0;
   float animTimer = 0.0f;
   int animFrame = 0;
   bool moving = false;
@@ -134,7 +139,8 @@ class HumanManager {
   void UpdateTick(World& world, SettlementManager& settlements, Random& rng, int tickCount,
                   float tickSeconds, int ticksPerDay);
   void UpdateDailyCoarse(World& world, SettlementManager& settlements, Random& rng, int dayCount,
-                         int dayDelta, int& birthsToday, int& deathsToday);
+                         int dayDelta, bool useSirDiseaseModel, int& birthsToday,
+                         int& deathsToday);
   void EnterMacro(SettlementManager& settlements);
   void ExitMacro(SettlementManager& settlements, Random& rng);
   void AdvanceMacro(World& world, SettlementManager& settlements, Random& rng, int days,
@@ -143,6 +149,11 @@ class HumanManager {
   void UpdateAnimation(float dt);
   void MarkDeadByIndex(int index, int day, DeathReason reason);
   void RecordWarDeaths(int count);
+  void StartDiseaseAtSettlement(SettlementManager& settlements, int settlementId, Random& rng,
+                                int seedCount);
+  void AggregateDiseaseToSettlements(SettlementManager& settlements);
+  void ReconcileDiseaseFromSettlements(SettlementManager& settlements, Random& rng, int dayCount,
+                                       int& deathsToday, bool applyDeaths = false);
   void SetAllowStarvationDeath(bool enabled) { allowStarvationDeath_ = enabled; }
 
   int CountAlive() const;
@@ -179,6 +190,12 @@ class HumanManager {
   static FlowFieldEntry BuildFlowField(const World& world, int targetX, int targetY, int radius);
   void RebuildIdMap();
   void RecordDeath(int humanId, int day, DeathReason reason);
+  void UpdateDisease(World& world, SettlementManager& settlements, Random& rng, int dayCount,
+                     int dayDelta, bool useSirModel, int& deathsToday);
+  void UpdateDiseaseIndividual(const World& world, SettlementManager& settlements, Random& rng,
+                               int dayCount, int dayDelta, int& deathsToday);
+  void UpdateDiseaseSir(SettlementManager& settlements, Random& rng, int dayCount, int dayDelta,
+                        bool reconcileHumans, int& deathsToday);
 
   static uint64_t PackCoord(int x, int y) {
     return (static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) |
