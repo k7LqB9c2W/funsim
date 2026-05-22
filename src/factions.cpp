@@ -5,7 +5,9 @@
 #include <limits>
 
 #include "humans.h"
+#include "render.h"
 #include "settlements.h"
+#include "tech_system.h"
 #include "util.h"
 
 namespace {
@@ -311,7 +313,6 @@ void FactionManager::EnsureWarsForNewFaction() {
 void FactionManager::ResetStats() {
   for (auto& faction : factions_) {
     faction.stats = FactionStats{};
-    faction.techTier = 0;
     faction.stability = 0;
   }
 }
@@ -353,7 +354,6 @@ void FactionManager::UpdateStats(const SettlementManager& settlements) {
     faction->stats.stockStone += settlement.stockStone;
     faction->stats.stockMetal += settlement.stockMetal;
     faction->stats.stockGold += settlement.stockGold;
-    faction->techTier = std::max(faction->techTier, settlement.techTier);
   }
   for (size_t i = 0; i < factions_.size(); ++i) {
     if (stabilityCounts[i] > 0) {
@@ -365,6 +365,105 @@ void FactionManager::UpdateStats(const SettlementManager& settlements) {
     }
   }
   UpdateTerritory(settlements);
+}
+
+void FactionManager::AddResearchBoost(int factionId, float amount) {
+  if (amount <= 0.0f) return;
+  Faction* faction = GetMutable(factionId);
+  if (!faction) return;
+  faction->pendingResearchBoost += amount;
+}
+
+void FactionManager::AdvanceResearch(const SettlementManager& settlements, Random& rng,
+                                     int dayCount, int dayDelta,
+                                     std::vector<VillageMarker>& markers) {
+  if (dayDelta < 1) dayDelta = 1;
+
+  std::vector<int> research(static_cast<size_t>(Count()), 0);
+  std::vector<int> bestPop(static_cast<size_t>(Count()), -1);
+  std::vector<int> markerX(static_cast<size_t>(Count()), -1);
+  std::vector<int> markerY(static_cast<size_t>(Count()), -1);
+
+  for (const auto& settlement : settlements.Settlements()) {
+    int index = IndexForId(settlement.factionId);
+    if (index < 0) continue;
+    if (settlement.population <= 0) continue;
+
+    int local = 1;
+    local += std::max(0, settlement.population / 30);
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::Monument) * settlement.monuments;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::Archive) * settlement.archives;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::Mint) * settlement.mints;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::School) * settlement.schools;
+    local += settlement.economyProsperity / 35;
+    if (settlement.economyStress >= 60) local = std::max(0, local - 2);
+    research[static_cast<size_t>(index)] += local;
+
+    int value = settlement.population + (settlement.isCapital ? 10000 : 0);
+    if (value > bestPop[static_cast<size_t>(index)]) {
+      bestPop[static_cast<size_t>(index)] = value;
+      markerX[static_cast<size_t>(index)] = settlement.centerX;
+      markerY[static_cast<size_t>(index)] = settlement.centerY;
+    }
+  }
+
+  for (Faction& faction : factions_) {
+    int index = IndexForId(faction.id);
+    if (index < 0) continue;
+
+    faction.techTier = TechSystem::EraLevelForMask(faction.unlockedTechs);
+    if (faction.currentTechId < 0 ||
+        TechSystem::DefinitionByIndex(faction.currentTechId) == nullptr ||
+        TechSystem::HasTech(faction.unlockedTechs, static_cast<TechSystem::TechId>(faction.currentTechId)) ||
+        !TechSystem::PrerequisitesMet(
+            faction.unlockedTechs,
+            *TechSystem::DefinitionByIndex(faction.currentTechId))) {
+      faction.currentTechId = TechSystem::FirstAvailableTech(faction.unlockedTechs);
+      faction.currentTechProgress = 0.0f;
+    }
+
+    faction.researchPerDay = research[static_cast<size_t>(index)];
+    float gained = static_cast<float>(faction.researchPerDay * dayDelta) +
+                   faction.pendingResearchBoost;
+    faction.pendingResearchBoost = 0.0f;
+
+    if (faction.leaderInfluence.tech > 0.0f) {
+      gained *= 1.0f + faction.leaderInfluence.tech;
+    }
+    if (faction.warExhaustion > 0.35f) {
+      gained *= 0.85f;
+    }
+    if (faction.traits.outlook == FactionOutlook::Interactive) {
+      gained += 0.35f * static_cast<float>(std::max(0, faction.stats.settlements - 1)) *
+                static_cast<float>(dayDelta);
+    }
+
+    while (gained > 0.0f && faction.currentTechId >= 0) {
+      const TechSystem::TechDefinition* tech =
+          TechSystem::DefinitionByIndex(faction.currentTechId);
+      if (!tech) break;
+
+      faction.currentTechProgress += gained;
+      gained = 0.0f;
+      if (faction.currentTechProgress < tech->cost) break;
+
+      gained = faction.currentTechProgress - tech->cost;
+      faction.unlockedTechs |= TechSystem::Bit(tech->id);
+      faction.lastUnlockedTechId = static_cast<int>(tech->id);
+      faction.lastUnlockedTechDay = dayCount;
+      faction.techTier = TechSystem::EraLevelForMask(faction.unlockedTechs);
+      faction.currentTechId = TechSystem::FirstAvailableTech(faction.unlockedTechs);
+      faction.currentTechProgress = 0.0f;
+
+      int idx = static_cast<int>(static_cast<size_t>(index));
+      if (idx >= 0 && idx < static_cast<int>(markerX.size()) && markerX[static_cast<size_t>(idx)] >= 0) {
+        markers.push_back(VillageMarker{markerX[static_cast<size_t>(idx)],
+                                        markerY[static_cast<size_t>(idx)], 18, 1});
+      }
+    }
+  }
+
+  (void)rng;
 }
 
 void FactionManager::UpdateLeaders(const SettlementManager& settlements, const HumanManager& humans) {

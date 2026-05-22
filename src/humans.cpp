@@ -9,6 +9,7 @@
 #include <limits>
 
 #include "settlements.h"
+#include "tech_system.h"
 #include "tree_rules.h"
 
 namespace {
@@ -439,44 +440,15 @@ void StayTarget(const Human& human, int& outX, int& outY) {
 }
 
 int BuildWoodCost(BuildingType type) {
-  switch (type) {
-    case BuildingType::House:
-      return Settlement::kHouseWoodCost;
-    case BuildingType::TownHall:
-      return Settlement::kTownHallWoodCost;
-    case BuildingType::Farm:
-      return Settlement::kFarmWoodCost;
-    case BuildingType::Granary:
-      return Settlement::kGranaryWoodCost;
-    case BuildingType::Well:
-      return Settlement::kWellWoodCost;
-    case BuildingType::Market:
-      return Settlement::kMarketWoodCost;
-    case BuildingType::Forge:
-      return Settlement::kForgeWoodCost;
-    default:
-      return 0;
-  }
+  return TechSystem::CostForBuilding(type).wood;
 }
 
 int BuildStoneCost(BuildingType type) {
-  switch (type) {
-    case BuildingType::Market:
-      return Settlement::kMarketStoneCost;
-    case BuildingType::Forge:
-      return Settlement::kForgeStoneCost;
-    default:
-      return 0;
-  }
+  return TechSystem::CostForBuilding(type).stone;
 }
 
 int BuildMetalCost(BuildingType type) {
-  switch (type) {
-    case BuildingType::Forge:
-      return Settlement::kForgeMetalCost;
-    default:
-      return 0;
-  }
+  return TechSystem::CostForBuilding(type).metal;
 }
 
 uint16_t RollTraits(Random& rng) {

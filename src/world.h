@@ -28,6 +28,12 @@ enum class BuildingType : uint8_t {
   Well,
   Market,
   Forge,
+  Monument,
+  Archive,
+  Walls,
+  Barracks,
+  Mint,
+  School,
 };
 
 struct Tile {
@@ -151,7 +157,10 @@ class World {
           });
         }
       }
-    } else if (type == BuildingType::Market || type == BuildingType::Forge) {
+    } else if (type == BuildingType::Market || type == BuildingType::Forge ||
+               type == BuildingType::Monument || type == BuildingType::Archive ||
+               type == BuildingType::Walls || type == BuildingType::Barracks ||
+               type == BuildingType::Mint || type == BuildingType::School) {
       for (int dy = -2; dy <= 1; ++dy) {
         for (int dx = -2; dx <= 2; ++dx) {
           EditTile(x + dx, y + dy, [&](Tile& tile) {

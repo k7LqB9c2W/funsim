@@ -7,6 +7,7 @@
 class HumanManager;
 class Random;
 class SettlementManager;
+struct VillageMarker;
 
 enum class FactionTemperament : uint8_t { Pacifist, Neutral, Warmonger };
 enum class FactionOutlook : uint8_t { Isolationist, Interactive };
@@ -62,6 +63,13 @@ struct Faction {
   FactionStats stats;
   int techTier = 0;
   float techProgress = 0.0f;
+  uint64_t unlockedTechs = 0;
+  int currentTechId = -1;
+  float currentTechProgress = 0.0f;
+  int lastUnlockedTechId = -1;
+  int lastUnlockedTechDay = -1;
+  int researchPerDay = 0;
+  float pendingResearchBoost = 0.0f;
   float warExhaustion = 0.0f;
   int stability = 100;
   LeaderInfluence leaderInfluence;
@@ -124,6 +132,9 @@ class FactionManager {
   void UpdateStats(const SettlementManager& settlements);
   void UpdateLeaders(const SettlementManager& settlements, const HumanManager& humans);
   void UpdateDiplomacy(const SettlementManager& settlements, Random& rng, int dayCount);
+  void AdvanceResearch(const SettlementManager& settlements, Random& rng, int dayCount, int dayDelta,
+                       std::vector<VillageMarker>& markers);
+  void AddResearchBoost(int factionId, float amount);
 
   int RelationScore(int factionA, int factionB) const;
   FactionRelation RelationType(int factionA, int factionB) const;

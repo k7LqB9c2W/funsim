@@ -24,6 +24,8 @@ const char* ToolName(ToolType tool) {
       return "Meteor Strike";
     case ToolType::GiftFood:
       return "Gift Food";
+    case ToolType::InspireResearch:
+      return "Inspire Research";
     default:
       return "Unknown";
   }

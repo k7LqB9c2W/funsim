@@ -10,6 +10,7 @@
 #include "factions.h"
 #include "humans.h"
 #include "settlements.h"
+#include "tech_system.h"
 
 namespace {
 const ToolType kToolOrder[] = {
@@ -18,6 +19,7 @@ const ToolType kToolOrder[] = {
     ToolType::AddTrees,
     ToolType::AddFood,       ToolType::SpawnMale,       ToolType::SpawnFemale,
     ToolType::Fire,          ToolType::Meteor,          ToolType::GiftFood,
+    ToolType::InspireResearch,
 };
 
 void CopyToBuf(char* dst, size_t dstSize, const std::string& src) {
@@ -224,6 +226,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Separator();
   if (state.tool == ToolType::SelectKingdom) {
     ImGui::Text("Left click: select kingdom");
+  } else if (state.tool == ToolType::InspireResearch) {
+    ImGui::Text("Left click: inspire local kingdom research");
   } else {
     ImGui::Text("Left click: apply tool");
     ImGui::Text("Right click: erase");
@@ -244,8 +248,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Settlement %d | Pop %d | Stock F/W/S/M/G %d/%d/%d/%d/%d", settlement->id,
                   settlement->population, settlement->stockFood, settlement->stockWood,
                   settlement->stockStone, settlement->stockMetal, settlement->stockGold);
-      ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement->tier),
-                  settlement->techTier, settlement->stability);
+      ImGui::Text("Tier: %s | Era %s | Stability %d", SettlementTierName(settlement->tier),
+                  TechSystem::EraNameForLevel(settlement->techTier), settlement->stability);
       ImGui::Text("Border Pressure: %d | War Pressure: %d | Claim Radius %d",
                   settlement->borderPressure, settlement->warPressure, settlement->influenceRadius);
       ImGui::Text("Army: %d soldiers | General: %s", settlement->soldiers,
@@ -283,8 +287,21 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Ideology: %s", faction.ideology.c_str());
       ImGui::Text("Traits: %s, %s", FactionTemperamentName(faction.traits.temperament),
                   FactionOutlookName(faction.traits.outlook));
-      ImGui::Text("Tech Tier: %d | Stability: %d | War Exhaustion: %.2f", faction.techTier,
-                  faction.stability, faction.warExhaustion);
+      const TechSystem::TechDefinition* currentTech =
+          TechSystem::DefinitionByIndex(faction.currentTechId);
+      ImGui::Text("Era: %s | Stability: %d | War Exhaustion: %.2f",
+                  TechSystem::EraNameForLevel(faction.techTier), faction.stability,
+                  faction.warExhaustion);
+      if (currentTech) {
+        float progress = currentTech->cost > 0.0f
+                             ? std::max(0.0f, std::min(1.0f,
+                                                       faction.currentTechProgress / currentTech->cost))
+                             : 0.0f;
+        ImGui::Text("Researching: %s | +%d/day", currentTech->name, faction.researchPerDay);
+        ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f));
+      } else {
+        ImGui::Text("Researching: complete | +%d/day", faction.researchPerDay);
+      }
       ImGui::Text("Population: %d", faction.stats.population);
       ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
                   faction.stats.territoryZones);
@@ -330,6 +347,19 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
             ImGui::Text("%s: war (%d)", other.name.c_str(), score);
           } else {
             ImGui::Text("%s: %s (%d)", other.name.c_str(), rel, score);
+          }
+        }
+        ImGui::TreePop();
+      }
+      if (ImGui::TreeNode("Tech Tree")) {
+        for (const auto& tech : TechSystem::Definitions()) {
+          bool unlocked = TechSystem::HasTech(faction.unlockedTechs, tech.id);
+          bool available = TechSystem::PrerequisitesMet(faction.unlockedTechs, tech);
+          const char* stateText = unlocked ? "unlocked" : (available ? "available" : "locked");
+          ImGui::Text("%s [%s] - %s", tech.name, tech.era, stateText);
+          if (tech.unlockBuilding != BuildingType::None) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("unlocks %s", TechSystem::BuildingName(tech.unlockBuilding));
           }
         }
         ImGui::TreePop();
@@ -400,7 +430,14 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::SliderFloat("Aggression Bias", &faction->traits.aggressionBias, 0.0f, 1.5f, "%.2f");
       ImGui::SliderFloat("Diplomacy Bias", &faction->traits.diplomacyBias, 0.0f, 1.5f, "%.2f");
 
-      ImGui::SliderInt("Tech Tier", &faction->techTier, 0, 6);
+      ImGui::Text("Era: %s", TechSystem::EraNameForLevel(faction->techTier));
+      const TechSystem::TechDefinition* editorTech =
+          TechSystem::DefinitionByIndex(faction->currentTechId);
+      if (editorTech) {
+        ImGui::Text("Research: %s %.0f/%.0f", editorTech->name,
+                    static_cast<double>(faction->currentTechProgress),
+                    static_cast<double>(editorTech->cost));
+      }
       ImGui::SliderInt("Stability", &faction->stability, 0, 100);
       ImGui::SliderFloat("War Exhaustion", &faction->warExhaustion, 0.0f, 1.0f, "%.2f");
 
@@ -691,8 +728,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       }
       ImGui::TreePop();
     }
-    ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement.tier),
-                settlement.techTier, settlement.stability);
+    ImGui::Text("Tier: %s | Era %s | Stability %d", SettlementTierName(settlement.tier),
+                TechSystem::EraNameForLevel(settlement.techTier), settlement.stability);
     if (settlement.isCapital) {
       ImGui::Text("Capital Seat");
     }
@@ -702,6 +739,10 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                 settlement.farmsReady);
     ImGui::Text("Granaries: %d | Markets: %d | Forges: %d", settlement.granaries,
                 settlement.markets, settlement.forges);
+    ImGui::Text("Monuments: %d | Archives: %d | Walls: %d", settlement.monuments,
+                settlement.archives, settlement.walls);
+    ImGui::Text("Barracks: %d | Mints: %d | Schools: %d", settlement.barracks,
+                settlement.mints, settlement.schools);
     ImGui::Text("Farmers: %d | Gatherers: %d", settlement.farmers, settlement.gatherers);
 
     int harvestTasks = 0;

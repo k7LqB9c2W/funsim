@@ -805,6 +805,15 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
               tile.food = 50;
             });
             break;
+          case ToolType::InspireResearch: {
+            int ownerId = settlements_.ZoneOwnerForTile(x, y);
+            const Settlement* settlement = (ownerId > 0) ? settlements_.Get(ownerId) : nullptr;
+            if (settlement && settlement->factionId > 0) {
+              factions_.AddResearchBoost(settlement->factionId, 18.0f);
+              villageMarkers_.push_back(VillageMarker{x, y, 12, 1});
+            }
+            break;
+          }
         }
       }
     }

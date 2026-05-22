@@ -8,6 +8,7 @@
 
 #include "factions.h"
 #include "humans.h"
+#include "tech_system.h"
 #include "tree_rules.h"
 #include "util.h"
 #include "world.h"
@@ -32,11 +33,6 @@ constexpr int kCityPopThreshold = 120;
 constexpr int kTownAgeDays = 60;
 constexpr int kCityAgeDays = 180;
 constexpr int kTechMaxTier = 3;
-constexpr int kTechPopBase = 30;
-constexpr int kTechPopStep = 55;
-constexpr float kTechBaseGain = 0.006f;
-constexpr float kTechFoodGain = 0.012f;
-constexpr float kTechLeaderGain = 0.006f;
 constexpr int kRebellionMinPop = 20;
 constexpr int kRebellionStabilityThreshold = 25;
 constexpr int kRebellionUnrestDays = 7;
@@ -211,6 +207,13 @@ int ClaimRadiusForBuilding(BuildingType type) {
       return kClaimRadiusMarket;
     case BuildingType::Forge:
       return kClaimRadiusForge;
+    case BuildingType::Monument:
+    case BuildingType::Archive:
+    case BuildingType::Walls:
+    case BuildingType::Barracks:
+    case BuildingType::Mint:
+    case BuildingType::School:
+      return TechSystem::ClaimRadiusForBuilding(type);
     default:
       return 0;
   }
@@ -311,6 +314,9 @@ void UpdateEconomyMood(Settlement& settlement) {
   prosperity += std::min(12, metal.supplyScore / 5);
   if (settlement.markets > 0) prosperity += 8;
   if (settlement.forges > 0) prosperity += 6;
+  prosperity += settlement.archives * TechSystem::ProsperityYieldForBuilding(BuildingType::Archive);
+  prosperity += settlement.mints * TechSystem::ProsperityYieldForBuilding(BuildingType::Mint);
+  prosperity += settlement.schools * TechSystem::ProsperityYieldForBuilding(BuildingType::School);
   prosperity += std::min(22, settlement.stockGold / std::max(1, pop / 3 + 1));
   prosperity += std::min(10, settlement.techTier * 3);
   prosperity += settlement.isCapital ? 8 : 0;
@@ -397,6 +403,67 @@ int StockForResource(const Settlement& settlement, TradeResource resource) {
       return settlement.stockGold;
     default:
       return 0;
+  }
+}
+
+int BuildingCount(const Settlement& settlement, BuildingType building) {
+  switch (building) {
+    case BuildingType::Monument:
+      return settlement.monuments;
+    case BuildingType::Archive:
+      return settlement.archives;
+    case BuildingType::Walls:
+      return settlement.walls;
+    case BuildingType::Barracks:
+      return settlement.barracks;
+    case BuildingType::Mint:
+      return settlement.mints;
+    case BuildingType::School:
+      return settlement.schools;
+    default:
+      return 0;
+  }
+}
+
+bool CanAffordBuilding(const Settlement& settlement, BuildingType building) {
+  TechSystem::BuildingCost cost = TechSystem::CostForBuilding(building);
+  return settlement.stockWood >= cost.wood &&
+         settlement.stockStone >= cost.stone &&
+         settlement.stockMetal >= cost.metal;
+}
+
+void PayBuildingCost(Settlement& settlement, BuildingType building) {
+  TechSystem::BuildingCost cost = TechSystem::CostForBuilding(building);
+  settlement.stockWood = std::max(0, settlement.stockWood - cost.wood);
+  settlement.stockStone = std::max(0, settlement.stockStone - cost.stone);
+  settlement.stockMetal = std::max(0, settlement.stockMetal - cost.metal);
+}
+
+bool ShouldBuildTechBuilding(const Settlement& settlement, const Faction* faction,
+                             BuildingType building) {
+  if (!faction || !TechSystem::IsUnlocked(faction->unlockedTechs, building)) return false;
+  if (BuildingCount(settlement, building) > 0) return false;
+  if (settlement.population <= 0) return false;
+
+  switch (building) {
+    case BuildingType::Monument:
+      return settlement.population >= 12 || settlement.isCapital;
+    case BuildingType::Archive:
+      return settlement.population >= 28 || settlement.isCapital;
+    case BuildingType::Walls:
+      return settlement.population >= 35 &&
+             (settlement.isCapital || settlement.borderPressure > 1 || settlement.warPressure > 0);
+    case BuildingType::Barracks:
+      return settlement.population >= 35 &&
+             (settlement.isCapital || settlement.soldiers >= 3 ||
+              settlement.borderPressure > 1 || settlement.warPressure > 0);
+    case BuildingType::Mint:
+      return settlement.population >= 45 &&
+             (settlement.isCapital || settlement.stockGold >= 8 || settlement.lastGoldProduced > 0);
+    case BuildingType::School:
+      return settlement.population >= 55 || settlement.isCapital;
+    default:
+      return false;
   }
 }
 }  // namespace
@@ -1089,6 +1156,12 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
     settlement.wells = 0;
     settlement.markets = 0;
     settlement.forges = 0;
+    settlement.monuments = 0;
+    settlement.archives = 0;
+    settlement.walls = 0;
+    settlement.barracks = 0;
+    settlement.mints = 0;
+    settlement.schools = 0;
     settlement.farmsPlanted = 0;
     settlement.farmsReady = 0;
     settlement.townHalls = 0;
@@ -1130,6 +1203,24 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
         break;
       case BuildingType::Forge:
         settlement.forges++;
+        break;
+      case BuildingType::Monument:
+        settlement.monuments++;
+        break;
+      case BuildingType::Archive:
+        settlement.archives++;
+        break;
+      case BuildingType::Walls:
+        settlement.walls++;
+        break;
+      case BuildingType::Barracks:
+        settlement.barracks++;
+        break;
+      case BuildingType::Mint:
+        settlement.mints++;
+        break;
+      case BuildingType::School:
+        settlement.schools++;
         break;
       case BuildingType::TownHall:
         settlement.townHalls++;
@@ -1294,6 +1385,12 @@ void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng
     }
     if (settlement.tier != SettlementTier::Village) {
       soldiers = std::max(soldiers, pop / 15);
+    }
+    if (settlement.barracks > 0) {
+      soldiers = std::max(soldiers, std::max(1, pop / 10));
+    }
+    if (settlement.walls > 0 && (settlement.warPressure > 0 || settlement.borderPressure > 2)) {
+      soldiers = std::max(soldiers, std::max(1, pop / 12));
     }
     if (isAtWar) {
       int floorSoldiers = std::max(1, pop / (isAttacker ? 4 : 8));
@@ -1607,6 +1704,12 @@ void SettlementManager::UpdateSettlementStability(const FactionManager& factions
     float target = 50.0f + 30.0f * foodRatio + 15.0f * housingRatio +
                    20.0f * leaderBonus - 50.0f * warPenalty - 30.0f * borderPenalty;
     target += 10.0f * economyBonus - 15.0f * economyPenalty;
+    target += static_cast<float>(settlement.monuments *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Monument));
+    target += static_cast<float>(settlement.walls *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Walls));
+    target += static_cast<float>(settlement.schools *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::School));
     if (settlement.isCapital) {
       target += 6.0f;
     } else if (settlement.borderPressure > 4) {
@@ -1632,33 +1735,17 @@ void SettlementManager::UpdateSettlementEvolution(const FactionManager& factions
   UpdateCapitalStatus(factions);
 
   for (auto& settlement : settlements_) {
-    if (settlement.population <= 0) continue;
-    if (settlement.techTier >= kTechMaxTier) continue;
-    int requiredPop = kTechPopBase + settlement.techTier * kTechPopStep;
-    float popFactor =
-        std::min(1.0f, static_cast<float>(settlement.population) / static_cast<float>(requiredPop));
-    float foodRatio = static_cast<float>(settlement.stockFood) /
-                      static_cast<float>(std::max(1, settlement.population * kDesiredFoodPerPop));
-    foodRatio = std::max(0.0f, std::min(1.4f, foodRatio));
-
-    float leaderBoost = 0.0f;
     const Faction* faction = factions.Get(settlement.factionId);
     if (faction) {
-      leaderBoost = faction->leaderInfluence.tech;
+      settlement.techTier = std::max(0, std::min(kTechMaxTier, faction->techTier));
+      const TechSystem::TechDefinition* currentTech =
+          TechSystem::DefinitionByIndex(faction->currentTechId);
+      settlement.techProgress =
+          currentTech && currentTech->cost > 0.0f
+              ? std::max(0.0f, std::min(1.0f, faction->currentTechProgress / currentTech->cost))
+              : 0.0f;
     }
-
-    float gain = kTechBaseGain + kTechFoodGain * foodRatio * popFactor +
-                 leaderBoost * kTechLeaderGain;
-    gain += static_cast<float>(settlement.economyProsperity) * 0.00005f;
-    if (settlement.tier == SettlementTier::City) {
-      gain += 0.004f;
-    }
-    gain = std::max(0.0f, std::min(0.05f, gain));
-    settlement.techProgress += gain;
-    if (settlement.techProgress >= 1.0f) {
-      settlement.techProgress -= 1.0f;
-      settlement.techTier = std::min(kTechMaxTier, settlement.techTier + 1);
-    }
+    if (settlement.population <= 0) continue;
   }
 
   for (auto& settlement : settlements_) {
@@ -1721,6 +1808,12 @@ void SettlementManager::UpdateSettlementRoleStatsMacro(World& world, const Facti
     }
     if (settlement.tier != SettlementTier::Village) {
       soldiers = std::max(soldiers, pop / 15);
+    }
+    if (settlement.barracks > 0) {
+      soldiers = std::max(soldiers, std::max(1, pop / 10));
+    }
+    if (settlement.walls > 0 && (settlement.warPressure > 0 || settlement.borderPressure > 2)) {
+      soldiers = std::max(soldiers, std::max(1, pop / 12));
     }
     if (settlement.factionId > 0) {
       AllianceBonus bonus = factions.BonusForFaction(settlement.factionId, dayCount);
@@ -3111,6 +3204,11 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
           score += settlement.isCapital ? 40 : 0;
         } else if (type == BuildingType::Forge) {
           score += settlement.stockMetal;
+        } else if (TechSystem::IsTechBuilding(type)) {
+          score += settlement.isCapital ? 35 : 0;
+          if (type == BuildingType::Walls || type == BuildingType::Barracks) {
+            score += settlement.borderPressure * 12 + settlement.warPressure * 16;
+          }
         }
         if (score > bestScore) {
           bestScore = score;
@@ -3148,6 +3246,20 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
         settlement.stockStone >= Settlement::kForgeStoneCost &&
         settlement.stockMetal >= Settlement::kForgeMetalCost) {
       if (pushEconomyBuilding(BuildingType::Forge, kForgeBuildRadius)) {
+        available--;
+      }
+    }
+
+    const Faction* faction = factions.Get(settlement.factionId);
+    constexpr BuildingType kTechBuildings[] = {
+        BuildingType::Monument, BuildingType::Archive, BuildingType::Walls,
+        BuildingType::Barracks, BuildingType::Mint, BuildingType::School};
+    for (BuildingType building : kTechBuildings) {
+      if (available <= 0 || foodEmergency) break;
+      if (hasPlannedBuilding(building)) continue;
+      if (!CanAffordBuilding(settlement, building)) continue;
+      if (!ShouldBuildTechBuilding(settlement, faction, building)) continue;
+      if (pushEconomyBuilding(building, kMarketBuildRadius)) {
         available--;
       }
     }
@@ -3439,6 +3551,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   UpdateBorderPressure(factions);
   RecomputeSettlementPopAndRoles(world, rng, dayCount, dayDelta, humans, factions);
   UpdateArmiesAndSieges(world, humans, rng, dayCount, dayDelta, factions);
+  factions.AdvanceResearch(*this, rng, dayCount, dayDelta, markers);
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpact(world, humans, rng, dayCount, factions);
   GenerateTasks(world, rng, factions, dayCount);
@@ -3474,6 +3587,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   }
   ComputeSettlementWaterTargets(world);
   UpdateBorderPressure(factions);
+  factions.AdvanceResearch(*this, rng, dayCount, 1, markers);
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpactMacro(world, rng, dayCount, factions);
   UpdateSettlementRoleStatsMacro(world, factions, dayCount);
@@ -3563,6 +3677,41 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
         settlement.stockStone = std::max(0, settlement.stockStone - Settlement::kForgeStoneCost);
         settlement.stockMetal = std::max(0, settlement.stockMetal - Settlement::kForgeMetalCost);
         settlement.forges++;
+      }
+    }
+
+    const Faction* faction = factions.Get(settlement.factionId);
+    constexpr BuildingType kTechBuildings[] = {
+        BuildingType::Monument, BuildingType::Archive, BuildingType::Walls,
+        BuildingType::Barracks, BuildingType::Mint, BuildingType::School};
+    for (BuildingType building : kTechBuildings) {
+      if (settlement.debugFoodEmergency) break;
+      if (!CanAffordBuilding(settlement, building)) continue;
+      if (!ShouldBuildTechBuilding(settlement, faction, building)) continue;
+      if (placeBuilding(settlement, building, kMarketBuildRadius)) {
+        PayBuildingCost(settlement, building);
+        switch (building) {
+          case BuildingType::Monument:
+            settlement.monuments++;
+            break;
+          case BuildingType::Archive:
+            settlement.archives++;
+            break;
+          case BuildingType::Walls:
+            settlement.walls++;
+            break;
+          case BuildingType::Barracks:
+            settlement.barracks++;
+            break;
+          case BuildingType::Mint:
+            settlement.mints++;
+            break;
+          case BuildingType::School:
+            settlement.schools++;
+            break;
+          default:
+            break;
+        }
       }
     }
   }

@@ -6,6 +6,7 @@ C:\Users\Jacob\Documents\code\funsim\src\tools.cpp;C:\Users\Jacob\Documents\code
 C:\Users\Jacob\Documents\code\funsim\src\render.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\render.obj
 C:\Users\Jacob\Documents\code\funsim\src\settlements.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\settlements.obj
 C:\Users\Jacob\Documents\code\funsim\src\factions.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\factions.obj
+C:\Users\Jacob\Documents\code\funsim\src\tech_system.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\tech_system.obj
 C:\Users\Jacob\Documents\code\funsim\src\ui.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\ui.obj
 C:\Users\Jacob\Documents\code\funsim\src\util.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\util.obj
 C:\Users\Jacob\Documents\code\funsim\third_party\imgui\imgui.cpp;C:\Users\Jacob\Documents\code\funsim\build\funsim.dir\Release\imgui.obj

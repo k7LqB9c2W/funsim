@@ -25,6 +25,7 @@ struct VillageMarker {
   int x = 0;
   int y = 0;
   int ttlDays = 0;
+  int kind = 0;  // 0 = founding marker, 1 = research/unlock spark.
 };
 
 struct RenderOverlayConfig {
@@ -95,6 +96,13 @@ class Renderer {
   SDL_Texture* capitalTexture_ = nullptr;
   SDL_Texture* marketTexture_ = nullptr;
   SDL_Texture* forgeTexture_ = nullptr;
+  SDL_Texture* monumentTexture_ = nullptr;
+  SDL_Texture* archiveTexture_ = nullptr;
+  SDL_Texture* wallsTexture_ = nullptr;
+  SDL_Texture* barracksTexture_ = nullptr;
+  SDL_Texture* mintTexture_ = nullptr;
+  SDL_Texture* schoolTexture_ = nullptr;
+  SDL_Texture* researchSparkTexture_ = nullptr;
   SDL_Texture* treeTexture_ = nullptr;
   SDL_Texture* tree1Texture_ = nullptr;
   SDL_Texture* grainTexture_ = nullptr;
@@ -121,6 +129,20 @@ class Renderer {
   int marketTexH_ = 0;
   int forgeTexW_ = 0;
   int forgeTexH_ = 0;
+  int monumentTexW_ = 0;
+  int monumentTexH_ = 0;
+  int archiveTexW_ = 0;
+  int archiveTexH_ = 0;
+  int wallsTexW_ = 0;
+  int wallsTexH_ = 0;
+  int barracksTexW_ = 0;
+  int barracksTexH_ = 0;
+  int mintTexW_ = 0;
+  int mintTexH_ = 0;
+  int schoolTexW_ = 0;
+  int schoolTexH_ = 0;
+  int researchSparkTexW_ = 0;
+  int researchSparkTexH_ = 0;
   int treeTexW_ = 0;
   int treeTexH_ = 0;
   SDL_Rect treeTrunkSrc_{0, 0, 0, 0};

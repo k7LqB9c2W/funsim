@@ -759,6 +759,40 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     }
   }
 
+  auto loadOptionalLargeSprite = [&](const char* stage, const char* path, SDL_Texture*& texture,
+                                     int& texW, int& texH) {
+    CrashContextSetStage(stage);
+    texture = IMG_LoadTexture(renderer, path);
+    if (!texture) {
+      SDL_Log("Failed to load texture (%s): %s", path, IMG_GetError());
+      texW = 0;
+      texH = 0;
+      return;
+    }
+    SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    if (SDL_QueryTexture(texture, nullptr, nullptr, &texW, &texH) != 0) {
+      SDL_Log("Failed to query texture (%s): %s", path, SDL_GetError());
+      texW = 0;
+      texH = 0;
+    }
+  };
+
+  loadOptionalLargeSprite("Renderer::Load IMG monument", "assets/sprites/monument.png",
+                          monumentTexture_, monumentTexW_, monumentTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG archive", "assets/sprites/archive.png",
+                          archiveTexture_, archiveTexW_, archiveTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG walls", "assets/sprites/walls.png",
+                          wallsTexture_, wallsTexW_, wallsTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG barracks", "assets/sprites/barracks.png",
+                          barracksTexture_, barracksTexW_, barracksTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG mint", "assets/sprites/mint.png",
+                          mintTexture_, mintTexW_, mintTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG school", "assets/sprites/school.png",
+                          schoolTexture_, schoolTexW_, schoolTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG research spark", "assets/sprites/research_spark.png",
+                          researchSparkTexture_, researchSparkTexW_, researchSparkTexH_);
+
   // Optional large tree sprite (replaces the atlas tree).
   {
     CrashContextSetStage("Renderer::Load IMG tree");
@@ -1011,6 +1045,34 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(forgeTexture_);
     forgeTexture_ = nullptr;
   }
+  if (monumentTexture_) {
+    SDL_DestroyTexture(monumentTexture_);
+    monumentTexture_ = nullptr;
+  }
+  if (archiveTexture_) {
+    SDL_DestroyTexture(archiveTexture_);
+    archiveTexture_ = nullptr;
+  }
+  if (wallsTexture_) {
+    SDL_DestroyTexture(wallsTexture_);
+    wallsTexture_ = nullptr;
+  }
+  if (barracksTexture_) {
+    SDL_DestroyTexture(barracksTexture_);
+    barracksTexture_ = nullptr;
+  }
+  if (mintTexture_) {
+    SDL_DestroyTexture(mintTexture_);
+    mintTexture_ = nullptr;
+  }
+  if (schoolTexture_) {
+    SDL_DestroyTexture(schoolTexture_);
+    schoolTexture_ = nullptr;
+  }
+  if (researchSparkTexture_) {
+    SDL_DestroyTexture(researchSparkTexture_);
+    researchSparkTexture_ = nullptr;
+  }
   if (treeTexture_) {
     SDL_DestroyTexture(treeTexture_);
     treeTexture_ = nullptr;
@@ -1045,6 +1107,24 @@ void Renderer::Shutdown() {
   townHallTexH_ = 0;
   capitalTexW_ = 0;
   capitalTexH_ = 0;
+  marketTexW_ = 0;
+  marketTexH_ = 0;
+  forgeTexW_ = 0;
+  forgeTexH_ = 0;
+  monumentTexW_ = 0;
+  monumentTexH_ = 0;
+  archiveTexW_ = 0;
+  archiveTexH_ = 0;
+  wallsTexW_ = 0;
+  wallsTexH_ = 0;
+  barracksTexW_ = 0;
+  barracksTexH_ = 0;
+  mintTexW_ = 0;
+  mintTexH_ = 0;
+  schoolTexW_ = 0;
+  schoolTexH_ = 0;
+  researchSparkTexW_ = 0;
+  researchSparkTexH_ = 0;
   treeTexW_ = 0;
   treeTexH_ = 0;
   treeTrunkSrc_ = SDL_Rect{0, 0, 0, 0};
@@ -1701,7 +1781,13 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
         if (buildingsTexture_ && tile.building != BuildingType::None) {
           if (!((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
                 (tile.building == BuildingType::Market && marketTexture_) ||
-                (tile.building == BuildingType::Forge && forgeTexture_))) {
+                (tile.building == BuildingType::Forge && forgeTexture_) ||
+                (tile.building == BuildingType::Monument && monumentTexture_) ||
+                (tile.building == BuildingType::Archive && archiveTexture_) ||
+                (tile.building == BuildingType::Walls && wallsTexture_) ||
+                (tile.building == BuildingType::Barracks && barracksTexture_) ||
+                (tile.building == BuildingType::Mint && mintTexture_) ||
+                (tile.building == BuildingType::School && schoolTexture_))) {
             AtlasCoord coord{0, 0};
             switch (tile.building) {
               case BuildingType::House:
@@ -1718,6 +1804,14 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
                 break;
               case BuildingType::Well:
                 coord = AtlasCoord{1, 1};
+                break;
+              case BuildingType::Monument:
+              case BuildingType::Archive:
+              case BuildingType::Walls:
+              case BuildingType::Barracks:
+              case BuildingType::Mint:
+              case BuildingType::School:
+                coord = AtlasCoord{0, 0};
                 break;
               default:
                 coord = AtlasCoord{0, 0};
@@ -1881,6 +1975,18 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
         drawLargeBuilding(x, y, marketTexture_, marketTexW_, marketTexH_, 0.58f, 0.42f);
       } else if (tile.building == BuildingType::Forge) {
         drawLargeBuilding(x, y, forgeTexture_, forgeTexW_, forgeTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Monument) {
+        drawLargeBuilding(x, y, monumentTexture_, monumentTexW_, monumentTexH_, 0.36f, 0.38f);
+      } else if (tile.building == BuildingType::Archive) {
+        drawLargeBuilding(x, y, archiveTexture_, archiveTexW_, archiveTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Walls) {
+        drawLargeBuilding(x, y, wallsTexture_, wallsTexW_, wallsTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Barracks) {
+        drawLargeBuilding(x, y, barracksTexture_, barracksTexW_, barracksTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Mint) {
+        drawLargeBuilding(x, y, mintTexture_, mintTexW_, mintTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::School) {
+        drawLargeBuilding(x, y, schoolTexture_, schoolTexW_, schoolTexH_, 0.58f, 0.42f);
       }
     }
   }
@@ -2111,7 +2217,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	
         if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
             (tile.building == BuildingType::Market && marketTexture_) ||
-            (tile.building == BuildingType::Forge && forgeTexture_)) {
+            (tile.building == BuildingType::Forge && forgeTexture_) ||
+            (tile.building == BuildingType::Monument && monumentTexture_) ||
+            (tile.building == BuildingType::Archive && archiveTexture_) ||
+            (tile.building == BuildingType::Walls && wallsTexture_) ||
+            (tile.building == BuildingType::Barracks && barracksTexture_) ||
+            (tile.building == BuildingType::Mint && mintTexture_) ||
+            (tile.building == BuildingType::School && schoolTexture_)) {
           // Draw in a later pass (so it sits above trees/objects but below fire/humans).
           continue;
         }
@@ -2137,6 +2249,14 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	            coord = AtlasCoord{0, 0};
 	            break;
 	          case BuildingType::Forge:
+	            coord = AtlasCoord{0, 0};
+	            break;
+	          case BuildingType::Monument:
+	          case BuildingType::Archive:
+	          case BuildingType::Walls:
+	          case BuildingType::Barracks:
+	          case BuildingType::Mint:
+	          case BuildingType::School:
 	            coord = AtlasCoord{0, 0};
 	            break;
 	          default:
@@ -2543,10 +2663,18 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
   CrashContextSetStage("Render::LargeEconomyBuildings");
   if (!useStaticMapCache && ((marketTexture_ && marketTexW_ > 0 && marketTexH_ > 0) ||
-                             (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0))) {
+                             (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0) ||
+                             (monumentTexture_ && monumentTexW_ > 0 && monumentTexH_ > 0) ||
+                             (archiveTexture_ && archiveTexW_ > 0 && archiveTexH_ > 0) ||
+                             (wallsTexture_ && wallsTexW_ > 0 && wallsTexH_ > 0) ||
+                             (barracksTexture_ && barracksTexW_ > 0 && barracksTexH_ > 0) ||
+                             (mintTexture_ && mintTexW_ > 0 && mintTexH_ > 0) ||
+                             (schoolTexture_ && schoolTexW_ > 0 && schoolTexH_ > 0))) {
     float scale = tileSize / static_cast<float>(kTilePx);
-    int maxW = std::max(marketTexW_, forgeTexW_);
-    int maxH = std::max(marketTexH_, forgeTexH_);
+    int maxW = std::max({marketTexW_, forgeTexW_, monumentTexW_, archiveTexW_, wallsTexW_,
+                         barracksTexW_, mintTexW_, schoolTexW_});
+    int maxH = std::max({marketTexH_, forgeTexH_, monumentTexH_, archiveTexH_, wallsTexH_,
+                         barracksTexH_, mintTexH_, schoolTexH_});
     int pad = 6;
     pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxW) * scale) / tileSize)) + 2);
     pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxH) * scale) / tileSize)) + 2);
@@ -2571,11 +2699,39 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           tex = forgeTexture_;
           texW = forgeTexW_;
           texH = forgeTexH_;
+        } else if (tile.building == BuildingType::Monument && monumentTexture_) {
+          tex = monumentTexture_;
+          texW = monumentTexW_;
+          texH = monumentTexH_;
+        } else if (tile.building == BuildingType::Archive && archiveTexture_) {
+          tex = archiveTexture_;
+          texW = archiveTexW_;
+          texH = archiveTexH_;
+        } else if (tile.building == BuildingType::Walls && wallsTexture_) {
+          tex = wallsTexture_;
+          texW = wallsTexW_;
+          texH = wallsTexH_;
+        } else if (tile.building == BuildingType::Barracks && barracksTexture_) {
+          tex = barracksTexture_;
+          texW = barracksTexW_;
+          texH = barracksTexH_;
+        } else if (tile.building == BuildingType::Mint && mintTexture_) {
+          tex = mintTexture_;
+          texW = mintTexW_;
+          texH = mintTexH_;
+        } else if (tile.building == BuildingType::School && schoolTexture_) {
+          tex = schoolTexture_;
+          texW = schoolTexW_;
+          texH = schoolTexH_;
         }
         if (!tex || texW <= 0 || texH <= 0) continue;
 
         float drawW = static_cast<float>(texW) * scale;
         float drawH = static_cast<float>(texH) * scale;
+        if (tile.building == BuildingType::Monument) {
+          drawW *= 0.36f;
+          drawH *= 0.36f;
+        }
         float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
         float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
         float worldX = anchorX - drawW * 0.5f;
@@ -3220,6 +3376,19 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     float t = static_cast<float>(marker.ttlDays) / 25.0f;
     int alpha = static_cast<int>(50.0f + t * 205.0f);
     if (alpha > 255) alpha = 255;
+
+    if (marker.kind == 1 && researchSparkTexture_) {
+      SDL_SetTextureAlphaMod(researchSparkTexture_, static_cast<Uint8>(alpha));
+      const float sparkW = 24.0f;
+      const float sparkH = 18.0f;
+      float worldX = marker.x * tileSize + tileSize * 0.5f - sparkW * 0.5f;
+      float worldY = marker.y * tileSize + tileSize * 0.15f - sparkH * 0.5f;
+      SDL_Rect dst = MakeDstRect(worldX, worldY, sparkW, sparkH, camera);
+      SDL_RenderCopy(renderer, researchSparkTexture_, nullptr, &dst);
+      SDL_SetTextureAlphaMod(researchSparkTexture_, 255);
+      continue;
+    }
+
     SDL_SetRenderDrawColor(renderer, 255, 40, 40, static_cast<Uint8>(alpha));
 
     const float markerSize = 6.0f;

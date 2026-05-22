@@ -504,6 +504,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\render.cpp" />
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\settlements.cpp" />
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\factions.cpp" />
+    <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\tech_system.cpp" />
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\ui.cpp" />
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\util.cpp" />
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\third_party\imgui\imgui.cpp" />

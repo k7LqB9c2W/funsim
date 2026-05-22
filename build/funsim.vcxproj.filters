@@ -25,6 +25,9 @@
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\factions.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\tech_system.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\Jacob\Documents\code\funsim\src\ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

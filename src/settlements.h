@@ -97,6 +97,12 @@ struct Settlement {
   int wells = 0;
   int markets = 0;
   int forges = 0;
+  int monuments = 0;
+  int archives = 0;
+  int walls = 0;
+  int barracks = 0;
+  int mints = 0;
+  int schools = 0;
   int farmsPlanted = 0;
   int farmsReady = 0;
   int townHalls = 0;

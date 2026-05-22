@@ -78,6 +78,7 @@ add_executable(funsim
   src/render.cpp
   src/settlements.cpp
   src/factions.cpp
+  src/tech_system.cpp
   src/ui.cpp
   src/util.cpp
   ${IMGUI_SOURCES}
