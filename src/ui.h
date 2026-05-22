@@ -21,10 +21,15 @@ struct SimStats {
   int64_t totalSettlements = 0;
   int64_t totalStockFood = 0;
   int64_t totalStockWood = 0;
+  int64_t totalStockStone = 0;
+  int64_t totalStockMetal = 0;
+  int64_t totalStockGold = 0;
   int64_t totalHouses = 0;
   int64_t totalFarms = 0;
   int64_t totalGranaries = 0;
   int64_t totalWells = 0;
+  int64_t totalMarkets = 0;
+  int64_t totalForges = 0;
   int64_t totalTownHalls = 0;
   int64_t totalHousingCap = 0;
   int64_t totalSoldiers = 0;
@@ -50,7 +55,7 @@ struct SimStats {
 };
 
 struct UIState {
-  ToolType tool = ToolType::PlaceLand;
+  ToolType tool = ToolType::PlaceGrass;
   int brushSize = 1;
   bool paused = false;
   int speedIndex = 0;
@@ -61,6 +66,7 @@ struct UIState {
   bool spawnFoodOnLandPlacement = true;
   OverlayMode overlayMode = OverlayMode::FactionTerritory;
   bool wholeMapView = false;
+  bool hideHumansWhenFullyZoomedOut = true;
   int territoryOverlayAlpha = 90;
   float territoryOverlayDarken = 0.65f;
   bool showWarZones = true;

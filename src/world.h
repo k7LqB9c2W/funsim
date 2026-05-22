@@ -16,6 +16,7 @@ enum class TileType {
   Ocean,
   Land,
   FreshWater,
+  Sand,
 };
 
 enum class BuildingType : uint8_t {
@@ -25,6 +26,8 @@ enum class BuildingType : uint8_t {
   Farm,
   Granary,
   Well,
+  Market,
+  Forge,
 };
 
 struct Tile {
@@ -138,6 +141,17 @@ class World {
       // Clear trees in a larger rectangle so nearby canopies never cover the building sprite.
       for (int dy = -4; dy <= 1; ++dy) {
         for (int dx = -3; dx <= 3; ++dx) {
+          EditTile(x + dx, y + dy, [&](Tile& tile) {
+            tile.trees = 0;
+            tile.food = 0;
+            tile.burning = false;
+            tile.burnDaysRemaining = 0;
+          });
+        }
+      }
+    } else if (type == BuildingType::Market || type == BuildingType::Forge) {
+      for (int dy = -2; dy <= 1; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
           EditTile(x + dx, y + dy, [&](Tile& tile) {
             tile.trees = 0;
             tile.food = 0;

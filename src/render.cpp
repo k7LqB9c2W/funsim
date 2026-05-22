@@ -611,6 +611,59 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
     }
   }
 
+  // Optional farmer sprites (4 columns: Front, Back, Left, Right; rows: male, female).
+  {
+    CrashContextSetStage("Renderer::Load IMG farmer");
+    const std::string farmerPath = "assets/sprites/farmers.png";
+    farmerTexture_ = IMG_LoadTexture(renderer, farmerPath.c_str());
+    if (!farmerTexture_) {
+      SDL_Log("Failed to load farmer texture (%s): %s", farmerPath.c_str(), IMG_GetError());
+      farmerSpriteWidth_ = 16;
+      farmerSpriteHeight_ = 16;
+    } else {
+      SDL_SetTextureScaleMode(farmerTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(farmerTexture_, SDL_BLENDMODE_BLEND);
+      int texW = 0;
+      int texH = 0;
+      if (SDL_QueryTexture(farmerTexture_, nullptr, nullptr, &texW, &texH) != 0) {
+        SDL_Log("Failed to query farmer texture: %s", SDL_GetError());
+        farmerSpriteWidth_ = 16;
+        farmerSpriteHeight_ = 16;
+      } else if (texW >= 4 && texH >= 2) {
+        farmerSpriteWidth_ = std::max(1, texW / 4);
+        farmerSpriteHeight_ = std::max(1, texH / 2);
+        if (texW % 4 != 0 || texH % 2 != 0) {
+          SDL_Log("Farmer spritesheet size (%dx%d) is not divisible by 4x2; using %dx%d sprites",
+                  texW, texH, farmerSpriteWidth_, farmerSpriteHeight_);
+        }
+      } else {
+        SDL_Log("Farmer spritesheet size (%dx%d) too small; defaulting to 16x16 sprites", texW, texH);
+        farmerSpriteWidth_ = 16;
+        farmerSpriteHeight_ = 16;
+      }
+    }
+  }
+
+  // Optional trade caravan sprite.
+  {
+    CrashContextSetStage("Renderer::Load IMG caravan");
+    const std::string caravanPath = "assets/sprites/caravan.png";
+    caravanTexture_ = IMG_LoadTexture(renderer, caravanPath.c_str());
+    if (!caravanTexture_) {
+      SDL_Log("Failed to load caravan texture (%s): %s", caravanPath.c_str(), IMG_GetError());
+      caravanTexW_ = 0;
+      caravanTexH_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(caravanTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(caravanTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(caravanTexture_, nullptr, nullptr, &caravanTexW_, &caravanTexH_) != 0) {
+        SDL_Log("Failed to query caravan texture: %s", SDL_GetError());
+        caravanTexW_ = 0;
+        caravanTexH_ = 0;
+      }
+    }
+  }
+
   if (!loadTexture(tilesPath, tilesTexture_, "tiles")) {
     Shutdown();
     return false;
@@ -664,6 +717,44 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
         SDL_Log("Failed to query capital texture: %s", SDL_GetError());
         capitalTexW_ = 0;
         capitalTexH_ = 0;
+      }
+    }
+  }
+
+  {
+    CrashContextSetStage("Renderer::Load IMG market");
+    const std::string marketPath = "assets/sprites/market.png";
+    marketTexture_ = IMG_LoadTexture(renderer, marketPath.c_str());
+    if (!marketTexture_) {
+      SDL_Log("Failed to load market texture (%s): %s", marketPath.c_str(), IMG_GetError());
+      marketTexW_ = 0;
+      marketTexH_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(marketTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(marketTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(marketTexture_, nullptr, nullptr, &marketTexW_, &marketTexH_) != 0) {
+        SDL_Log("Failed to query market texture: %s", SDL_GetError());
+        marketTexW_ = 0;
+        marketTexH_ = 0;
+      }
+    }
+  }
+
+  {
+    CrashContextSetStage("Renderer::Load IMG forge");
+    const std::string forgePath = "assets/sprites/forge.png";
+    forgeTexture_ = IMG_LoadTexture(renderer, forgePath.c_str());
+    if (!forgeTexture_) {
+      SDL_Log("Failed to load forge texture (%s): %s", forgePath.c_str(), IMG_GetError());
+      forgeTexW_ = 0;
+      forgeTexH_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(forgeTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(forgeTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(forgeTexture_, nullptr, nullptr, &forgeTexW_, &forgeTexH_) != 0) {
+        SDL_Log("Failed to query forge texture: %s", SDL_GetError());
+        forgeTexW_ = 0;
+        forgeTexH_ = 0;
       }
     }
   }
@@ -752,6 +843,8 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
 
   SDL_SetTextureBlendMode(humansTexture_, SDL_BLENDMODE_BLEND);
   if (soldierTexture_) SDL_SetTextureBlendMode(soldierTexture_, SDL_BLENDMODE_BLEND);
+  if (farmerTexture_) SDL_SetTextureBlendMode(farmerTexture_, SDL_BLENDMODE_BLEND);
+  if (caravanTexture_) SDL_SetTextureBlendMode(caravanTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(tilesTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(terrainOverlayTexture_, SDL_BLENDMODE_BLEND);
   SDL_SetTextureBlendMode(objectsTexture_, SDL_BLENDMODE_BLEND);
@@ -878,6 +971,14 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(soldierTexture_);
     soldierTexture_ = nullptr;
   }
+  if (farmerTexture_) {
+    SDL_DestroyTexture(farmerTexture_);
+    farmerTexture_ = nullptr;
+  }
+  if (caravanTexture_) {
+    SDL_DestroyTexture(caravanTexture_);
+    caravanTexture_ = nullptr;
+  }
   if (tilesTexture_) {
     SDL_DestroyTexture(tilesTexture_);
     tilesTexture_ = nullptr;
@@ -901,6 +1002,14 @@ void Renderer::Shutdown() {
   if (capitalTexture_) {
     SDL_DestroyTexture(capitalTexture_);
     capitalTexture_ = nullptr;
+  }
+  if (marketTexture_) {
+    SDL_DestroyTexture(marketTexture_);
+    marketTexture_ = nullptr;
+  }
+  if (forgeTexture_) {
+    SDL_DestroyTexture(forgeTexture_);
+    forgeTexture_ = nullptr;
   }
   if (treeTexture_) {
     SDL_DestroyTexture(treeTexture_);
@@ -1200,7 +1309,8 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 
   auto isLand = [&](int x, int y) {
     if (x < 0 || y < 0 || x >= worldWidth_ || y >= worldHeight_) return false;
-    return world.At(x, y).type == TileType::Land;
+    const TileType type = world.At(x, y).type;
+    return type == TileType::Land || type == TileType::Sand;
   };
 
   auto coastDistance = [&](int x, int y) -> int {
@@ -1411,10 +1521,11 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
 	            if (!isLand(x, y)) continue;
 
+            const bool paintedSand = world.At(x, y).type == TileType::Sand;
             bool beach =
                 !isLand(x, y - 1) || !isLand(x + 1, y) || !isLand(x, y + 1) || !isLand(x - 1, y);
             SDL_Rect src{};
-            if (beach) {
+            if (paintedSand || beach) {
               uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kSandSeed);
               src = PickTilesVariant(kSandCoords, h);
               SDL_SetTextureColorMod(tilesTexture_, 255, 255, 255);
@@ -1727,7 +1838,9 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	        const Tile& tile = world.At(x, y);
 	        if (tile.building == BuildingType::None) continue;
 	
-		        if (tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) {
+		        if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
+		            (tile.building == BuildingType::Market && marketTexture_) ||
+		            (tile.building == BuildingType::Forge && forgeTexture_)) {
 		          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
 		          continue;
 		        }
@@ -1748,6 +1861,12 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	            break;
 	          case BuildingType::Well:
 	            coord = AtlasCoord{1, 1};
+	            break;
+	          case BuildingType::Market:
+	            coord = AtlasCoord{0, 0};
+	            break;
+	          case BuildingType::Forge:
+	            coord = AtlasCoord{0, 0};
 	            break;
 	          default:
 	            coord = AtlasCoord{0, 0};
@@ -1820,7 +1939,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   for (int y = minY; y <= maxY; ++y) {
     for (int x = minX; x <= maxX; ++x) {
       const Tile& tile = world.At(x, y);
-      if (tile.type != TileType::Land) continue;
+      if (tile.type != TileType::Land && tile.type != TileType::Sand) continue;
       if (tile.trees <= 0 && tile.food <= 0) continue;
 
       const float worldX = static_cast<float>(x) * tileSize;
@@ -2151,6 +2270,132 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 		    SDL_SetTextureAlphaMod(shadowTexture_, 90);
 		  }
 
+  CrashContextSetStage("Render::LargeEconomyBuildings");
+  if ((marketTexture_ && marketTexW_ > 0 && marketTexH_ > 0) ||
+      (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0)) {
+    float scale = tileSize / static_cast<float>(kTilePx);
+    int maxW = std::max(marketTexW_, forgeTexW_);
+    int maxH = std::max(marketTexH_, forgeTexH_);
+    int pad = 6;
+    pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxW) * scale) / tileSize)) + 2);
+    pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxH) * scale) / tileSize)) + 2);
+    const int buildMinX = std::max(0, minX - pad);
+    const int buildMinY = std::max(0, minY - pad);
+    const int buildMaxX = std::min(world.width() - 1, maxX + pad);
+    const int buildMaxY = std::min(world.height() - 1, maxY + pad);
+
+    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+    SDL_SetTextureAlphaMod(shadowTexture_, 125);
+    for (int y = buildMinY; y <= buildMaxY; ++y) {
+      for (int x = buildMinX; x <= buildMaxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        SDL_Texture* tex = nullptr;
+        int texW = 0;
+        int texH = 0;
+        if (tile.building == BuildingType::Market && marketTexture_) {
+          tex = marketTexture_;
+          texW = marketTexW_;
+          texH = marketTexH_;
+        } else if (tile.building == BuildingType::Forge && forgeTexture_) {
+          tex = forgeTexture_;
+          texW = forgeTexW_;
+          texH = forgeTexH_;
+        }
+        if (!tex || texW <= 0 || texH <= 0) continue;
+
+        float drawW = static_cast<float>(texW) * scale;
+        float drawH = static_cast<float>(texH) * scale;
+        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+        float worldX = anchorX - drawW * 0.5f;
+        float worldY = anchorY - drawH;
+        float shadowW = drawW * 0.58f;
+        float shadowH = tileSize * 0.42f;
+        float shadowX = anchorX - shadowW * 0.5f + 2.0f;
+        float shadowY = anchorY - shadowH * 0.55f + 2.0f;
+        SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, camera);
+        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+        SDL_SetTextureAlphaMod(shadowTexture_, 55);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(shadowTexture_, 125);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, camera);
+        SDL_SetTextureColorMod(tex, 0, 0, 0);
+        SDL_SetTextureAlphaMod(tex, 65);
+        SDL_Rect drop = dst;
+        drop.x += 1;
+        drop.y += 1;
+        SDL_RenderCopy(renderer, tex, nullptr, &drop);
+        SDL_SetTextureAlphaMod(tex, 45);
+        SDL_Rect o1 = dst;
+        SDL_Rect o2 = dst;
+        SDL_Rect o3 = dst;
+        SDL_Rect o4 = dst;
+        o1.x += 1;
+        o2.x -= 1;
+        o3.y += 1;
+        o4.y -= 1;
+        SDL_RenderCopy(renderer, tex, nullptr, &o1);
+        SDL_RenderCopy(renderer, tex, nullptr, &o2);
+        SDL_RenderCopy(renderer, tex, nullptr, &o3);
+        SDL_RenderCopy(renderer, tex, nullptr, &o4);
+        SDL_SetTextureColorMod(tex, 255, 255, 255);
+        SDL_SetTextureAlphaMod(tex, 255);
+        SDL_RenderCopy(renderer, tex, nullptr, &dst);
+      }
+    }
+    SDL_SetTextureAlphaMod(shadowTexture_, 90);
+  }
+
+  CrashContextSetStage("Render::Caravans");
+  for (const auto& caravan : settlements.Caravans()) {
+    const Settlement* from = settlements.Get(caravan.fromSettlementId);
+    const Settlement* to = settlements.Get(caravan.toSettlementId);
+    if (from && to) {
+      float fromSX = 0.0f;
+      float fromSY = 0.0f;
+      float toSX = 0.0f;
+      float toSY = 0.0f;
+      WorldToScreen(camera, (static_cast<float>(from->centerX) + 0.5f) * tileSize,
+                    (static_cast<float>(from->centerY) + 0.5f) * tileSize, fromSX, fromSY);
+      WorldToScreen(camera, (static_cast<float>(to->centerX) + 0.5f) * tileSize,
+                    (static_cast<float>(to->centerY) + 0.5f) * tileSize, toSX, toSY);
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, 235, 205, 120, 42);
+      SDL_RenderDrawLine(renderer, static_cast<int>(std::round(fromSX)), static_cast<int>(std::round(fromSY)),
+                         static_cast<int>(std::round(toSX)), static_cast<int>(std::round(toSY)));
+    }
+
+    if (caravan.x < static_cast<float>(minX - 2) || caravan.x > static_cast<float>(maxX + 2) ||
+        caravan.y < static_cast<float>(minY - 2) || caravan.y > static_cast<float>(maxY + 2)) {
+      continue;
+    }
+
+    float caravanW = tileSize * 1.75f;
+    float caravanH = tileSize * 1.25f;
+    if (caravanTexW_ > 0 && caravanTexH_ > 0) {
+      caravanH = caravanW * static_cast<float>(caravanTexH_) / static_cast<float>(caravanTexW_);
+    }
+    const float worldX = caravan.x * tileSize - caravanW * 0.5f;
+    const float worldY = caravan.y * tileSize - caravanH * 0.78f;
+    SDL_Rect dst = MakeDstRect(worldX, worldY, caravanW, caravanH, camera);
+    SDL_Rect shadowDst = MakeDstRect(worldX + caravanW * 0.18f, worldY + caravanH * 0.78f,
+                                     caravanW * 0.68f, caravanH * 0.18f, camera);
+    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+    SDL_SetTextureAlphaMod(shadowTexture_, 90);
+    SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+    if (caravanTexture_) {
+      SDL_RenderCopy(renderer, caravanTexture_, nullptr, &dst);
+    } else {
+      SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      SDL_SetRenderDrawColor(renderer, 170, 120, 65, 230);
+      SDL_RenderFillRect(renderer, &dst);
+    }
+  }
+
   CrashContextSetStage("Render::Fire");
   SDL_Rect fireSrc = FireSrc();
   for (int y = minY; y <= maxY; ++y) {
@@ -2187,9 +2432,10 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 
   CrashContextSetStage("Render::HumanGround");
   SDL_Rect humanSrc{0, 0, spriteWidth_, spriteHeight_};
-  const auto& list = humans.Humans();
-  humanBodies.reserve(list.size());
-  for (const auto& human : list) {
+  if (config.showHumans) {
+    const auto& list = humans.Humans();
+    humanBodies.reserve(list.size());
+    for (const auto& human : list) {
     if (!human.alive) continue;
     if (human.x < minX || human.x > maxX || human.y < minY || human.y > maxY) continue;
 
@@ -2222,6 +2468,15 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       if (dir > 3) dir = 3;
       bodySrc.x = dir * soldierSpriteWidth_;
       bodySrc.y = 0;
+    } else if (human.role == Role::Farmer && farmerTexture_) {
+      bodyTex = farmerTexture_;
+      bodySrc.w = farmerSpriteWidth_;
+      bodySrc.h = farmerSpriteHeight_;
+      int dir = static_cast<int>(human.facing);
+      if (dir > 3) dir = 3;
+      int row = human.female ? 1 : 0;
+      bodySrc.x = dir * farmerSpriteWidth_;
+      bodySrc.y = row * farmerSpriteHeight_;
     } else {
       int row = human.female ? 1 : 0;
       int col = human.animFrame + (human.moving ? 2 : 0);
@@ -2254,7 +2509,8 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
       item.dotDst = MakeDstRect(dotX, dotY, dotSize, dotSize, camera);
     }
 
-    humanBodies.push_back(item);
+      humanBodies.push_back(item);
+    }
   }
 
   CrashContextSetStage("Render::YInterleave");

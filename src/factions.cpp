@@ -350,6 +350,9 @@ void FactionManager::UpdateStats(const SettlementManager& settlements) {
     faction->stats.population += settlement.population;
     faction->stats.stockFood += settlement.stockFood;
     faction->stats.stockWood += settlement.stockWood;
+    faction->stats.stockStone += settlement.stockStone;
+    faction->stats.stockMetal += settlement.stockMetal;
+    faction->stats.stockGold += settlement.stockGold;
     faction->techTier = std::max(faction->techTier, settlement.techTier);
   }
   for (size_t i = 0; i < factions_.size(); ++i) {

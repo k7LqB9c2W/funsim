@@ -4,8 +4,10 @@ const char* ToolName(ToolType tool) {
   switch (tool) {
     case ToolType::SelectKingdom:
       return "Select Kingdom";
-    case ToolType::PlaceLand:
-      return "Place Land";
+    case ToolType::PlaceGrass:
+      return "Place Grass";
+    case ToolType::PlaceSand:
+      return "Place Sand";
     case ToolType::PlaceFreshWater:
       return "Place FreshWater";
     case ToolType::AddTrees:

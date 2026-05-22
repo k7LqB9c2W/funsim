@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -22,6 +23,20 @@ enum class TaskType : uint8_t {
 };
 
 enum class SettlementTier : uint8_t { Village, Town, City };
+enum class TradeResource : uint8_t { Food, Wood, Stone, Metal, Gold };
+static constexpr int kTradeResourceCount = 5;
+
+const char* TradeResourceName(TradeResource resource);
+
+struct ResourcePressure {
+  int desired = 0;
+  int stock = 0;
+  int shortage = 0;
+  int surplus = 0;
+  int demandScore = 0;  // 0..100, higher means stronger shortage pressure.
+  int supplyScore = 0;  // 0..100, higher means more exportable surplus.
+  int valueScore = 50;  // 0..100, local usefulness/scarcity pressure.
+};
 
 struct Task {
   TaskType type{};
@@ -41,6 +56,11 @@ struct Settlement {
   static constexpr int kGranaryWoodCost = 6;
   static constexpr int kWellWoodCost = 8;
   static constexpr int kTownHallWoodCost = 18;
+  static constexpr int kMarketWoodCost = 24;
+  static constexpr int kMarketStoneCost = 18;
+  static constexpr int kForgeWoodCost = 18;
+  static constexpr int kForgeStoneCost = 24;
+  static constexpr int kForgeMetalCost = 8;
   static constexpr int kFarmYield = 50;
   static constexpr int kFarmReadyStage = 2;
 
@@ -50,6 +70,18 @@ struct Settlement {
   int factionId = 0;
   int stockFood = 0;
   int stockWood = 0;
+  int stockStone = 0;
+  int stockMetal = 0;
+  int stockGold = 0;
+  int stoneDeposit = 0;
+  int metalDeposit = 0;
+  int goldDeposit = 0;
+  int lastStoneProduced = 0;
+  int lastMetalProduced = 0;
+  int lastGoldProduced = 0;
+  int economyProsperity = 0;
+  int economyStress = 0;
+  std::array<ResourcePressure, kTradeResourceCount> resourcePressure{};
   int population = 0;
   int gatherers = 0;
   int farmers = 0;
@@ -63,6 +95,8 @@ struct Settlement {
   int farms = 0;
   int granaries = 0;
   int wells = 0;
+  int markets = 0;
+  int forges = 0;
   int farmsPlanted = 0;
   int farmsReady = 0;
   int townHalls = 0;
@@ -166,6 +200,19 @@ struct Settlement {
   }
 };
 
+struct TradeCaravan {
+  int id = 0;
+  int fromSettlementId = -1;
+  int toSettlementId = -1;
+  int factionId = -1;
+  TradeResource resource = TradeResource::Food;
+  int amount = 0;
+  float progress = 0.0f;
+  float travelPerDay = 0.0f;
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
 class SettlementManager {
  public:
   void SetRebellionsEnabled(bool enabled) { rebellionsEnabled_ = enabled; }
@@ -186,6 +233,7 @@ class SettlementManager {
   int Count() const { return static_cast<int>(settlements_.size()); }
   const std::vector<Settlement>& Settlements() const { return settlements_; }
   std::vector<Settlement>& SettlementsMutable() { return settlements_; }
+  const std::vector<TradeCaravan>& Caravans() const { return caravans_; }
 
   bool HasSettlement(int settlementId) const;
   const Settlement* Get(int settlementId) const;
@@ -212,7 +260,7 @@ class SettlementManager {
   void EnsureZoneBuffers(const World& world);
   void RecomputeZonePop(const World& world, const HumanManager& humans, int dayDelta);
   void RecomputeZonePopMacro();
-  void TryFoundNewSettlements(World& world, Random& rng, int dayCount,
+  void TryFoundNewSettlements(World& world, HumanManager* humans, Random& rng, int dayCount,
                               std::vector<VillageMarker>& markers, FactionManager& factions);
   void RecomputeZoneOwners(const World& world);
   void UpdateZoneConflict(const FactionManager& factions);
@@ -237,7 +285,9 @@ class SettlementManager {
                                 FactionManager& factions);
   void UpdateBorderPressure(const FactionManager& factions);
   void GenerateTasks(World& world, Random& rng, const FactionManager& factions, int dayCount);
-  void RunSettlementEconomy(World& world, Random& rng);
+  void RunSettlementEconomy(World& world, Random& rng, int dayCount, const FactionManager& factions);
+  void UpdateCaravans();
+  void TryCreateTradeCaravans(int dayCount, const FactionManager& factions);
   void EnsureSettlementFactions(FactionManager& factions, Random& rng);
 
   struct ClaimSource {
@@ -247,7 +297,9 @@ class SettlementManager {
   };
 
   int nextId_ = 1;
+  int nextCaravanId_ = 1;
   std::vector<Settlement> settlements_;
+  std::vector<TradeCaravan> caravans_;
 
   int zoneSize_ = 8;
   int zonesX_ = 0;

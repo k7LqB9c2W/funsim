@@ -30,6 +30,9 @@ struct FactionStats {
   int territoryZones = 0;
   int stockFood = 0;
   int stockWood = 0;
+  int stockStone = 0;
+  int stockMetal = 0;
+  int stockGold = 0;
 };
 
 struct LeaderInfluence {

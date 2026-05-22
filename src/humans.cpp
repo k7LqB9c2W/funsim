@@ -154,7 +154,7 @@ bool TryPickNoStockFoodTarget(Human& human, const World& world, const Settlement
   auto isEdibleFoodTile = [&](int x, int y) {
     if (!world.InBounds(x, y)) return false;
     const Tile& tile = world.At(x, y);
-    if (tile.type != TileType::Land || tile.burning) return false;
+    if ((tile.type != TileType::Land && tile.type != TileType::Sand) || tile.burning) return false;
     return tile.food > 0;
   };
 
@@ -184,7 +184,7 @@ bool TryPickNoStockFoodTarget(Human& human, const World& world, const Settlement
     int y = baseY + dy;
     if (!world.InBounds(x, y)) continue;
     const Tile& tile = world.At(x, y);
-    if (tile.type != TileType::Land || tile.burning) continue;
+    if ((tile.type != TileType::Land && tile.type != TileType::Sand) || tile.burning) continue;
     if (tile.food <= 0) continue;
     int dist = std::abs(dx) + std::abs(dy);
     int noise = static_cast<int>(HashNoise(static_cast<uint32_t>(human.id),
@@ -436,6 +436,30 @@ int BuildWoodCost(BuildingType type) {
       return Settlement::kGranaryWoodCost;
     case BuildingType::Well:
       return Settlement::kWellWoodCost;
+    case BuildingType::Market:
+      return Settlement::kMarketWoodCost;
+    case BuildingType::Forge:
+      return Settlement::kForgeWoodCost;
+    default:
+      return 0;
+  }
+}
+
+int BuildStoneCost(BuildingType type) {
+  switch (type) {
+    case BuildingType::Market:
+      return Settlement::kMarketStoneCost;
+    case BuildingType::Forge:
+      return Settlement::kForgeStoneCost;
+    default:
+      return 0;
+  }
+}
+
+int BuildMetalCost(BuildingType type) {
+  switch (type) {
+    case BuildingType::Forge:
+      return Settlement::kForgeMetalCost;
     default:
       return 0;
   }
@@ -1326,12 +1350,17 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
 	        const Tile& tile = world.At(human.x, human.y);
 	        Settlement* settlement = settlements.GetMutable(human.taskSettlementId);
 	        int cost = BuildWoodCost(human.taskBuildType);
+	        int stoneCost = BuildStoneCost(human.taskBuildType);
+	        int metalCost = BuildMetalCost(human.taskBuildType);
 	        const bool footprintOk =
 	            (human.taskBuildType != BuildingType::TownHall) || world.TownHallFootprintAllLand(human.x, human.y);
 	        if (settlement && tile.type == TileType::Land && !tile.burning &&
 	            tile.building == BuildingType::None && settlement->stockWood >= cost &&
+	            settlement->stockStone >= stoneCost && settlement->stockMetal >= metalCost &&
 	            !TreeRules::BlocksBuildingPlacement(world, human.x, human.y) && footprintOk) {
 	          settlement->stockWood = std::max(0, settlement->stockWood - cost);
+	          settlement->stockStone = std::max(0, settlement->stockStone - stoneCost);
+	          settlement->stockMetal = std::max(0, settlement->stockMetal - metalCost);
 	          uint8_t farmStage = (human.taskBuildType == BuildingType::Farm) ? 1u : 0u;
 	          world.PlaceBuilding(human.x, human.y, human.taskBuildType, settlement->id, farmStage);
 	        }

@@ -23,6 +23,7 @@ constexpr int kDefaultHeight = 144;
 constexpr int kDefaultWorldScale = 4;
 constexpr int kCalendarDaysPerCoarseDay = 30;
 constexpr float kLandFoodSpawnChance = 0.30f;
+constexpr float kSandFoodSpawnChance = 0.05f;
 
 float Clamp(float value, float min_value, float max_value) {
   if (value < min_value) return min_value;
@@ -407,6 +408,9 @@ void App::RenderFrame() {
   overlayConfig.showTroopCountsAllZones = ui_.showTroopCountsAllZones;
   overlayConfig.showSoldierTileMarkers = ui_.showSoldierTileMarkers;
   overlayConfig.showChunkBoundaries = ui_.showChunkBoundaries;
+  const float fitZoom = ComputeFitZoom();
+  const bool fullyZoomedOut = ui_.wholeMapView || (fitZoom > 0.0f && camera_.zoom <= fitZoom + 0.0001f);
+  overlayConfig.showHumans = !(ui_.hideHumansWhenFullyZoomedOut && fullyZoomedOut);
   rendererAssets_.Render(renderer_, world_, humans_, settlements_, factions_, camera_, winW, winH,
                          villageMarkers_, hoverTileX_, hoverTileY_, hoverValid_, ui_.brushSize,
                          ui_.overlayMode, overlayConfig);
@@ -708,7 +712,7 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
         world_.EraseAt(x, y);
       } else {
         switch (ui_.tool) {
-          case ToolType::PlaceLand: {
+          case ToolType::PlaceGrass: {
             const TileType beforeType = world_.At(x, y).type;
             world_.SetTileType(x, y, TileType::Land);
             if (ui_.spawnFoodOnLandPlacement && beforeType != TileType::Land &&
@@ -720,6 +724,19 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
             }
             break;
           }
+          case ToolType::PlaceSand:
+            world_.EditTile(x, y, [&](Tile& tile) {
+              tile.type = TileType::Sand;
+              tile.trees = 0;
+              tile.food = rng_.Chance(kSandFoodSpawnChance) ? 50 : 0;
+              tile.burning = false;
+              tile.burnDaysRemaining = 0;
+              tile.building = BuildingType::None;
+              tile.farmStage = 0;
+              tile.buildingOwnerId = -1;
+            });
+            world_.MarkBuildingDirty();
+            break;
           case ToolType::PlaceFreshWater:
             world_.EditTile(x, y, [&](Tile& tile) {
               tile.type = TileType::FreshWater;
@@ -1001,10 +1018,15 @@ void App::RefreshTotals() {
   stats_.totalSettlements = settlements_.Count();
   stats_.totalStockFood = 0;
   stats_.totalStockWood = 0;
+  stats_.totalStockStone = 0;
+  stats_.totalStockMetal = 0;
+  stats_.totalStockGold = 0;
   stats_.totalHouses = 0;
   stats_.totalFarms = 0;
   stats_.totalGranaries = 0;
   stats_.totalWells = 0;
+  stats_.totalMarkets = 0;
+  stats_.totalForges = 0;
   stats_.totalTownHalls = 0;
   stats_.totalHousingCap = 0;
   stats_.totalSoldiers = 0;
@@ -1021,10 +1043,15 @@ void App::RefreshTotals() {
   for (const auto& settlement : settlements_.Settlements()) {
     stats_.totalStockFood += settlement.stockFood;
     stats_.totalStockWood += settlement.stockWood;
+    stats_.totalStockStone += settlement.stockStone;
+    stats_.totalStockMetal += settlement.stockMetal;
+    stats_.totalStockGold += settlement.stockGold;
     stats_.totalHouses += settlement.houses;
     stats_.totalFarms += settlement.farms;
     stats_.totalGranaries += settlement.granaries;
     stats_.totalWells += settlement.wells;
+    stats_.totalMarkets += settlement.markets;
+    stats_.totalForges += settlement.forges;
     stats_.totalTownHalls += settlement.townHalls;
     stats_.totalHousingCap += settlement.housingCap;
     stats_.totalSoldiers += settlement.soldiers;

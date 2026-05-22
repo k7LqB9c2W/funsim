@@ -21,6 +21,8 @@ constexpr int kClaimRadiusHouse = 10;
 constexpr int kClaimRadiusFarm = 10;
 constexpr int kClaimRadiusGranary = 12;
 constexpr int kClaimRadiusWell = 10;
+constexpr int kClaimRadiusMarket = 14;
+constexpr int kClaimRadiusForge = 12;
 constexpr int kInfluenceVillage = 36;
 constexpr int kInfluenceTown = 48;
 constexpr int kInfluenceCity = 64;
@@ -40,6 +42,11 @@ constexpr int kRebellionStabilityThreshold = 25;
 constexpr int kRebellionUnrestDays = 7;
 constexpr int kWarLossFoodFactor = 6;
 constexpr int kWarLossWoodFactor = 3;
+constexpr int kFoundingMinGroup = 6;
+constexpr int kFoundingMaxGroup = 18;
+constexpr int kFoundingParentReservePop = 8;
+constexpr int kFoundingFoodPerPerson = 18;
+constexpr int kFoundingWoodPerPerson = 4;
 
 constexpr int kGatherRadius = 12;
 constexpr int kWoodRadius = 12;
@@ -48,10 +55,18 @@ constexpr int kFarmBuildRadius = 12;
 constexpr int kFarmWorkRadius = 14;
 constexpr int kGranaryDropRadius = 4;
 constexpr int kGranaryBuildRadius = 4;
+constexpr int kMarketBuildRadius = 12;
+constexpr int kForgeBuildRadius = 12;
 constexpr int kFarGatherRadius = 24;
 constexpr int kHousingBuffer = 10;
 constexpr int kDesiredFoodPerPop = 60;
 constexpr int kDesiredWoodPerPop = 4;
+constexpr int kDesiredStonePerPop = 2;
+constexpr int kDesiredMetalPerPop = 1;
+constexpr int kTradeCheckIntervalDays = 5;
+constexpr int kTradeMaxDistanceTiles = 140;
+constexpr int kTradeMinShipment = 8;
+constexpr int kTradeMaxShipment = 90;
 constexpr int kFarmsPerPop = 3;
 constexpr int kWaterSearchRadius = 28;
 constexpr int kFactionLinkRadiusTiles = 96;
@@ -72,6 +87,102 @@ uint32_t Hash32(uint32_t a, uint32_t b) {
   h *= 0xC2B2AE35u;
   h ^= (h >> 16);
   return h;
+}
+
+int DesiredFoundingGroupSize(int parentPop) {
+  if (parentPop <= kFoundingParentReservePop + kFoundingMinGroup) return 0;
+  int group = std::max(kFoundingMinGroup, parentPop / 12);
+  group = std::min(group, kFoundingMaxGroup);
+  return std::min(group, parentPop - kFoundingParentReservePop);
+}
+
+void TransferFoundingResources(Settlement& source, Settlement& founded, int founders) {
+  if (founders <= 0) return;
+
+  int foodReserve = std::max(0, source.population) * kEmergencyFoodPerPop;
+  int foodAvailable = std::max(0, source.stockFood - foodReserve);
+  int foodTransfer = std::min(foodAvailable, founders * kFoundingFoodPerPerson);
+  source.stockFood = std::max(0, source.stockFood - foodTransfer);
+  founded.stockFood += foodTransfer;
+
+  int woodTransfer = std::min(source.stockWood, std::max(8, founders * kFoundingWoodPerPerson));
+  source.stockWood = std::max(0, source.stockWood - woodTransfer);
+  founded.stockWood += woodTransfer;
+}
+
+int AssignFoundingHumans(HumanManager& humans, const Settlement& source, const Settlement& founded,
+                         int desiredFounders) {
+  if (desiredFounders <= 0) return 0;
+
+  struct Candidate {
+    int distanceSq = 0;
+    int index = -1;
+    bool soldier = false;
+  };
+
+  std::vector<Candidate> candidates;
+  auto& list = humans.HumansMutable();
+  candidates.reserve(static_cast<size_t>(desiredFounders) * 2u);
+  for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+    const Human& human = list[i];
+    if (!human.alive || human.settlementId != source.id) continue;
+    int dx = human.x - founded.centerX;
+    int dy = human.y - founded.centerY;
+    candidates.push_back(Candidate{dx * dx + dy * dy, i, human.role == Role::Soldier});
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+    if (a.soldier != b.soldier) return !a.soldier;
+    return a.distanceSq < b.distanceSq;
+  });
+
+  int moved = 0;
+  for (const Candidate& candidate : candidates) {
+    if (moved >= desiredFounders) break;
+    if (candidate.index < 0 || candidate.index >= static_cast<int>(list.size())) continue;
+    Human& human = list[candidate.index];
+    if (!human.alive || human.settlementId != source.id) continue;
+
+    human.settlementId = founded.id;
+    human.homeX = founded.centerX;
+    human.homeY = founded.centerY;
+    human.targetX = founded.centerX;
+    human.targetY = founded.centerY;
+    human.goal = Goal::StayHome;
+    human.role = Role::Idle;
+    human.hasTask = false;
+    human.taskSettlementId = -1;
+    human.forceReplan = true;
+    moved++;
+  }
+
+  return moved;
+}
+
+int TransferFoundingMacroPopulation(Settlement& source, Settlement& founded, int desiredFounders) {
+  if (desiredFounders <= 0) return 0;
+
+  int moved = 0;
+  constexpr int kPreferredBins[] = {3, 2, 4, 1, 0, 5};
+  for (int bin : kPreferredBins) {
+    while (moved < desiredFounders && (source.macroPopF[bin] > 0 || source.macroPopM[bin] > 0)) {
+      if (source.macroPopF[bin] > 0) {
+        source.macroPopF[bin]--;
+        founded.macroPopF[bin]++;
+        moved++;
+      }
+      if (moved >= desiredFounders) break;
+      if (source.macroPopM[bin] > 0) {
+        source.macroPopM[bin]--;
+        founded.macroPopM[bin]++;
+        moved++;
+      }
+    }
+  }
+
+  source.population = source.MacroTotal();
+  founded.population = founded.MacroTotal();
+  return moved;
 }
 
 bool IsBuildableTile(const World& world, int x, int y) {
@@ -96,6 +207,10 @@ int ClaimRadiusForBuilding(BuildingType type) {
       return kClaimRadiusGranary;
     case BuildingType::Well:
       return kClaimRadiusWell;
+    case BuildingType::Market:
+      return kClaimRadiusMarket;
+    case BuildingType::Forge:
+      return kClaimRadiusForge;
     default:
       return 0;
   }
@@ -108,7 +223,200 @@ bool IsBuildableTileForSettlement(const World& world, const SettlementManager& s
   int ownerId = settlements.ZoneOwnerForTile(x, y);
   return ownerId == -1 || ownerId == settlementId;
 }
+
+int DepositRoll(int settlementId, int x, int y, uint32_t salt, int minValue, int spread) {
+  uint32_t h = Hash32(static_cast<uint32_t>(settlementId) ^ salt,
+                      static_cast<uint32_t>(x * 31 + y * 17));
+  return minValue + static_cast<int>(h % static_cast<uint32_t>(std::max(1, spread)));
+}
+
+void InitializeSettlementDeposits(Settlement& settlement) {
+  uint32_t h = Hash32(static_cast<uint32_t>(settlement.centerX),
+                      static_cast<uint32_t>(settlement.centerY ^ settlement.id));
+  settlement.stoneDeposit = DepositRoll(settlement.id, settlement.centerX, settlement.centerY,
+                                        0x53544f4eu, 180, 520);
+  settlement.metalDeposit = DepositRoll(settlement.id, settlement.centerX, settlement.centerY,
+                                        0x4d455441u, 40, 240);
+  settlement.goldDeposit = 0;
+  if ((h % 100u) < 35u) {
+    settlement.goldDeposit = DepositRoll(settlement.id, settlement.centerX, settlement.centerY,
+                                         0x474f4c44u, 12, 95);
+  }
+}
+
+int TradeResourceIndex(TradeResource resource) {
+  int index = static_cast<int>(resource);
+  if (index < 0 || index >= kTradeResourceCount) return 0;
+  return index;
+}
+
+int DesiredStockForResource(const Settlement& settlement, TradeResource resource);
+int StockForResource(const Settlement& settlement, TradeResource resource);
+
+void UpdateSupplyDemand(Settlement& settlement) {
+  constexpr TradeResource kResources[] = {
+      TradeResource::Food, TradeResource::Wood, TradeResource::Stone,
+      TradeResource::Metal, TradeResource::Gold};
+
+  for (TradeResource resource : kResources) {
+    int desired = std::max(1, DesiredStockForResource(settlement, resource));
+    int stock = std::max(0, StockForResource(settlement, resource));
+    int shortage = std::max(0, desired - stock);
+    int surplus = std::max(0, stock - desired);
+
+    int demandScore = std::min(100, (shortage * 100) / desired);
+    int supplyScore = std::min(100, (surplus * 100) / std::max(1, desired));
+    int valueScore = 50 + demandScore / 2 - supplyScore / 3;
+    if (resource == TradeResource::Food && stock < std::max(1, settlement.population * kEmergencyFoodPerPop)) {
+      valueScore += 20;
+    }
+    if (resource == TradeResource::Gold && settlement.isCapital) {
+      valueScore += 8;
+    }
+    valueScore = std::max(0, std::min(100, valueScore));
+
+    ResourcePressure& pressure = settlement.resourcePressure[TradeResourceIndex(resource)];
+    pressure.desired = desired;
+    pressure.stock = stock;
+    pressure.shortage = shortage;
+    pressure.surplus = surplus;
+    pressure.demandScore = demandScore;
+    pressure.supplyScore = supplyScore;
+    pressure.valueScore = valueScore;
+  }
+}
+
+void UpdateEconomyMood(Settlement& settlement) {
+  UpdateSupplyDemand(settlement);
+  const auto& food = settlement.resourcePressure[TradeResourceIndex(TradeResource::Food)];
+  const auto& wood = settlement.resourcePressure[TradeResourceIndex(TradeResource::Wood)];
+  const auto& stone = settlement.resourcePressure[TradeResourceIndex(TradeResource::Stone)];
+  const auto& metal = settlement.resourcePressure[TradeResourceIndex(TradeResource::Metal)];
+  int pop = std::max(1, settlement.population);
+
+  int stress = 0;
+  if (settlement.stockFood < pop * kEmergencyFoodPerPop) stress += 45;
+  stress += food.demandScore / 3;
+  stress += wood.demandScore / 5;
+  if (settlement.tier != SettlementTier::Village) stress += stone.demandScore / 8;
+  if (settlement.soldiers > 0) stress += metal.demandScore / 8;
+  stress += std::min(20, settlement.unrest * 2);
+  stress += std::min(20, settlement.warPressure * 2);
+  settlement.economyStress = std::max(0, std::min(100, stress));
+
+  int prosperity = 0;
+  prosperity += std::min(22, food.supplyScore / 3);
+  prosperity += std::min(14, wood.supplyScore / 5);
+  prosperity += std::min(10, stone.supplyScore / 6);
+  prosperity += std::min(12, metal.supplyScore / 5);
+  if (settlement.markets > 0) prosperity += 8;
+  if (settlement.forges > 0) prosperity += 6;
+  prosperity += std::min(22, settlement.stockGold / std::max(1, pop / 3 + 1));
+  prosperity += std::min(10, settlement.techTier * 3);
+  prosperity += settlement.isCapital ? 8 : 0;
+  prosperity -= settlement.economyStress / 2;
+  settlement.economyProsperity = std::max(0, std::min(100, prosperity));
+}
+
+int DesiredStockForResource(const Settlement& settlement, TradeResource resource) {
+  int pop = std::max(1, settlement.population);
+  switch (resource) {
+    case TradeResource::Food:
+      return pop * kDesiredFoodPerPop;
+    case TradeResource::Wood: {
+      int desired = pop * kDesiredWoodPerPop;
+      if (settlement.housingCap < pop + kHousingBuffer) desired += Settlement::kHouseWoodCost * 2;
+      if (settlement.markets == 0 &&
+          (settlement.tier != SettlementTier::Village || settlement.population >= 45 ||
+           settlement.isCapital)) {
+        desired += Settlement::kMarketWoodCost;
+      }
+      if (settlement.forges == 0 &&
+          (settlement.techTier >= 1 || settlement.population >= 55 || settlement.soldiers >= 8)) {
+        desired += Settlement::kForgeWoodCost;
+      }
+      return desired;
+    }
+    case TradeResource::Stone: {
+      int desired = pop * kDesiredStonePerPop + settlement.houses + settlement.townHalls * 8;
+      if (settlement.markets == 0 &&
+          (settlement.tier != SettlementTier::Village || settlement.population >= 45 ||
+           settlement.isCapital)) {
+        desired += Settlement::kMarketStoneCost;
+      }
+      if (settlement.forges == 0 &&
+          (settlement.techTier >= 1 || settlement.population >= 55 || settlement.soldiers >= 8)) {
+        desired += Settlement::kForgeStoneCost;
+      }
+      return desired;
+    }
+    case TradeResource::Metal: {
+      int desired = std::max(8, pop * kDesiredMetalPerPop / 2 + settlement.soldiers);
+      if (settlement.forges == 0 &&
+          (settlement.techTier >= 1 || settlement.population >= 55 || settlement.soldiers >= 8)) {
+        desired += Settlement::kForgeMetalCost;
+      }
+      if (settlement.warPressure > 0) desired += std::max(4, settlement.soldiers / 2);
+      return desired;
+    }
+    case TradeResource::Gold:
+      return settlement.isCapital ? std::max(12, pop / 3) : std::max(4, pop / 8);
+    default:
+      return 0;
+  }
+}
+
+int& StockForResource(Settlement& settlement, TradeResource resource) {
+  switch (resource) {
+    case TradeResource::Food:
+      return settlement.stockFood;
+    case TradeResource::Wood:
+      return settlement.stockWood;
+    case TradeResource::Stone:
+      return settlement.stockStone;
+    case TradeResource::Metal:
+      return settlement.stockMetal;
+    case TradeResource::Gold:
+      return settlement.stockGold;
+    default:
+      return settlement.stockFood;
+  }
+}
+
+int StockForResource(const Settlement& settlement, TradeResource resource) {
+  switch (resource) {
+    case TradeResource::Food:
+      return settlement.stockFood;
+    case TradeResource::Wood:
+      return settlement.stockWood;
+    case TradeResource::Stone:
+      return settlement.stockStone;
+    case TradeResource::Metal:
+      return settlement.stockMetal;
+    case TradeResource::Gold:
+      return settlement.stockGold;
+    default:
+      return 0;
+  }
+}
 }  // namespace
+
+const char* TradeResourceName(TradeResource resource) {
+  switch (resource) {
+    case TradeResource::Food:
+      return "food";
+    case TradeResource::Wood:
+      return "wood";
+    case TradeResource::Stone:
+      return "stone";
+    case TradeResource::Metal:
+      return "metal";
+    case TradeResource::Gold:
+      return "gold";
+    default:
+      return "unknown";
+  }
+}
 
 const char* SettlementTierName(SettlementTier tier) {
   switch (tier) {
@@ -384,7 +692,7 @@ void SettlementManager::RecomputeZonePopMacro() {
   }
 }
 
-void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int dayCount,
+void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* humans, Random& rng, int dayCount,
                                                std::vector<VillageMarker>& markers,
                                                FactionManager& factions) {
   const int minDistSq = kMinVillageDistTiles * kMinVillageDistTiles;
@@ -427,6 +735,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     int zonePop = ZoneFoundingPopAt(zx, zy);
     int sourceFactionId = 0;
     const Settlement* nearestSettlement = Get(nearestId);
+    int sourceSettlementId = nearestSettlement ? nearestSettlement->id : -1;
     if (nearestSettlement) {
       sourceFactionId = nearestSettlement->factionId;
     }
@@ -503,6 +812,9 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     settlement.factionId = 0;
     settlement.stockFood = 50 + starterFood;
     settlement.stockWood = 0;
+    settlement.stockStone = 0;
+    settlement.stockMetal = 0;
+    settlement.stockGold = 0;
     settlement.population = 0;
     settlement.ageDays = 0;
     settlement.tier = SettlementTier::Village;
@@ -514,6 +826,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     settlement.warPressure = 0;
     settlement.influenceRadius = kClaimRadiusTownHall;
     settlement.isCapital = false;
+    InitializeSettlementDeposits(settlement);
 
     int factionId = 0;
     if (nearestSettlement && sourceFactionId > 0) {
@@ -530,6 +843,23 @@ void SettlementManager::TryFoundNewSettlements(World& world, Random& rng, int da
     }
     settlement.factionId = factionId;
     settlements_.push_back(settlement);
+    Settlement* founded = GetMutable(settlementId);
+    Settlement* source = GetMutable(sourceSettlementId);
+    if (founded && source && source->id != founded->id) {
+      int desiredFounders = DesiredFoundingGroupSize(source->population);
+      int movedFounders = 0;
+      if (humans) {
+        movedFounders = AssignFoundingHumans(*humans, *source, *founded, desiredFounders);
+        source->population = std::max(0, source->population - movedFounders);
+        founded->population = movedFounders;
+      } else {
+        movedFounders = TransferFoundingMacroPopulation(*source, *founded, desiredFounders);
+      }
+      TransferFoundingResources(*source, *founded, movedFounders);
+      if (movedFounders > 0) {
+        founded->stability = std::max(founded->stability, 75);
+      }
+    }
     homeFieldDirty_ = true;
 
     markers.push_back(VillageMarker{bestX, bestY, 25});
@@ -757,6 +1087,8 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
     settlement.farms = 0;
     settlement.granaries = 0;
     settlement.wells = 0;
+    settlement.markets = 0;
+    settlement.forges = 0;
     settlement.farmsPlanted = 0;
     settlement.farmsReady = 0;
     settlement.townHalls = 0;
@@ -792,6 +1124,12 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
         break;
       case BuildingType::Well:
         settlement.wells++;
+        break;
+      case BuildingType::Market:
+        settlement.markets++;
+        break;
+      case BuildingType::Forge:
+        settlement.forges++;
         break;
       case BuildingType::TownHall:
         settlement.townHalls++;
@@ -1242,6 +1580,7 @@ void SettlementManager::UpdateSettlementStability(const FactionManager& factions
       settlement.unrest = 0;
       continue;
     }
+    UpdateEconomyMood(settlement);
     int pop = settlement.population;
     float foodRatio = static_cast<float>(settlement.stockFood) /
                       static_cast<float>(std::max(1, pop * kDesiredFoodPerPop));
@@ -1263,8 +1602,11 @@ void SettlementManager::UpdateSettlementStability(const FactionManager& factions
       leaderBonus = faction->leaderInfluence.stability;
     }
 
+    float economyBonus = static_cast<float>(settlement.economyProsperity) / 100.0f;
+    float economyPenalty = static_cast<float>(settlement.economyStress) / 100.0f;
     float target = 50.0f + 30.0f * foodRatio + 15.0f * housingRatio +
                    20.0f * leaderBonus - 50.0f * warPenalty - 30.0f * borderPenalty;
+    target += 10.0f * economyBonus - 15.0f * economyPenalty;
     if (settlement.isCapital) {
       target += 6.0f;
     } else if (settlement.borderPressure > 4) {
@@ -1307,6 +1649,7 @@ void SettlementManager::UpdateSettlementEvolution(const FactionManager& factions
 
     float gain = kTechBaseGain + kTechFoodGain * foodRatio * popFactor +
                  leaderBoost * kTechLeaderGain;
+    gain += static_cast<float>(settlement.economyProsperity) * 0.00005f;
     if (settlement.tier == SettlementTier::City) {
       gain += 0.004f;
     }
@@ -2515,7 +2858,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
           int y = settlement.centerY + dy;
           if (!world.InBounds(x, y)) continue;
           const Tile& tile = world.At(x, y);
-          if (tile.type != TileType::Land || tile.burning) continue;
+          if ((tile.type != TileType::Land && tile.type != TileType::Sand) || tile.burning) continue;
           if (tile.food <= 0) continue;
 
           int score = static_cast<int>(world.FoodScentAt(x, y)) + tile.food * 200;
@@ -2553,7 +2896,7 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
           int y = settlement.centerY + dy;
           if (!world.InBounds(x, y)) continue;
           const Tile& tile = world.At(x, y);
-          if (tile.type != TileType::Land || tile.burning) continue;
+          if ((tile.type != TileType::Land && tile.type != TileType::Sand) || tile.burning) continue;
           if (tile.food <= 0) continue;
 
           int dist = std::abs(dx) + std::abs(dy);
@@ -2742,6 +3085,73 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
       }
     }
 
+    auto hasPlannedBuilding = [&](BuildingType type) {
+      for (int idx = settlement.taskHead; idx != settlement.taskTail;
+           idx = (idx + 1) % Settlement::kTaskCap) {
+        const Task& task = settlement.tasks[idx];
+        if (task.type == TaskType::BuildStructure && task.buildType == type) return true;
+      }
+      return false;
+    };
+
+    auto pushEconomyBuilding = [&](BuildingType type, int radius) {
+      int bestX = -1;
+      int bestY = -1;
+      int bestScore = std::numeric_limits<int>::min();
+      for (int sample = 0; sample < 18; ++sample) {
+        int dx = rng.RangeInt(-radius, radius);
+        int dy = rng.RangeInt(-radius, radius);
+        int x = settlement.centerX + dx;
+        int y = settlement.centerY + dy;
+        if (!IsBuildableTileForSettlement(world, *this, settlement.id, x, y)) continue;
+        const Tile& tile = world.At(x, y);
+        int dist = std::abs(dx) + std::abs(dy);
+        int score = -dist * 12 - tile.trees * 3 - tile.food * 2;
+        if (type == BuildingType::Market) {
+          score += settlement.isCapital ? 40 : 0;
+        } else if (type == BuildingType::Forge) {
+          score += settlement.stockMetal;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestX = x;
+          bestY = y;
+        }
+      }
+      if (bestX == -1 || bestY == -1) return false;
+      Task task;
+      task.type = TaskType::BuildStructure;
+      task.x = bestX;
+      task.y = bestY;
+      task.amount = 0;
+      task.settlementId = settlement.id;
+      task.buildType = type;
+      return settlement.PushTask(task);
+    };
+
+    if (available > 0 && !foodEmergency && settlement.markets == 0 &&
+        !hasPlannedBuilding(BuildingType::Market) &&
+        (settlement.tier != SettlementTier::Village || settlement.population >= 45 ||
+         settlement.isCapital) &&
+        settlement.economyProsperity >= 25 &&
+        settlement.stockWood >= Settlement::kMarketWoodCost &&
+        settlement.stockStone >= Settlement::kMarketStoneCost) {
+      if (pushEconomyBuilding(BuildingType::Market, kMarketBuildRadius)) {
+        available--;
+      }
+    }
+
+    if (available > 0 && !foodEmergency && settlement.forges == 0 &&
+        !hasPlannedBuilding(BuildingType::Forge) &&
+        (settlement.techTier >= 1 || settlement.population >= 55 || settlement.soldiers >= 8) &&
+        settlement.stockWood >= Settlement::kForgeWoodCost &&
+        settlement.stockStone >= Settlement::kForgeStoneCost &&
+        settlement.stockMetal >= Settlement::kForgeMetalCost) {
+      if (pushEconomyBuilding(BuildingType::Forge, kForgeBuildRadius)) {
+        available--;
+      }
+    }
+
     int patrols = std::min(settlement.guards + settlement.soldiers, available);
     for (int i = 0; i < patrols; ++i) {
       int bestX = settlement.centerX;
@@ -2771,10 +3181,150 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
   }
 }
 
-void SettlementManager::RunSettlementEconomy(World& world, Random& rng) {
+void SettlementManager::UpdateCaravans() {
+  for (auto& caravan : caravans_) {
+    const Settlement* from = Get(caravan.fromSettlementId);
+    const Settlement* to = Get(caravan.toSettlementId);
+    if (!to) {
+      caravan.progress = 1.0f;
+      continue;
+    }
+    caravan.progress = std::min(1.0f, caravan.progress + caravan.travelPerDay);
+    float fromX = from ? static_cast<float>(from->centerX) + 0.5f : caravan.x;
+    float fromY = from ? static_cast<float>(from->centerY) + 0.5f : caravan.y;
+    float toX = static_cast<float>(to->centerX) + 0.5f;
+    float toY = static_cast<float>(to->centerY) + 0.5f;
+    caravan.x = fromX + (toX - fromX) * caravan.progress;
+    caravan.y = fromY + (toY - fromY) * caravan.progress;
+  }
+
+  for (auto it = caravans_.begin(); it != caravans_.end();) {
+    if (it->progress < 1.0f) {
+      ++it;
+      continue;
+    }
+    Settlement* target = GetMutable(it->toSettlementId);
+    if (target && it->amount > 0) {
+      StockForResource(*target, it->resource) += it->amount;
+      UpdateEconomyMood(*target);
+    }
+    it = caravans_.erase(it);
+  }
+}
+
+void SettlementManager::TryCreateTradeCaravans(int dayCount, const FactionManager& factions) {
+  if (dayCount % kTradeCheckIntervalDays != 0) return;
+  if (settlements_.size() < 2) return;
+
+  auto hasActiveSourceCaravan = [&](int settlementId) {
+    for (const auto& caravan : caravans_) {
+      if (caravan.fromSettlementId == settlementId) return true;
+    }
+    return false;
+  };
+
+  constexpr TradeResource kTradeResources[] = {
+      TradeResource::Food, TradeResource::Wood, TradeResource::Stone,
+      TradeResource::Metal, TradeResource::Gold};
+
+  for (auto& source : settlements_) {
+    if (source.population <= 0 || source.factionId <= 0) continue;
+    if (hasActiveSourceCaravan(source.id)) continue;
+
+    int bestScore = std::numeric_limits<int>::min();
+    int bestTargetId = -1;
+    TradeResource bestResource = TradeResource::Food;
+    int bestAmount = 0;
+
+    for (const auto& target : settlements_) {
+      if (target.id == source.id || target.population <= 0 || target.factionId <= 0) continue;
+      if (source.factionId != target.factionId) {
+        if (factions.IsAtWar(source.factionId, target.factionId)) continue;
+        if (factions.RelationType(source.factionId, target.factionId) != FactionRelation::Ally) {
+          continue;
+        }
+      }
+
+      int dist = std::abs(source.centerX - target.centerX) + std::abs(source.centerY - target.centerY);
+      if (dist <= 0 || dist > kTradeMaxDistanceTiles) continue;
+
+      for (TradeResource resource : kTradeResources) {
+        const ResourcePressure& sourcePressure = source.resourcePressure[TradeResourceIndex(resource)];
+        const ResourcePressure& targetPressure = target.resourcePressure[TradeResourceIndex(resource)];
+        int surplus = sourcePressure.surplus;
+        int shortage = targetPressure.shortage;
+        if (resource == TradeResource::Gold) {
+          if (!target.isCapital && target.tier == SettlementTier::Village) continue;
+          surplus = std::max(0, StockForResource(source, resource) -
+                                    std::max(sourcePressure.desired, 12));
+          shortage = targetPressure.shortage;
+        }
+        if (surplus < kTradeMinShipment || shortage < kTradeMinShipment) continue;
+
+        int maxShipment = kTradeMaxShipment;
+        if (source.markets > 0 || target.markets > 0) maxShipment += 45;
+        int amount = std::min(maxShipment, std::min(surplus / 2, shortage));
+        if (amount < kTradeMinShipment) continue;
+
+        int score = targetPressure.demandScore * 6 + sourcePressure.supplyScore * 3 +
+                    amount * 2 - dist;
+        if (source.factionId == target.factionId) score += 35;
+        if (resource == TradeResource::Food && target.stockFood < target.population * kEmergencyFoodPerPop) {
+          score += 120;
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          bestTargetId = target.id;
+          bestResource = resource;
+          bestAmount = amount;
+        }
+      }
+    }
+
+    if (bestTargetId <= 0 || bestAmount <= 0) continue;
+    Settlement* sourceNow = GetMutable(source.id);
+    const Settlement* target = Get(bestTargetId);
+    if (!sourceNow || !target) continue;
+    int& sourceStock = StockForResource(*sourceNow, bestResource);
+    if (sourceStock < bestAmount) continue;
+    sourceStock -= bestAmount;
+
+    int dist = std::abs(sourceNow->centerX - target->centerX) +
+               std::abs(sourceNow->centerY - target->centerY);
+    float speedTilesPerDay = (sourceNow->markets > 0 || target->markets > 0) ? 24.0f : 18.0f;
+    float travelPerDay = speedTilesPerDay / static_cast<float>(std::max(18, dist));
+    travelPerDay = std::max(0.035f, std::min(0.22f, travelPerDay));
+
+    TradeCaravan caravan;
+    caravan.id = nextCaravanId_++;
+    caravan.fromSettlementId = sourceNow->id;
+    caravan.toSettlementId = target->id;
+    caravan.factionId = sourceNow->factionId;
+    caravan.resource = bestResource;
+    caravan.amount = bestAmount;
+    caravan.progress = 0.0f;
+    caravan.travelPerDay = travelPerDay;
+    caravan.x = static_cast<float>(sourceNow->centerX) + 0.5f;
+    caravan.y = static_cast<float>(sourceNow->centerY) + 0.5f;
+    caravans_.push_back(caravan);
+    UpdateEconomyMood(*sourceNow);
+  }
+}
+
+void SettlementManager::RunSettlementEconomy(World& world, Random& rng, int dayCount,
+                                             const FactionManager& factions) {
+  UpdateCaravans();
+
   for (auto& settlement : settlements_) {
     int pop = settlement.population;
+    settlement.lastStoneProduced = 0;
+    settlement.lastMetalProduced = 0;
+    settlement.lastGoldProduced = 0;
     if (pop <= 0) continue;
+    if (settlement.stoneDeposit == 0 && settlement.metalDeposit == 0 &&
+        settlement.goldDeposit == 0 && settlement.ageDays <= 2) {
+      InitializeSettlementDeposits(settlement);
+    }
 
     int desiredWood = pop * kDesiredWoodPerPop;
     if (settlement.stockFood > pop * 4 && settlement.stockWood < desiredWood) {
@@ -2798,7 +3348,69 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng) {
         }
       }
     }
+
+    const bool foodEmergency = settlement.stockFood < pop * kEmergencyFoodPerPop;
+    int miningLabor = settlement.idle + settlement.gatherers / 4 + settlement.builders / 5;
+    if (settlement.tier != SettlementTier::Village) {
+      miningLabor += settlement.population / 18;
+    }
+    miningLabor += settlement.techTier;
+    if (foodEmergency) {
+      miningLabor /= 4;
+    }
+    miningLabor = std::max(0, std::min(80, miningLabor));
+
+    int desiredStone = pop * kDesiredStonePerPop + settlement.houses + settlement.townHalls * 8;
+    int desiredMetal = std::max(8, pop * kDesiredMetalPerPop / 2 + settlement.soldiers);
+    if (miningLabor > 0 && settlement.stoneDeposit > 0 &&
+        (settlement.stockStone < desiredStone || settlement.tier != SettlementTier::Village)) {
+      int yield = std::max(1, (miningLabor + 3 + settlement.techTier) / 4);
+      yield = std::min(yield, settlement.stoneDeposit);
+      settlement.stoneDeposit -= yield;
+      settlement.stockStone += yield;
+      settlement.lastStoneProduced = yield;
+    }
+
+    if (miningLabor > 1 && settlement.metalDeposit > 0 &&
+        (settlement.techTier > 0 || settlement.soldiers > 0 || settlement.population >= 30) &&
+        settlement.stockMetal < desiredMetal * 2) {
+      int yield = std::max(1, (miningLabor + settlement.techTier * 2) / 8);
+      yield = std::min(yield, settlement.metalDeposit);
+      settlement.metalDeposit -= yield;
+      settlement.stockMetal += yield;
+      settlement.lastMetalProduced = yield;
+    }
+
+    if (miningLabor > 2 && settlement.goldDeposit > 0 &&
+        (settlement.tier != SettlementTier::Village || settlement.techTier > 0 ||
+         settlement.population >= 35)) {
+      float chance = 0.10f + std::min(0.45f, static_cast<float>(miningLabor) * 0.012f);
+      if (settlement.isCapital) chance += 0.08f;
+      if (rng.Chance(chance)) {
+        int yield = 1 + ((settlement.techTier >= 2 && miningLabor > 20) ? 1 : 0);
+        yield = std::min(yield, settlement.goldDeposit);
+        settlement.goldDeposit -= yield;
+        settlement.stockGold += yield;
+        settlement.lastGoldProduced = yield;
+      }
+    }
+
+    if (settlement.forges > 0 && settlement.stockMetal > 0) {
+      int toolOutput = std::min(settlement.stockMetal, std::max(1, settlement.builders / 8));
+      settlement.stockMetal -= toolOutput;
+      settlement.stockWood += toolOutput;
+      settlement.stockStone += toolOutput / 2;
+    }
+
+    if (settlement.soldiers > 0 && settlement.stockMetal > 0 && settlement.warPressure > 0) {
+      int used = std::min(settlement.stockMetal, std::max(1, settlement.soldiers / 25));
+      settlement.stockMetal -= used;
+    }
+
+    UpdateEconomyMood(settlement);
   }
+
+  TryCreateTradeCaravans(dayCount, factions);
 }
 
 void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& rng, int dayCount,
@@ -2815,7 +3427,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   }
   RecomputeZoneOwners(world);
   RecomputeZonePop(world, humans, dayDelta);
-  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
+  TryFoundNewSettlements(world, &humans, rng, dayCount, markers, factions);
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);
   } else {
@@ -2830,7 +3442,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   UpdateSettlementEvolution(factions, rng);
   ApplyConflictImpact(world, humans, rng, dayCount, factions);
   GenerateTasks(world, rng, factions, dayCount);
-  RunSettlementEconomy(world, rng);
+  RunSettlementEconomy(world, rng, dayCount, factions);
   if (homeFieldDirty_) {
     world.RecomputeHomeField(*this);
     homeFieldDirty_ = false;
@@ -2849,7 +3461,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   }
   RecomputeZoneOwners(world);
   RecomputeZonePopMacro();
-  TryFoundNewSettlements(world, rng, dayCount, markers, factions);
+  TryFoundNewSettlements(world, nullptr, rng, dayCount, markers, factions);
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);
   } else {
@@ -2927,6 +3539,32 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
       settlement.farms++;
       farmBudget--;
     }
+
+    if (settlement.markets == 0 && !settlement.debugFoodEmergency &&
+        (settlement.tier != SettlementTier::Village || settlement.population >= 45 ||
+         settlement.isCapital) &&
+        settlement.economyProsperity >= 25 &&
+        settlement.stockWood >= Settlement::kMarketWoodCost &&
+        settlement.stockStone >= Settlement::kMarketStoneCost) {
+      if (placeBuilding(settlement, BuildingType::Market, kMarketBuildRadius)) {
+        settlement.stockWood = std::max(0, settlement.stockWood - Settlement::kMarketWoodCost);
+        settlement.stockStone = std::max(0, settlement.stockStone - Settlement::kMarketStoneCost);
+        settlement.markets++;
+      }
+    }
+
+    if (settlement.forges == 0 && !settlement.debugFoodEmergency &&
+        (settlement.techTier >= 1 || settlement.population >= 55 || settlement.soldiers >= 8) &&
+        settlement.stockWood >= Settlement::kForgeWoodCost &&
+        settlement.stockStone >= Settlement::kForgeStoneCost &&
+        settlement.stockMetal >= Settlement::kForgeMetalCost) {
+      if (placeBuilding(settlement, BuildingType::Forge, kForgeBuildRadius)) {
+        settlement.stockWood = std::max(0, settlement.stockWood - Settlement::kForgeWoodCost);
+        settlement.stockStone = std::max(0, settlement.stockStone - Settlement::kForgeStoneCost);
+        settlement.stockMetal = std::max(0, settlement.stockMetal - Settlement::kForgeMetalCost);
+        settlement.forges++;
+      }
+    }
   }
 
   for (uint64_t coord : world.BuildingTiles()) {
@@ -2937,6 +3575,8 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
       world.EditTile(x, y, [&](Tile& t) { t.farmStage = 1; });
     }
   }
+
+  RunSettlementEconomy(world, rng, dayCount, factions);
 
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);

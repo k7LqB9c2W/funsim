@@ -36,6 +36,7 @@ struct RenderOverlayConfig {
   bool showTroopCountsAllZones = false;  // Otherwise only conflict zones.
   bool showSoldierTileMarkers = true;    // Draw green tile highlights under soldiers.
   bool showChunkBoundaries = false;      // Debug: draw terrain cache chunk boundaries.
+  bool showHumans = true;                // Draw individual human sprites and their shadows.
 };
 
 class Renderer {
@@ -82,12 +83,16 @@ class Renderer {
 
   SDL_Texture* humansTexture_ = nullptr;
   SDL_Texture* soldierTexture_ = nullptr;
+  SDL_Texture* farmerTexture_ = nullptr;
+  SDL_Texture* caravanTexture_ = nullptr;
   SDL_Texture* tilesTexture_ = nullptr;
   SDL_Texture* terrainOverlayTexture_ = nullptr;
   SDL_Texture* objectsTexture_ = nullptr;
   SDL_Texture* buildingsTexture_ = nullptr;
   SDL_Texture* townHallTexture_ = nullptr;
   SDL_Texture* capitalTexture_ = nullptr;
+  SDL_Texture* marketTexture_ = nullptr;
+  SDL_Texture* forgeTexture_ = nullptr;
   SDL_Texture* treeTexture_ = nullptr;
   SDL_Texture* tree1Texture_ = nullptr;
   SDL_Texture* grainTexture_ = nullptr;
@@ -102,10 +107,18 @@ class Renderer {
   int spriteHeight_ = 32;
   int soldierSpriteWidth_ = 16;
   int soldierSpriteHeight_ = 16;
+  int farmerSpriteWidth_ = 16;
+  int farmerSpriteHeight_ = 16;
+  int caravanTexW_ = 0;
+  int caravanTexH_ = 0;
   int townHallTexW_ = 0;
   int townHallTexH_ = 0;
   int capitalTexW_ = 0;
   int capitalTexH_ = 0;
+  int marketTexW_ = 0;
+  int marketTexH_ = 0;
+  int forgeTexW_ = 0;
+  int forgeTexH_ = 0;
   int treeTexW_ = 0;
   int treeTexH_ = 0;
   SDL_Rect treeTrunkSrc_{0, 0, 0, 0};

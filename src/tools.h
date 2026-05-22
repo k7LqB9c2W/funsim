@@ -2,7 +2,8 @@
 
 enum class ToolType {
   SelectKingdom,
-  PlaceLand,
+  PlaceGrass,
+  PlaceSand,
   PlaceFreshWater,
   AddTrees,
   AddFood,

@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 
@@ -13,7 +14,8 @@
 namespace {
 const ToolType kToolOrder[] = {
     ToolType::SelectKingdom,
-    ToolType::PlaceLand,     ToolType::PlaceFreshWater, ToolType::AddTrees,
+    ToolType::PlaceGrass,    ToolType::PlaceSand,       ToolType::PlaceFreshWater,
+    ToolType::AddTrees,
     ToolType::AddFood,       ToolType::SpawnMale,       ToolType::SpawnFemale,
     ToolType::Fire,          ToolType::Meteor,          ToolType::GiftFood,
 };
@@ -32,6 +34,38 @@ const Human* FindHumanById(const HumanManager& humans, int id) {
   }
   return nullptr;
 }
+
+const char* EconomyLabel(const Settlement& settlement) {
+  if (settlement.economyStress >= 70) return "Crisis";
+  if (settlement.stockFood < std::max(1, settlement.population * 12)) return "Food Shortage";
+  if (settlement.lastGoldProduced > 0) return "Gold Rush";
+  if (settlement.lastMetalProduced > 0) return "Ore Strike";
+  if (settlement.economyProsperity >= 65) return "Prosperous";
+  if (settlement.economyStress >= 35) return "Strained";
+  if (settlement.stoneDeposit + settlement.metalDeposit + settlement.goldDeposit <= 0 &&
+      settlement.stockStone + settlement.stockMetal + settlement.stockGold > 0) {
+    return "Mines Depleted";
+  }
+  if (settlement.stockWood < std::max(4, settlement.population * 2)) return "Wood Shortage";
+  return "Stable";
+}
+
+TradeResource TradeResourceByIndex(int index) {
+  switch (index) {
+    case 0:
+      return TradeResource::Food;
+    case 1:
+      return TradeResource::Wood;
+    case 2:
+      return TradeResource::Stone;
+    case 3:
+      return TradeResource::Metal;
+    case 4:
+      return TradeResource::Gold;
+    default:
+      return TradeResource::Food;
+  }
+}
 }  // namespace
 
 void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
@@ -47,7 +81,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Separator();
   ImGui::Text("Debug");
   ImGui::Checkbox("War Debug Window", &state.warDebugOpen);
-  ImGui::Checkbox("Spawn Food When Placing Land", &state.spawnFoodOnLandPlacement);
+  ImGui::Checkbox("Spawn Food When Placing Grass", &state.spawnFoodOnLandPlacement);
   ImGui::Separator();
   for (ToolType tool : kToolOrder) {
     bool selected = (state.tool == tool);
@@ -78,6 +112,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
     state.overlayMode = static_cast<OverlayMode>(overlayIndex);
   }
   ImGui::Checkbox("Whole Map View", &state.wholeMapView);
+  ImGui::Checkbox("Hide Humans When Fully Zoomed Out", &state.hideHumansWhenFullyZoomedOut);
 
   ImGui::Separator();
   ImGui::Text("Map");
@@ -156,10 +191,16 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Text("Settlements: %lld", static_cast<long long>(stats.totalSettlements));
   ImGui::Text("Stock Food: %lld", static_cast<long long>(stats.totalStockFood));
   ImGui::Text("Stock Wood: %lld", static_cast<long long>(stats.totalStockWood));
+  ImGui::Text("Stock Stone/Metal/Gold: %lld/%lld/%lld",
+              static_cast<long long>(stats.totalStockStone),
+              static_cast<long long>(stats.totalStockMetal),
+              static_cast<long long>(stats.totalStockGold));
   ImGui::Text("Houses: %lld", static_cast<long long>(stats.totalHouses));
   ImGui::Text("Farms: %lld", static_cast<long long>(stats.totalFarms));
   ImGui::Text("Granaries: %lld", static_cast<long long>(stats.totalGranaries));
   ImGui::Text("Wells: %lld", static_cast<long long>(stats.totalWells));
+  ImGui::Text("Markets: %lld | Forges: %lld", static_cast<long long>(stats.totalMarkets),
+              static_cast<long long>(stats.totalForges));
   ImGui::Text("Town Halls: %lld", static_cast<long long>(stats.totalTownHalls));
   ImGui::Text("Housing Cap: %lld", static_cast<long long>(stats.totalHousingCap));
   ImGui::Text("Villages/Towns/Cities: %lld/%lld/%lld",
@@ -191,8 +232,9 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::TextColored(color, "%s", faction->name.c_str());
       ImGui::Text("Leader: %s %s", faction->leaderTitle.c_str(), faction->leaderName.c_str());
       ImGui::Text("Ideology: %s", faction->ideology.c_str());
-      ImGui::Text("Settlement %d | Pop %d | Stock %d food, %d wood", settlement->id,
-                  settlement->population, settlement->stockFood, settlement->stockWood);
+      ImGui::Text("Settlement %d | Pop %d | Stock F/W/S/M/G %d/%d/%d/%d/%d", settlement->id,
+                  settlement->population, settlement->stockFood, settlement->stockWood,
+                  settlement->stockStone, settlement->stockMetal, settlement->stockGold);
       ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement->tier),
                   settlement->techTier, settlement->stability);
       ImGui::Text("Border Pressure: %d | War Pressure: %d | Claim Radius %d",
@@ -237,7 +279,9 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Population: %d", faction.stats.population);
       ImGui::Text("Settlements: %d | Territory Zones: %d", faction.stats.settlements,
                   faction.stats.territoryZones);
-      ImGui::Text("Resources: %d food, %d wood", faction.stats.stockFood, faction.stats.stockWood);
+      ImGui::Text("Resources F/W/S/M/G: %d/%d/%d/%d/%d", faction.stats.stockFood,
+                  faction.stats.stockWood, faction.stats.stockStone, faction.stats.stockMetal,
+                  faction.stats.stockGold);
       if (faction.allianceId > 0) {
         const Alliance* alliance = factions.GetAlliance(faction.allianceId);
         if (alliance) {
@@ -354,7 +398,9 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Separator();
       ImGui::Text("Population: %d | Settlements: %d | Zones: %d", faction->stats.population,
                   faction->stats.settlements, faction->stats.territoryZones);
-      ImGui::Text("Stock: %d food, %d wood", faction->stats.stockFood, faction->stats.stockWood);
+      ImGui::Text("Stock F/W/S/M/G: %d/%d/%d/%d/%d", faction->stats.stockFood,
+                  faction->stats.stockWood, faction->stats.stockStone, faction->stats.stockMetal,
+                  faction->stats.stockGold);
 
       ImGui::Separator();
       ImGui::Text("Diplomacy (Force)");
@@ -461,8 +507,10 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                     fac ? fac->name.c_str() : "no faction", settlement->centerX, settlement->centerY);
         ImGui::Text("Pop %d soldiers %d border %d warPressure %d", settlement->population, settlement->soldiers,
                     settlement->borderPressure, settlement->warPressure);
-        ImGui::Text("Stock: food %d wood %d | Stability %d unrest %d", settlement->stockFood, settlement->stockWood,
-                    settlement->stability, settlement->unrest);
+        ImGui::Text("Stock F/W/S/M/G: %d/%d/%d/%d/%d | Stability %d unrest %d",
+                    settlement->stockFood, settlement->stockWood, settlement->stockStone,
+                    settlement->stockMetal, settlement->stockGold, settlement->stability,
+                    settlement->unrest);
         ImGui::Text("Role targets: F%d G%d B%d Guard%d Soldier%d Scout%d Idle%d",
                     settlement->debugTargetFarmers, settlement->debugTargetGatherers, settlement->debugTargetBuilders,
                     settlement->debugTargetGuards, settlement->debugTargetSoldiers, settlement->debugTargetScouts,
@@ -575,6 +623,24 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
     return;
   }
 
+  ImGui::Text("Active Caravans: %d", static_cast<int>(settlements.Caravans().size()));
+  for (const auto& caravan : settlements.Caravans()) {
+    const Settlement* from = settlements.Get(caravan.fromSettlementId);
+    const Settlement* to = settlements.Get(caravan.toSettlementId);
+    ImGui::BulletText("#%d %d %s: %s %d -> %d (%.0f%%)", caravan.id, caravan.amount,
+                      TradeResourceName(caravan.resource),
+                      from ? SettlementTierName(from->tier) : "settlement",
+                      caravan.fromSettlementId, caravan.toSettlementId,
+                      static_cast<double>(caravan.progress * 100.0f));
+    if (to && to->factionId > 0) {
+      const Faction* faction = factions.Get(to->factionId);
+      if (faction) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", faction->name.c_str());
+      }
+    }
+  }
+
   for (const auto& settlement : settlements.Settlements()) {
     ImGui::Separator();
     const Faction* faction = factions.Get(settlement.factionId);
@@ -586,8 +652,36 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Settlement %d", settlement.id);
     }
 
-    ImGui::Text("Population: %d | Stock Food: %d | Stock Wood: %d", settlement.population,
-                settlement.stockFood, settlement.stockWood);
+    ImGui::Text("Population: %d | Status: %s", settlement.population, EconomyLabel(settlement));
+    ImGui::Text("Stock F/W/S/M/G: %d/%d/%d/%d/%d", settlement.stockFood, settlement.stockWood,
+                settlement.stockStone, settlement.stockMetal, settlement.stockGold);
+    ImGui::Text("Deposits S/M/G: %d/%d/%d | Today +%d/+%d/+%d", settlement.stoneDeposit,
+                settlement.metalDeposit, settlement.goldDeposit, settlement.lastStoneProduced,
+                settlement.lastMetalProduced, settlement.lastGoldProduced);
+    ImGui::Text("Prosperity: %d | Stress: %d", settlement.economyProsperity,
+                settlement.economyStress);
+    if (ImGui::TreeNodeEx("Supply / Demand", ImGuiTreeNodeFlags_DefaultOpen)) {
+      for (int i = 0; i < kTradeResourceCount; ++i) {
+        const ResourcePressure& pressure = settlement.resourcePressure[static_cast<size_t>(i)];
+        const TradeResource resource = TradeResourceByIndex(i);
+        ImGui::PushID(i);
+        ImGui::Text("%s: stock %d / target %d | short %d | surplus %d | value %d",
+                    TradeResourceName(resource), pressure.stock, pressure.desired,
+                    pressure.shortage, pressure.surplus, pressure.valueScore);
+        float width = std::max(80.0f, ImGui::GetContentRegionAvail().x);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.86f, 0.25f, 0.20f, 1.0f));
+        ImGui::ProgressBar(static_cast<float>(pressure.demandScore) / 100.0f,
+                           ImVec2(width * 0.48f, 0.0f), "Demand");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.25f, 0.62f, 0.30f, 1.0f));
+        ImGui::ProgressBar(static_cast<float>(pressure.supplyScore) / 100.0f,
+                           ImVec2(width * 0.48f, 0.0f), "Supply");
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+      }
+      ImGui::TreePop();
+    }
     ImGui::Text("Tier: %s | Tech %d | Stability %d", SettlementTierName(settlement.tier),
                 settlement.techTier, settlement.stability);
     if (settlement.isCapital) {
@@ -597,7 +691,8 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                 settlement.scouts);
     ImGui::Text("Farms: %d total | %d planted | %d ready", settlement.farms, settlement.farmsPlanted,
                 settlement.farmsReady);
-    ImGui::Text("Granaries: %d", settlement.granaries);
+    ImGui::Text("Granaries: %d | Markets: %d | Forges: %d", settlement.granaries,
+                settlement.markets, settlement.forges);
     ImGui::Text("Farmers: %d | Gatherers: %d", settlement.farmers, settlement.gatherers);
 
     int harvestTasks = 0;

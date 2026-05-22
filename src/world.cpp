@@ -96,8 +96,11 @@ uint8_t ClampU8(int value) {
 }
 
 inline uint16_t BaseFoodFromTile(const Tile& tile) {
-  if (tile.type != TileType::Land || tile.burning) return 0;
-  int value = static_cast<int>(tile.food) * 120 + static_cast<int>(tile.trees) * 8;
+  if ((tile.type != TileType::Land && tile.type != TileType::Sand) || tile.burning) return 0;
+  int value = static_cast<int>(tile.food) * 120;
+  if (tile.type == TileType::Land) {
+    value += static_cast<int>(tile.trees) * 8;
+  }
   if (tile.building == BuildingType::Farm && tile.farmStage >= Settlement::kFarmReadyStage) {
     value += 600;
   }
@@ -751,12 +754,12 @@ bool World::LoadMap(const std::string& path) {
     int x = static_cast<int>(i % header.width);
     int y = static_cast<int>(i / header.width);
     Tile tile{};
-    if (typeRaw <= static_cast<uint8_t>(TileType::FreshWater)) {
+    if (typeRaw <= static_cast<uint8_t>(TileType::Sand)) {
       tile.type = static_cast<TileType>(typeRaw);
     } else {
       tile.type = TileType::Ocean;
     }
-    if (tile.type == TileType::Land) {
+    if (tile.type == TileType::Land || tile.type == TileType::Sand) {
       tile.trees = trees;
       tile.food = food;
     }
