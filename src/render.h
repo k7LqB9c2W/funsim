@@ -62,15 +62,6 @@ class Renderer {
               bool hoverValid, int brushSize, OverlayMode overlayMode, const RenderOverlayConfig& config);
 
  private:
-  void DestroyTerrainCache();
-  void EnsureTerrainCache(SDL_Renderer* renderer, World& world);
-  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY, int maxX,
-                           int maxY);
-  void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
-  void ClearLabelCache();
-  void UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
-                        const FactionManager& factions);
-
   struct TerrainChunk {
     SDL_Texture* texture = nullptr;
     int originX = 0;
@@ -80,6 +71,17 @@ class Renderer {
     bool dirty = true;
     uint64_t lastUsedFrame = 0;
   };
+
+  void DestroyTerrainCache();
+  void EnsureTerrainCache(SDL_Renderer* renderer, World& world, bool includeStaticDetails);
+  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY, int maxX,
+                           int maxY, bool includeStaticDetails, const SettlementManager& settlements);
+  void DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& world,
+                                   const SettlementManager& settlements, const TerrainChunk& chunk);
+  void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
+  void ClearLabelCache();
+  void UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
+                        const FactionManager& factions);
 
   SDL_Texture* humansTexture_ = nullptr;
   SDL_Texture* soldierTexture_ = nullptr;
@@ -140,6 +142,7 @@ class Renderer {
   int chunksX_ = 0;
   int chunksY_ = 0;
   bool terrainDirty_ = true;
+  bool terrainCacheIncludesStaticDetails_ = false;
   std::vector<TerrainChunk> chunks_;
   std::vector<int> terrainTextureIndices_;
   uint64_t frameCounter_ = 0;

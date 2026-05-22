@@ -338,6 +338,20 @@ bool TaskTargetsTile(TaskType type) {
   }
 }
 
+Goal GoalForTaskTarget(TaskType type) {
+  switch (type) {
+    case TaskType::CollectFood:
+      return Goal::SeekFood;
+    case TaskType::CollectWood:
+    case TaskType::HarvestFarm:
+    case TaskType::PlantFarm:
+    case TaskType::BuildStructure:
+      return Goal::GoToTask;
+    default:
+      return Goal::Wander;
+  }
+}
+
 bool SameFaction(const SettlementManager& settlements, int settlementA, int settlementB) {
   if (settlementA <= 0 || settlementB <= 0) return false;
   const Settlement* a = settlements.Get(settlementA);
@@ -996,15 +1010,15 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
     human.goal = Goal::FleeFire;
     human.mateTargetId = -1;
   } else if (hungry) {
-    human.goal = Goal::SeekFood;
     human.mateTargetId = -1;
     if (!SettlementHasStockFood(settlements, human)) {
+      human.goal = Goal::SeekFood;
       if (!TryPickNoStockFoodTarget(human, world, settlements, rng, tickCount)) {
         PickNoStockFoodExploreTarget(human, world, settlements, tickCount);
       }
     } else {
-      human.targetX = human.x;
-      human.targetY = human.y;
+      human.goal = Goal::StayHome;
+      StayTarget(human, human.targetX, human.targetY);
     }
   } else if (human.hasTask) {
     switch (human.taskType) {
@@ -1013,7 +1027,7 @@ void HumanManager::ReplanGoal(Human& human, const World& world, const Settlement
       case TaskType::HarvestFarm:
       case TaskType::PlantFarm:
       case TaskType::BuildStructure:
-        human.goal = Goal::SeekFood;
+        human.goal = GoalForTaskTarget(human.taskType);
         human.targetX = human.taskX;
         human.targetY = human.taskY;
         break;
@@ -1158,12 +1172,15 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
       human.hasTask = false;
     }
     human.mateTargetId = -1;
-  } else if (hungry && human.goal != Goal::SeekFood) {
+  } else if (hungry) {
     if (haulingFood) {
       human.goal = Goal::StayHome;
       human.targetX = human.taskX;
       human.targetY = human.taskY;
-    } else {
+    } else if (SettlementHasStockFood(settlements, human)) {
+      human.goal = Goal::StayHome;
+      StayTarget(human, human.targetX, human.targetY);
+    } else if (human.goal != Goal::SeekFood) {
       human.goal = Goal::SeekFood;
       human.forceReplan = true;
       if (human.hasTask && !human.carrying && human.taskType != TaskType::CollectFood &&
@@ -1256,7 +1273,7 @@ void HumanManager::UpdateMoveStep(Human& human, World& world, SettlementManager&
         human.taskSettlementId = task.settlementId;
         human.taskBuildType = task.buildType;
         if (TaskTargetsTile(task.type)) {
-          human.goal = Goal::SeekFood;
+          human.goal = GoalForTaskTarget(task.type);
           human.targetX = task.x;
           human.targetY = task.y;
         } else if (task.type == TaskType::HaulToStockpile ||
@@ -1413,6 +1430,7 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
   if (humans_.empty()) return;
 
   CrashContextSetStage("Humans::UpdateTick");
+  const bool trackCrashHuman = CrashContextHumanEnabled();
   const int w = world.width();
   const int h = world.height();
   EnsureCrowdGrids(w, h);
@@ -1534,7 +1552,7 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
 
   for (auto& human : humans_) {
     if (!human.alive) continue;
-    CrashContextSetHuman(human.id, human.x, human.y);
+    if (trackCrashHuman) CrashContextSetHuman(human.id, human.x, human.y);
 
     if (human.rethinkCooldownTicks > 0) {
       human.rethinkCooldownTicks--;
@@ -1580,7 +1598,7 @@ void HumanManager::UpdateTick(World& world, SettlementManager& settlements, Rand
 
     for (auto& human : humans_) {
       if (!human.alive) continue;
-      CrashContextSetHuman(human.id, human.x, human.y);
+      if (trackCrashHuman) CrashContextSetHuman(human.id, human.x, human.y);
 
       float speedScale = 1.0f;
       if (human.role == Role::Idle) {
@@ -2111,9 +2129,10 @@ void HumanManager::UpdateDailyCoarse(World& world, SettlementManager& settlement
   newborns_.clear();
 
   CrashContextSetStage("Humans::UpdateDailyCoarse loop");
+  const bool trackCrashHuman = CrashContextHumanEnabled();
   for (auto& human : humans_) {
     if (!human.alive) continue;
-    CrashContextSetHuman(human.id, human.x, human.y);
+    if (trackCrashHuman) CrashContextSetHuman(human.id, human.x, human.y);
     CrashContextSetNote("daily:begin");
 
     if (static_cast<unsigned>(human.x) >= static_cast<unsigned>(w) ||

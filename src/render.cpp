@@ -1234,7 +1234,7 @@ void Renderer::BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeig
   }
 }
 
-void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
+void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world, bool includeStaticDetails) {
   bool fullRebuild = false;
   if (world.width() != worldWidth_ || world.height() != worldHeight_) {
     DestroyTerrainCache();
@@ -1244,6 +1244,39 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
     fullRebuild = true;
     terrainDirty_ = true;
   }
+  if (terrainCacheIncludesStaticDetails_ != includeStaticDetails) {
+    terrainCacheIncludesStaticDetails_ = includeStaticDetails;
+    terrainDirty_ = true;
+    for (auto& chunk : chunks_) {
+      chunk.dirty = true;
+    }
+  }
+
+  auto markDirtyChunks = [&](int minX, int minY, int maxX, int maxY, int padding) {
+    if (worldWidth_ <= 0 || worldHeight_ <= 0) return;
+    minX = std::max(0, minX);
+    minY = std::max(0, minY);
+    maxX = std::min(worldWidth_ - 1, maxX);
+    maxY = std::min(worldHeight_ - 1, maxY);
+    if (minX > maxX || minY > maxY) return;
+
+    int paddedMinX = std::max(0, minX - padding);
+    int paddedMinY = std::max(0, minY - padding);
+    int paddedMaxX = std::min(worldWidth_ - 1, maxX + padding);
+    int paddedMaxY = std::min(worldHeight_ - 1, maxY + padding);
+    int minChunkX = paddedMinX / chunkTiles_;
+    int maxChunkX = paddedMaxX / chunkTiles_;
+    int minChunkY = paddedMinY / chunkTiles_;
+    int maxChunkY = paddedMaxY / chunkTiles_;
+    for (int cy = minChunkY; cy <= maxChunkY; ++cy) {
+      for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
+        int idx = cy * chunksX_ + cx;
+        if (idx >= 0 && idx < static_cast<int>(chunks_.size())) {
+          chunks_[idx].dirty = true;
+        }
+      }
+    }
+  };
 
   int dirtyMinX = 0;
   int dirtyMinY = 0;
@@ -1265,36 +1298,24 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world) {
   } else {
     hasDirty = world.ConsumeTerrainDirty(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY);
   }
-  if (!hasDirty) return;
+  if (hasDirty) {
+    markDirtyChunks(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY, 6);
+  }
 
-  dirtyMinX = std::max(0, dirtyMinX);
-  dirtyMinY = std::max(0, dirtyMinY);
-  dirtyMaxX = std::min(worldWidth_ - 1, dirtyMaxX);
-  dirtyMaxY = std::min(worldHeight_ - 1, dirtyMaxY);
-
-  if (dirtyMinX > dirtyMaxX || dirtyMinY > dirtyMaxY) return;
-
-  constexpr int kTerrainPadding = 6;
-  int paddedMinX = std::max(0, dirtyMinX - kTerrainPadding);
-  int paddedMinY = std::max(0, dirtyMinY - kTerrainPadding);
-  int paddedMaxX = std::min(worldWidth_ - 1, dirtyMaxX + kTerrainPadding);
-  int paddedMaxY = std::min(worldHeight_ - 1, dirtyMaxY + kTerrainPadding);
-  int minChunkX = paddedMinX / chunkTiles_;
-  int maxChunkX = paddedMaxX / chunkTiles_;
-  int minChunkY = paddedMinY / chunkTiles_;
-  int maxChunkY = paddedMaxY / chunkTiles_;
-  for (int cy = minChunkY; cy <= maxChunkY; ++cy) {
-    for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
-      int idx = cy * chunksX_ + cx;
-      if (idx >= 0 && idx < static_cast<int>(chunks_.size())) {
-        chunks_[idx].dirty = true;
-      }
+  if (includeStaticDetails) {
+    int visualMinX = 0;
+    int visualMinY = 0;
+    int visualMaxX = worldWidth_ > 0 ? worldWidth_ - 1 : 0;
+    int visualMaxY = worldHeight_ > 0 ? worldHeight_ - 1 : 0;
+    if (world.ConsumeVisualDirty(visualMinX, visualMinY, visualMaxX, visualMaxY)) {
+      markDirtyChunks(visualMinX, visualMinY, visualMaxX, visualMaxY, 14);
     }
   }
 }
 
 void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY,
-                                  int maxX, int maxY) {
+                                   int maxX, int maxY, bool includeStaticDetails,
+                                   const SettlementManager& settlements) {
   if (chunks_.empty()) {
     BuildChunks(renderer, worldWidth_, worldHeight_);
   }
@@ -1591,6 +1612,9 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	        }
 
         SDL_SetTextureColorMod(tilesTexture_, 255, 255, 255);
+        if (includeStaticDetails) {
+          DrawStaticMapDetailsToChunk(renderer, world, settlements, chunk);
+        }
       }
     }
   }
@@ -1620,6 +1644,252 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
     terrainTextureIndices_[static_cast<size_t>(oldestListIndex)] = terrainTextureIndices_.back();
     terrainTextureIndices_.pop_back();
   }
+}
+
+void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& world,
+                                           const SettlementManager& settlements,
+                                           const TerrainChunk& chunk) {
+  const float tileSize = static_cast<float>(kTilePx);
+  const Camera chunkCamera{static_cast<float>(chunk.originX * kTilePx),
+                           static_cast<float>(chunk.originY * kTilePx), 1.0f};
+  SDL_Rect shadowSrc = ShadowSrc();
+  const int minX = std::max(0, chunk.originX - 14);
+  const int minY = std::max(0, chunk.originY - 14);
+  const int maxX = std::min(world.width() - 1, chunk.originX + chunk.tilesWide + 13);
+  const int maxY = std::min(world.height() - 1, chunk.originY + chunk.tilesHigh + 13);
+
+  auto drawOutlinedCopy = [&](SDL_Texture* tex, const SDL_Rect* src, const SDL_Rect& dst,
+                              SDL_RendererFlip flip = SDL_FLIP_NONE, Uint8 outlineAlpha = 55,
+                              Uint8 finalAlpha = 255) {
+    if (!tex) return;
+    SDL_SetTextureColorMod(tex, 0, 0, 0);
+    SDL_SetTextureAlphaMod(tex, outlineAlpha);
+    SDL_Rect o1 = dst;
+    SDL_Rect o2 = dst;
+    SDL_Rect o3 = dst;
+    SDL_Rect o4 = dst;
+    o1.x += 1;
+    o2.x -= 1;
+    o3.y += 1;
+    o4.y -= 1;
+    SDL_RenderCopyEx(renderer, tex, src, &o1, 0.0, nullptr, flip);
+    SDL_RenderCopyEx(renderer, tex, src, &o2, 0.0, nullptr, flip);
+    SDL_RenderCopyEx(renderer, tex, src, &o3, 0.0, nullptr, flip);
+    SDL_RenderCopyEx(renderer, tex, src, &o4, 0.0, nullptr, flip);
+    SDL_SetTextureColorMod(tex, 255, 255, 255);
+    SDL_SetTextureAlphaMod(tex, finalAlpha);
+    SDL_RenderCopyEx(renderer, tex, src, &dst, 0.0, nullptr, flip);
+  };
+
+  auto drawObjectAtlas = [&](int x, int y, const SDL_Rect& src, uint32_t h, Uint8 outlineAlpha) {
+    int jitterX = static_cast<int>(h % 5u) - 2;
+    int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+    const float objX = static_cast<float>(x) * tileSize + static_cast<float>(jitterX);
+    const float objY = static_cast<float>(y) * tileSize + static_cast<float>(jitterY);
+    SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, chunkCamera);
+    SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+    drawOutlinedCopy(objectsTexture_, &src, dst, flip, outlineAlpha);
+  };
+
+  if (buildingsTexture_ || objectsTexture_) {
+    SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
+    for (int y = minY; y <= maxY; ++y) {
+      for (int x = minX; x <= maxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        if (tile.type != TileType::Land && tile.type != TileType::Sand) continue;
+
+        if (buildingsTexture_ && tile.building != BuildingType::None) {
+          if (!((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
+                (tile.building == BuildingType::Market && marketTexture_) ||
+                (tile.building == BuildingType::Forge && forgeTexture_))) {
+            AtlasCoord coord{0, 0};
+            switch (tile.building) {
+              case BuildingType::House:
+                coord = AtlasCoord{0, 0};
+                break;
+              case BuildingType::TownHall:
+                coord = AtlasCoord{0, 1};
+                break;
+              case BuildingType::Farm:
+                coord = AtlasCoord{0, 2};
+                break;
+              case BuildingType::Granary:
+                coord = AtlasCoord{1, 2};
+                break;
+              case BuildingType::Well:
+                coord = AtlasCoord{1, 1};
+                break;
+              default:
+                coord = AtlasCoord{0, 0};
+                break;
+            }
+            buildingSrc.x = coord.col * kTilePx;
+            buildingSrc.y = coord.row * kTilePx;
+            uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+                                0xB17D1E5Eu ^ static_cast<uint32_t>(tile.building));
+            int jitterX = static_cast<int>(h % 5u) - 2;
+            int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+            const float worldX = static_cast<float>(x) * tileSize + static_cast<float>(jitterX);
+            const float worldY = static_cast<float>(y) * tileSize + static_cast<float>(jitterY);
+            float shadowW = tileSize * 0.70f;
+            float shadowH = tileSize * 0.28f;
+            if (tile.building == BuildingType::Well) {
+              shadowW = tileSize * 0.55f;
+              shadowH = tileSize * 0.22f;
+            } else if (tile.building == BuildingType::Granary) {
+              shadowW = tileSize * 0.80f;
+              shadowH = tileSize * 0.30f;
+            }
+            const float shadowX = worldX + (tileSize - shadowW) * 0.5f + 1.5f;
+            const float shadowY = worldY + tileSize - shadowH * 0.6f + 1.5f;
+            SDL_Rect shadowDst = MakeDstRect(shadowX, shadowY, shadowW, shadowH, chunkCamera);
+            SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+            SDL_SetTextureAlphaMod(shadowTexture_, 55);
+            SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+            SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+            SDL_SetTextureAlphaMod(shadowTexture_, 110);
+            SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+            SDL_Rect dst = MakeDstRect(worldX, worldY, tileSize, tileSize, chunkCamera);
+            SDL_SetTextureColorMod(buildingsTexture_, 0, 0, 0);
+            SDL_SetTextureAlphaMod(buildingsTexture_, 70);
+            SDL_Rect drop = dst;
+            drop.x += 1;
+            drop.y += 1;
+            SDL_RenderCopy(renderer, buildingsTexture_, &buildingSrc, &drop);
+            drawOutlinedCopy(buildingsTexture_, &buildingSrc, dst, SDL_FLIP_NONE, 55);
+          }
+        }
+
+        const bool hasLargeTreeSprite =
+            (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) ||
+            (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
+        if (objectsTexture_ && tile.trees > 0 && !hasLargeTreeSprite) {
+          uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+                              TreeRules::kLargeTreeSeed);
+          drawObjectAtlas(x, y, PickObjectVariant(kTreeCoords, h), h, 55);
+        }
+        if (objectsTexture_ && tile.food > 0) {
+          uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kFoodSeed);
+          drawObjectAtlas(x, y, PickObjectVariant(kFoodCoords, h), h, 48);
+        }
+      }
+    }
+  }
+
+  const bool hasTree0 = (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0);
+  const bool hasTree1 = (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
+  if (hasTree0 || hasTree1) {
+    struct LargeTreeSprite {
+      SDL_Texture* texture = nullptr;
+      int texW = 0;
+      int texH = 0;
+      bool allowFlip = true;
+    };
+    const LargeTreeSprite tree0{treeTexture_, treeTexW_, treeTexH_, true};
+    const LargeTreeSprite tree1{tree1Texture_, tree1TexW_, tree1TexH_, false};
+    auto pickTree = [&](int x, int y) -> const LargeTreeSprite& {
+      if (hasTree0 && hasTree1) {
+        uint32_t choice =
+            Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), TreeRules::kLargeTreeSeed ^ 0x7A24B31Fu);
+        return ((choice % 100u) < 70u) ? tree1 : tree0;
+      }
+      return hasTree1 ? tree1 : tree0;
+    };
+
+    for (int y = minY; y <= maxY; ++y) {
+      for (int x = minX; x <= maxX; ++x) {
+        const Tile& tile = world.At(x, y);
+        if (tile.type != TileType::Land || tile.trees <= 0) continue;
+        if (!TreeRules::IsLargeTreeAnchor(world, x, y)) continue;
+        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+                            TreeRules::kLargeTreeSeed);
+        const LargeTreeSprite& tree = pickTree(x, y);
+        if (!tree.texture || tree.texW <= 0 || tree.texH <= 0) continue;
+        int jitterX = static_cast<int>(h % 5u) - 2;
+        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+        SDL_RendererFlip flip = (tree.allowFlip && (h & (1u << 16))) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+        const float drawW = static_cast<float>(tree.texW);
+        const float drawH = static_cast<float>(tree.texH);
+        float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+        float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+        float worldX = anchorX - drawW * 0.5f + static_cast<float>(jitterX);
+        float worldY = anchorY - drawH + static_cast<float>(jitterY);
+        float shadowW = tileSize * 1.35f;
+        float shadowH = tileSize * 0.55f;
+        SDL_Rect shadowDst = MakeDstRect(anchorX - shadowW * 0.5f + 2.0f,
+                                         anchorY - shadowH * 0.55f + 2.0f, shadowW, shadowH,
+                                         chunkCamera);
+        SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+        SDL_SetTextureAlphaMod(shadowTexture_, 55);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+        SDL_SetTextureAlphaMod(shadowTexture_, 110);
+        SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+        SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, chunkCamera);
+        drawOutlinedCopy(tree.texture, nullptr, dst, flip, 55);
+      }
+    }
+  }
+
+  auto drawLargeBuilding = [&](int x, int y, SDL_Texture* tex, int texW, int texH, float shadowScaleW,
+                               float shadowScaleH) {
+    if (!tex || texW <= 0 || texH <= 0) return;
+    const float drawW = static_cast<float>(texW);
+    const float drawH = static_cast<float>(texH);
+    float anchorX = (static_cast<float>(x) + 0.5f) * tileSize;
+    float anchorY = (static_cast<float>(y) + 1.0f) * tileSize;
+    float worldX = anchorX - drawW * 0.5f;
+    float worldY = anchorY - drawH;
+    float shadowW = drawW * shadowScaleW;
+    float shadowH = tileSize * shadowScaleH;
+    SDL_Rect shadowDst = MakeDstRect(anchorX - shadowW * 0.5f + 2.0f,
+                                     anchorY - shadowH * 0.55f + 2.0f, shadowW, shadowH,
+                                     chunkCamera);
+    SDL_SetTextureColorMod(shadowTexture_, 85, 95, 60);
+    SDL_SetTextureAlphaMod(shadowTexture_, 58);
+    SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+    SDL_SetTextureColorMod(shadowTexture_, 0, 0, 0);
+    SDL_SetTextureAlphaMod(shadowTexture_, 130);
+    SDL_RenderCopy(renderer, shadowTexture_, &shadowSrc, &shadowDst);
+
+    SDL_Rect dst = MakeDstRect(worldX, worldY, drawW, drawH, chunkCamera);
+    SDL_SetTextureColorMod(tex, 0, 0, 0);
+    SDL_SetTextureAlphaMod(tex, 68);
+    SDL_Rect drop = dst;
+    drop.x += 1;
+    drop.y += 1;
+    SDL_RenderCopy(renderer, tex, nullptr, &drop);
+    drawOutlinedCopy(tex, nullptr, dst, SDL_FLIP_NONE, 48);
+  };
+
+  for (int y = minY; y <= maxY; ++y) {
+    for (int x = minX; x <= maxX; ++x) {
+      const Tile& tile = world.At(x, y);
+      if (tile.building == BuildingType::TownHall) {
+        SDL_Texture* tex = townHallTexture_ ? townHallTexture_ : capitalTexture_;
+        int texW = townHallTexture_ ? townHallTexW_ : capitalTexW_;
+        int texH = townHallTexture_ ? townHallTexH_ : capitalTexH_;
+        const Settlement* owner = settlements.Get(tile.buildingOwnerId);
+        if (owner && owner->isCapital && x == owner->centerX && y == owner->centerY && capitalTexture_) {
+          tex = capitalTexture_;
+          texW = capitalTexW_;
+          texH = capitalTexH_;
+        }
+        drawLargeBuilding(x, y, tex, texW, texH, 0.58f, 0.55f);
+      } else if (tile.building == BuildingType::Market) {
+        drawLargeBuilding(x, y, marketTexture_, marketTexW_, marketTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Forge) {
+        drawLargeBuilding(x, y, forgeTexture_, forgeTexW_, forgeTexH_, 0.58f, 0.42f);
+      }
+    }
+  }
+
+  if (shadowTexture_) SDL_SetTextureAlphaMod(shadowTexture_, 90);
+  if (objectsTexture_) SDL_SetTextureAlphaMod(objectsTexture_, 255);
+  if (buildingsTexture_) SDL_SetTextureAlphaMod(buildingsTexture_, 255);
+  if (treeTexture_) SDL_SetTextureAlphaMod(treeTexture_, 255);
+  if (tree1Texture_) SDL_SetTextureAlphaMod(tree1Texture_, 255);
 }
 
 void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& humans,
@@ -1668,12 +1938,13 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   int minY = std::max(0, static_cast<int>(worldTop / tileSize) - 1);
   int maxX = std::min(world.width() - 1, static_cast<int>(worldRight / tileSize) + 1);
   int maxY = std::min(world.height() - 1, static_cast<int>(worldBottom / tileSize) + 1);
+  const bool useStaticMapCache = !config.showHumans && camera.zoom <= 0.35f;
 
   SDL_Rect shadowSrc = ShadowSrc();
 
   CrashContextSetStage("Render::TerrainCache");
-  EnsureTerrainCache(renderer, world);
-  RebuildTerrainCache(renderer, world, minX, minY, maxX, maxY);
+  EnsureTerrainCache(renderer, world, useStaticMapCache);
+  RebuildTerrainCache(renderer, world, minX, minY, maxX, maxY, useStaticMapCache, settlements);
 
   CrashContextSetStage("Render::TerrainDraw");
   const int minChunkX = std::max(0, minX / chunkTiles_);
@@ -1824,8 +2095,8 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     maxZoneY = std::min(zonesY - 1, maxY / zoneSize);
   }
 
-	  CrashContextSetStage("Render::Buildings");
-	  if (buildingsTexture_) {
+  CrashContextSetStage("Render::Buildings");
+  if (!useStaticMapCache && buildingsTexture_) {
 	    SDL_Rect buildingSrc{0, 0, kTilePx, kTilePx};
 	    const int buildMinX = std::max(0, minX - 6);
 	    const int buildMinY = std::max(0, minY - 6);
@@ -1838,12 +2109,12 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	        const Tile& tile = world.At(x, y);
 	        if (tile.building == BuildingType::None) continue;
 	
-		        if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
-		            (tile.building == BuildingType::Market && marketTexture_) ||
-		            (tile.building == BuildingType::Forge && forgeTexture_)) {
-		          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
-		          continue;
-		        }
+        if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
+            (tile.building == BuildingType::Market && marketTexture_) ||
+            (tile.building == BuildingType::Forge && forgeTexture_)) {
+          // Draw in a later pass (so it sits above trees/objects but below fire/humans).
+          continue;
+        }
 	
 	        AtlasCoord coord{0, 0};
 	        switch (tile.building) {
@@ -1936,78 +2207,79 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	  }
 
   CrashContextSetStage("Render::Objects");
-  for (int y = minY; y <= maxY; ++y) {
-    for (int x = minX; x <= maxX; ++x) {
-      const Tile& tile = world.At(x, y);
-      if (tile.type != TileType::Land && tile.type != TileType::Sand) continue;
-      if (tile.trees <= 0 && tile.food <= 0) continue;
+  if (!useStaticMapCache) {
+	    for (int y = minY; y <= maxY; ++y) {
+	      for (int x = minX; x <= maxX; ++x) {
+	        const Tile& tile = world.At(x, y);
+	        if (tile.type != TileType::Land && tile.type != TileType::Sand) continue;
+	        if (tile.trees <= 0 && tile.food <= 0) continue;
 
-      const float worldX = static_cast<float>(x) * tileSize;
-      const float worldY = static_cast<float>(y) * tileSize;
+	        const float worldX = static_cast<float>(x) * tileSize;
+	        const float worldY = static_cast<float>(y) * tileSize;
 
-      // Fallback: if the large tree sprites are missing, render the old atlas tree.
-      const bool hasLargeTreeSprite =
-          (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) || (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
-      if (tile.trees > 0 && !hasLargeTreeSprite) {
-        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
-                            TreeRules::kLargeTreeSeed);
-        SDL_Rect src = PickObjectVariant(kTreeCoords, h);
-        int jitterX = static_cast<int>(h % 5u) - 2;
-        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
-        const float objX = worldX + static_cast<float>(jitterX);
-        const float objY = worldY + static_cast<float>(jitterY);
-        SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	        const bool hasLargeTreeSprite = (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0) ||
+	                                        (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
+	        if (tile.trees > 0 && !hasLargeTreeSprite) {
+	          uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y),
+	                              TreeRules::kLargeTreeSeed);
+	          SDL_Rect src = PickObjectVariant(kTreeCoords, h);
+	          int jitterX = static_cast<int>(h % 5u) - 2;
+	          int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+	          const float objX = worldX + static_cast<float>(jitterX);
+	          const float objY = worldY + static_cast<float>(jitterY);
+	          SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
+	          SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
 
-        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
-        SDL_SetTextureAlphaMod(objectsTexture_, 55);
-        SDL_Rect o1 = dst;
-        SDL_Rect o2 = dst;
-        SDL_Rect o3 = dst;
-        SDL_Rect o4 = dst;
-        o1.x += 1;
-        o2.x -= 1;
-        o3.y += 1;
-        o4.y -= 1;
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
-        SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
-        SDL_SetTextureAlphaMod(objectsTexture_, 255);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
-      }
+	          SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+	          SDL_SetTextureAlphaMod(objectsTexture_, 55);
+	          SDL_Rect o1 = dst;
+	          SDL_Rect o2 = dst;
+	          SDL_Rect o3 = dst;
+	          SDL_Rect o4 = dst;
+	          o1.x += 1;
+	          o2.x -= 1;
+	          o3.y += 1;
+	          o4.y -= 1;
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
+	          SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
+	          SDL_SetTextureAlphaMod(objectsTexture_, 255);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
+	        }
 
-      if (tile.food > 0) {
-        uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kFoodSeed);
-        SDL_Rect src = PickObjectVariant(kFoodCoords, h);
-        int jitterX = static_cast<int>(h % 5u) - 2;
-        int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
-        const float objX = worldX + static_cast<float>(jitterX);
-	        const float objY = worldY + static_cast<float>(jitterY);
-	        SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
-	        SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+	        if (tile.food > 0) {
+	          uint32_t h = Hash2D(static_cast<uint32_t>(x), static_cast<uint32_t>(y), kFoodSeed);
+	          SDL_Rect src = PickObjectVariant(kFoodCoords, h);
+	          int jitterX = static_cast<int>(h % 5u) - 2;
+	          int jitterY = static_cast<int>((h >> 8) % 5u) - 2;
+	          const float objX = worldX + static_cast<float>(jitterX);
+	          const float objY = worldY + static_cast<float>(jitterY);
+	          SDL_Rect dst = MakeDstRect(objX, objY, tileSize, tileSize, camera);
+	          SDL_RendererFlip flip = (h & (1u << 16)) ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
 
-	        SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
-	        SDL_SetTextureAlphaMod(objectsTexture_, 48);
-	        SDL_Rect o1 = dst;
-	        SDL_Rect o2 = dst;
-	        SDL_Rect o3 = dst;
-        SDL_Rect o4 = dst;
-        o1.x += 1;
-        o2.x -= 1;
-        o3.y += 1;
-        o4.y -= 1;
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
-        SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
-        SDL_SetTextureAlphaMod(objectsTexture_, 255);
-        SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
-      }
-    }
-  }
+	          SDL_SetTextureColorMod(objectsTexture_, 0, 0, 0);
+	          SDL_SetTextureAlphaMod(objectsTexture_, 48);
+	          SDL_Rect o1 = dst;
+	          SDL_Rect o2 = dst;
+	          SDL_Rect o3 = dst;
+	          SDL_Rect o4 = dst;
+	          o1.x += 1;
+	          o2.x -= 1;
+	          o3.y += 1;
+	          o4.y -= 1;
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o1, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o2, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o3, 0.0, nullptr, flip);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &o4, 0.0, nullptr, flip);
+	          SDL_SetTextureColorMod(objectsTexture_, 255, 255, 255);
+	          SDL_SetTextureAlphaMod(objectsTexture_, 255);
+	          SDL_RenderCopyEx(renderer, objectsTexture_, &src, &dst, 0.0, nullptr, flip);
+	        }
+	      }
+	    }
+	  }
 
   struct TreeCanopyDrawItem {
     SDL_Texture* texture = nullptr;
@@ -2023,7 +2295,7 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   CrashContextSetStage("Render::Trees");
   const bool hasTree0 = (treeTexture_ && treeTexW_ > 0 && treeTexH_ > 0);
   const bool hasTree1 = (tree1Texture_ && tree1TexW_ > 0 && tree1TexH_ > 0);
-  if (hasTree0 || hasTree1) {
+  if (!useStaticMapCache && (hasTree0 || hasTree1)) {
     struct LargeTreeSprite {
       SDL_Texture* texture = nullptr;
       int texW = 0;
@@ -2068,7 +2340,6 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     const int objMaxX = std::min(world.width() - 1, maxX + pad);
     const int objMaxY = std::min(world.height() - 1, maxY + pad);
     // Ground shadow mod.
-    SDL_Rect shadowSrc = ShadowSrc();
     for (int y = objMinY; y <= objMaxY; ++y) {
       for (int x = objMinX; x <= objMaxX; ++x) {
         const Tile& tile = world.At(x, y);
@@ -2167,11 +2438,11 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
     SDL_SetTextureAlphaMod(shadowTexture_, 90);
   }
 
-		  // Large town hall sprite pass: render above objects and below fire/humans.
-		  // Uses Capital.png for the founding settlement's original town hall tile; all other town halls use TH.png.
-		  CrashContextSetStage("Render::TownHall");
-		  if ((townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) ||
-		      (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0)) {
+  // Large town hall sprite pass: render above objects and below fire/humans.
+  // Uses Capital.png for the founding settlement's original town hall tile; all other town halls use TH.png.
+  CrashContextSetStage("Render::TownHall");
+  if (!useStaticMapCache && ((townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) ||
+                             (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0))) {
 		    float scale = tileSize / static_cast<float>(kTilePx);
 
 		    int maxW = 0;
@@ -2268,11 +2539,11 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 		      }
 		    }
 		    SDL_SetTextureAlphaMod(shadowTexture_, 90);
-		  }
+  }
 
   CrashContextSetStage("Render::LargeEconomyBuildings");
-  if ((marketTexture_ && marketTexW_ > 0 && marketTexH_ > 0) ||
-      (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0)) {
+  if (!useStaticMapCache && ((marketTexture_ && marketTexW_ > 0 && marketTexH_ > 0) ||
+                             (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0))) {
     float scale = tileSize / static_cast<float>(kTilePx);
     int maxW = std::max(marketTexW_, forgeTexW_);
     int maxH = std::max(marketTexH_, forgeTexH_);

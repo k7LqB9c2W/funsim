@@ -10,7 +10,7 @@
 class SettlementManager;
 enum class TaskType : uint8_t;
 
-enum class Goal : uint8_t { Wander, SeekFood, SeekMate, StayHome, FleeFire };
+enum class Goal : uint8_t { Wander, SeekFood, GoToTask, SeekMate, StayHome, FleeFire };
 enum class Role : uint8_t { Idle, Gatherer, Farmer, Builder, Guard, Soldier, Scout };
 enum class DeathReason : uint8_t { Starvation, Dehydration, OldAge, War };
 enum class ArmyState : uint8_t { Idle, Rally, March, Siege, Defend, Retreat };

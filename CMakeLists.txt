@@ -95,9 +95,10 @@ else()
 endif()
 
 if (MSVC)
-  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:/O2>)
+  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:/O2> $<$<CONFIG:Release>:/Zi>)
+  target_link_options(funsim PRIVATE $<$<CONFIG:Release>:/DEBUG:FULL>)
 else()
-  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:-O3>)
+  target_compile_options(funsim PRIVATE $<$<CONFIG:Release>:-O3> $<$<CONFIG:Release>:-g>)
 endif()
 
 add_custom_command(TARGET funsim POST_BUILD

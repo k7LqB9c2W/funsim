@@ -64,6 +64,7 @@ struct UIState {
   bool rebellionsEnabled = true;
   bool starvationDeathEnabled = true;
   bool spawnFoodOnLandPlacement = true;
+  bool crashContextHumanEnabled = false;
   OverlayMode overlayMode = OverlayMode::FactionTerritory;
   bool wholeMapView = false;
   bool hideHumansWhenFullyZoomedOut = true;

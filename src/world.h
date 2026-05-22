@@ -60,10 +60,12 @@ class World {
     if (!InBounds(x, y)) return;
     Tile& tile = AtUnchecked(x, y);
     Tile before = tile;
-    fn(tile);
-    ApplyTotalsDelta(before, tile);
-    UpdateIndicesForTile(x, y, before, tile);
-  }
+	    fn(tile);
+	    ApplyTotalsDelta(before, tile);
+	    MarkScentDirtyForTileChange(x, y, before, tile);
+	    MarkVisualDirtyForTileChange(x, y, before, tile);
+	    UpdateIndicesForTile(x, y, before, tile);
+	  }
 
   int TakeFood(int x, int y, int amount) {
     int taken = 0;
@@ -180,10 +182,11 @@ class World {
   uint8_t WellRadiusAt(int x, int y) const;
   void MarkBuildingDirty() { buildingDirty_ = true; }
   bool ConsumeBuildingDirty();
-  void MarkTerrainDirty(int x, int y);
-  void MarkTerrainDirtyAll();
-  bool ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY);
-  uint32_t TerrainVersion() const { return terrainVersion_; }
+	  void MarkTerrainDirty(int x, int y);
+	  void MarkTerrainDirtyAll();
+	  bool ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY);
+	  bool ConsumeVisualDirty(int& minX, int& minY, int& maxX, int& maxY);
+	  uint32_t TerrainVersion() const { return terrainVersion_; }
 
   bool SaveMap(const std::string& path) const;
   bool LoadMap(const std::string& path);
@@ -193,6 +196,13 @@ class World {
  private:
   struct Chunk {
     std::array<Tile, kChunkTiles * kChunkTiles> tiles{};
+  };
+  struct ScentDirtyBounds {
+    bool dirty = true;
+    int minX = 0;
+    int minY = 0;
+    int maxX = 0;
+    int maxY = 0;
   };
 
   static uint64_t PackCoord(int x, int y) {
@@ -211,6 +221,16 @@ class World {
   void RecomputeWellRadius();
   void UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& after);
   void ApplyTotalsDelta(const Tile& before, const Tile& after);
+	  void MarkScentDirtyForTileChange(int x, int y, const Tile& before, const Tile& after);
+	  void MarkVisualDirtyForTileChange(int x, int y, const Tile& before, const Tile& after);
+	  void MarkVisualDirty(int x, int y);
+	  void MarkVisualDirtyAll();
+	  void MarkScentDirtyLocal(ScentDirtyBounds& bounds, int x, int y, int radius) const;
+  void MarkScentDirtyAll(ScentDirtyBounds& bounds) const;
+  void EnsureFoodScentCache() const;
+  void EnsureWaterScentCache() const;
+  void EnsureFireRiskCache() const;
+  void EnsureHomeScentCache() const;
   static uint16_t Decay(uint16_t value, int dist);
   uint16_t BaseFoodAt(int x, int y) const;
   uint16_t BaseWaterAt(int x, int y) const;
@@ -234,14 +254,27 @@ class World {
   uint32_t homeSourceGeneration_ = 1;
   mutable std::unordered_map<uint64_t, uint8_t> wellRadiusByTile_;
   mutable bool wellRadiusDirty_ = true;
+  mutable std::vector<uint16_t> foodScent_;
+  mutable std::vector<uint16_t> waterScent_;
+  mutable std::vector<uint16_t> fireRisk_;
+  mutable std::vector<uint16_t> homeScent_;
+  mutable ScentDirtyBounds foodScentDirty_;
+  mutable ScentDirtyBounds waterScentDirty_;
+  mutable ScentDirtyBounds fireRiskDirty_;
+  mutable ScentDirtyBounds homeScentDirty_;
 
   int64_t totalTrees_ = 0;
   int64_t totalFood_ = 0;
   bool buildingDirty_ = true;
-  bool terrainDirty_ = true;
-  uint32_t terrainVersion_ = 1;
-  int terrainMinX_ = 0;
-  int terrainMinY_ = 0;
-  int terrainMaxX_ = 0;
-  int terrainMaxY_ = 0;
-};
+	  bool terrainDirty_ = true;
+	  uint32_t terrainVersion_ = 1;
+	  int terrainMinX_ = 0;
+	  int terrainMinY_ = 0;
+	  int terrainMaxX_ = 0;
+	  int terrainMaxY_ = 0;
+	  bool visualDirty_ = true;
+	  int visualMinX_ = 0;
+	  int visualMinY_ = 0;
+	  int visualMaxX_ = 0;
+	  int visualMaxY_ = 0;
+	};

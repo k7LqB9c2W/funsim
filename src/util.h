@@ -23,5 +23,7 @@ void CrashContextSetStage(const char* stage);
 void CrashContextSetWorld(int width, int height);
 void CrashContextSetDay(int dayCount);
 void CrashContextSetPopulation(int population);
+void CrashContextSetHumanEnabled(bool enabled);
+bool CrashContextHumanEnabled();
 void CrashContextSetHuman(int id, int x, int y);
 void CrashContextSetNote(const char* note);

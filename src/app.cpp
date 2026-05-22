@@ -272,6 +272,7 @@ void App::Update(float dt) {
   }
 
   UpdateWholeMapView();
+  CrashContextSetHumanEnabled(ui_.crashContextHumanEnabled);
   factions_.SetWarEnabled(ui_.warEnabled);
   settlements_.SetRebellionsEnabled(ui_.rebellionsEnabled);
   humans_.SetAllowStarvationDeath(ui_.starvationDeathEnabled);

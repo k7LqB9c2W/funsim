@@ -106,6 +106,57 @@ inline uint16_t BaseFoodFromTile(const Tile& tile) {
   }
   return static_cast<uint16_t>(value);
 }
+
+template <typename BaseFn>
+void RecomputeScentRegion(std::vector<uint16_t>& field, int width, int height, int minX, int minY,
+                          int maxX, int maxY, const std::vector<Offset>& offsets, BaseFn&& baseAt) {
+  if (width <= 0 || height <= 0) return;
+  minX = std::max(0, minX);
+  minY = std::max(0, minY);
+  maxX = std::min(width - 1, maxX);
+  maxY = std::min(height - 1, maxY);
+  if (minX > maxX || minY > maxY) return;
+
+  for (int y = minY; y <= maxY; ++y) {
+    for (int x = minX; x <= maxX; ++x) {
+      uint16_t best = baseAt(x, y);
+      for (const auto& off : offsets) {
+        int nx = x + off.dx;
+        int ny = y + off.dy;
+        if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width) ||
+            static_cast<unsigned>(ny) >= static_cast<unsigned>(height)) {
+          continue;
+        }
+        uint16_t base = baseAt(nx, ny);
+        uint16_t val = DecayLut(base, off.dist);
+        if (val > best) best = val;
+      }
+      field[static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)] = best;
+    }
+  }
+}
+
+template <typename BaseFn>
+uint16_t SampleScentLocal(int width, int height, int x, int y, const std::vector<Offset>& offsets,
+                          BaseFn&& baseAt) {
+  uint16_t best = 0;
+  if (static_cast<unsigned>(x) < static_cast<unsigned>(width) &&
+      static_cast<unsigned>(y) < static_cast<unsigned>(height)) {
+    best = baseAt(x, y);
+  }
+  for (const auto& off : offsets) {
+    int nx = x + off.dx;
+    int ny = y + off.dy;
+    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width) ||
+        static_cast<unsigned>(ny) >= static_cast<unsigned>(height)) {
+      continue;
+    }
+    uint16_t base = baseAt(nx, ny);
+    uint16_t val = DecayLut(base, off.dist);
+    if (val > best) best = val;
+  }
+  return best;
+}
 }  // namespace
 
 World::World(int width, int height) : width_(width), height_(height) {
@@ -126,6 +177,14 @@ void World::ResizeStorage() {
   homeSourceStampByTile_.assign(
       static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_)), 0u);
   homeSourceGeneration_ = 1;
+  foodScent_.clear();
+  waterScent_.clear();
+  fireRisk_.clear();
+  homeScent_.clear();
+  MarkScentDirtyAll(foodScentDirty_);
+  MarkScentDirtyAll(waterScentDirty_);
+  MarkScentDirtyAll(fireRiskDirty_);
+  MarkScentDirtyAll(homeScentDirty_);
   terrainVersion_ = 1;
 }
 
@@ -160,6 +219,84 @@ const Tile& World::At(int x, int y) const {
 void World::ApplyTotalsDelta(const Tile& before, const Tile& after) {
   totalTrees_ += static_cast<int64_t>(after.trees) - static_cast<int64_t>(before.trees);
   totalFood_ += static_cast<int64_t>(after.food) - static_cast<int64_t>(before.food);
+}
+
+void World::MarkScentDirtyLocal(ScentDirtyBounds& bounds, int x, int y, int radius) const {
+  if (width_ <= 0 || height_ <= 0) {
+    bounds.dirty = true;
+    bounds.minX = bounds.minY = bounds.maxX = bounds.maxY = 0;
+    return;
+  }
+  int minX = std::max(0, x - radius);
+  int minY = std::max(0, y - radius);
+  int maxX = std::min(width_ - 1, x + radius);
+  int maxY = std::min(height_ - 1, y + radius);
+  if (!bounds.dirty) {
+    bounds.dirty = true;
+    bounds.minX = minX;
+    bounds.minY = minY;
+    bounds.maxX = maxX;
+    bounds.maxY = maxY;
+    return;
+  }
+  bounds.minX = std::min(bounds.minX, minX);
+  bounds.minY = std::min(bounds.minY, minY);
+  bounds.maxX = std::max(bounds.maxX, maxX);
+  bounds.maxY = std::max(bounds.maxY, maxY);
+}
+
+void World::MarkScentDirtyAll(ScentDirtyBounds& bounds) const {
+  bounds.dirty = true;
+  bounds.minX = 0;
+  bounds.minY = 0;
+  bounds.maxX = std::max(0, width_ - 1);
+  bounds.maxY = std::max(0, height_ - 1);
+}
+
+void World::MarkScentDirtyForTileChange(int x, int y, const Tile& before, const Tile& after) {
+  if (BaseFoodFromTile(before) != BaseFoodFromTile(after)) {
+    MarkScentDirtyLocal(foodScentDirty_, x, y, kScentIters);
+  }
+  if (before.burning != after.burning) {
+    MarkScentDirtyLocal(fireRiskDirty_, x, y, kScentIters);
+  }
+  bool freshWaterChanged = (before.type == TileType::FreshWater) != (after.type == TileType::FreshWater);
+  bool wellChanged = (before.building == BuildingType::Well) != (after.building == BuildingType::Well);
+  if (freshWaterChanged || wellChanged) {
+    MarkScentDirtyAll(waterScentDirty_);
+  }
+}
+
+void World::MarkVisualDirty(int x, int y) {
+  if (!InBounds(x, y)) return;
+  if (!visualDirty_) {
+    visualDirty_ = true;
+    visualMinX_ = x;
+    visualMaxX_ = x;
+    visualMinY_ = y;
+    visualMaxY_ = y;
+    return;
+  }
+  visualMinX_ = std::min(visualMinX_, x);
+  visualMaxX_ = std::max(visualMaxX_, x);
+  visualMinY_ = std::min(visualMinY_, y);
+  visualMaxY_ = std::max(visualMaxY_, y);
+}
+
+void World::MarkVisualDirtyAll() {
+  visualDirty_ = true;
+  visualMinX_ = 0;
+  visualMinY_ = 0;
+  visualMaxX_ = std::max(0, width_ - 1);
+  visualMaxY_ = std::max(0, height_ - 1);
+}
+
+void World::MarkVisualDirtyForTileChange(int x, int y, const Tile& before, const Tile& after) {
+  if (before.type != after.type || before.trees != after.trees || before.food != after.food ||
+      before.building != after.building || before.farmStage != after.farmStage ||
+      before.buildingOwnerId != after.buildingOwnerId) {
+    MarkVisualDirty(x, y);
+  }
 }
 
 void World::UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& after) {
@@ -250,6 +387,7 @@ void World::MarkTerrainDirtyAll() {
   terrainMinY_ = 0;
   terrainMaxX_ = std::max(0, width_ - 1);
   terrainMaxY_ = std::max(0, height_ - 1);
+  MarkVisualDirtyAll();
 }
 
 bool World::ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY) {
@@ -259,6 +397,16 @@ bool World::ConsumeTerrainDirty(int& minX, int& minY, int& maxX, int& maxY) {
   maxX = terrainMaxX_;
   maxY = terrainMaxY_;
   terrainDirty_ = false;
+  return true;
+}
+
+bool World::ConsumeVisualDirty(int& minX, int& minY, int& maxX, int& maxY) {
+  if (!visualDirty_) return false;
+  minX = visualMinX_;
+  minY = visualMinY_;
+  maxX = visualMaxX_;
+  maxY = visualMaxY_;
+  visualDirty_ = false;
   return true;
 }
 
@@ -311,56 +459,119 @@ uint16_t World::BaseWaterAt(int x, int y) const {
   return base;
 }
 
+void World::EnsureFoodScentCache() const {
+  const size_t needed =
+      static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_));
+  if (foodScent_.size() != needed) {
+    foodScent_.assign(needed, 0u);
+    MarkScentDirtyAll(foodScentDirty_);
+  }
+  if (!foodScentDirty_.dirty) return;
+  if (needed == 0) {
+    foodScentDirty_.dirty = false;
+    return;
+  }
+
+  RecomputeScentRegion(
+      foodScent_, width_, height_, foodScentDirty_.minX, foodScentDirty_.minY,
+      foodScentDirty_.maxX, foodScentDirty_.maxY, OffsetsR6(),
+      [&](int sx, int sy) -> uint16_t { return BaseFoodFromTile(AtUnchecked(sx, sy)); });
+  foodScentDirty_.dirty = false;
+}
+
+void World::EnsureWaterScentCache() const {
+  const size_t needed =
+      static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_));
+  if (waterScent_.size() != needed) {
+    waterScent_.assign(needed, 0u);
+    MarkScentDirtyAll(waterScentDirty_);
+  }
+  if (!waterScentDirty_.dirty) return;
+  if (needed == 0) {
+    waterScentDirty_.dirty = false;
+    return;
+  }
+
+  EnsureWellRadius();
+  RecomputeScentRegion(waterScent_, width_, height_, waterScentDirty_.minX,
+                       waterScentDirty_.minY, waterScentDirty_.maxX, waterScentDirty_.maxY,
+                       OffsetsR10(), [&](int sx, int sy) -> uint16_t {
+                         return BaseWaterAt(sx, sy);
+                       });
+  waterScentDirty_.dirty = false;
+}
+
+void World::EnsureFireRiskCache() const {
+  const size_t needed =
+      static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_));
+  if (fireRisk_.size() != needed) {
+    fireRisk_.assign(needed, 0u);
+    MarkScentDirtyAll(fireRiskDirty_);
+  }
+  if (!fireRiskDirty_.dirty) return;
+  if (needed == 0) {
+    fireRiskDirty_.dirty = false;
+    return;
+  }
+
+  RecomputeScentRegion(fireRisk_, width_, height_, fireRiskDirty_.minX, fireRiskDirty_.minY,
+                       fireRiskDirty_.maxX, fireRiskDirty_.maxY, OffsetsR6(),
+                       [&](int sx, int sy) -> uint16_t { return BaseFireAt(sx, sy); });
+  fireRiskDirty_.dirty = false;
+}
+
+void World::EnsureHomeScentCache() const {
+  const size_t needed =
+      static_cast<size_t>(std::max<int64_t>(0, static_cast<int64_t>(width_) * height_));
+  if (homeScent_.size() != needed) {
+    homeScent_.assign(needed, 0u);
+    MarkScentDirtyAll(homeScentDirty_);
+  }
+  if (!homeScentDirty_.dirty) return;
+  if (needed == 0) {
+    homeScentDirty_.dirty = false;
+    return;
+  }
+
+  const bool hasHomeSources = homeSourceStampByTile_.size() == needed;
+  RecomputeScentRegion(
+      homeScent_, width_, height_, homeScentDirty_.minX, homeScentDirty_.minY,
+      homeScentDirty_.maxX, homeScentDirty_.maxY, OffsetsR6(), [&](int sx, int sy) -> uint16_t {
+        if (!hasHomeSources) return 0u;
+        const size_t idx =
+            static_cast<size_t>(sy) * static_cast<size_t>(width_) + static_cast<size_t>(sx);
+        return homeSourceStampByTile_[idx] == homeSourceGeneration_ ? 60000u : 0u;
+      });
+  homeScentDirty_.dirty = false;
+}
+
 uint16_t World::FoodScentAt(int x, int y) const {
-  uint16_t best = 0;
-  if (static_cast<unsigned>(x) < static_cast<unsigned>(width_) &&
-      static_cast<unsigned>(y) < static_cast<unsigned>(height_)) {
-    best = BaseFoodFromTile(AtUnchecked(x, y));
+  if (!InBounds(x, y)) {
+    return SampleScentLocal(width_, height_, x, y, OffsetsR6(),
+                            [&](int sx, int sy) -> uint16_t {
+                              return BaseFoodFromTile(AtUnchecked(sx, sy));
+                            });
   }
-  for (const auto& off : OffsetsR6()) {
-    int nx = x + off.dx;
-    int ny = y + off.dy;
-    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
-        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
-      continue;
-    }
-    uint16_t base = BaseFoodFromTile(AtUnchecked(nx, ny));
-    uint16_t val = DecayLut(base, off.dist);
-    if (val > best) best = val;
-  }
-  return best;
+  EnsureFoodScentCache();
+  return foodScent_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
 }
 
 uint16_t World::WaterScentAt(int x, int y) const {
-  uint16_t best = BaseWaterAt(x, y);
-  for (const auto& off : OffsetsR10()) {
-    int nx = x + off.dx;
-    int ny = y + off.dy;
-    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
-        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
-      continue;
-    }
-    uint16_t base = BaseWaterAt(nx, ny);
-    uint16_t val = DecayLut(base, off.dist);
-    if (val > best) best = val;
+  if (!InBounds(x, y)) {
+    return SampleScentLocal(width_, height_, x, y, OffsetsR10(),
+                            [&](int sx, int sy) -> uint16_t { return BaseWaterAt(sx, sy); });
   }
-  return best;
+  EnsureWaterScentCache();
+  return waterScent_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
 }
 
 uint16_t World::FireRiskAt(int x, int y) const {
-  uint16_t best = BaseFireAt(x, y);
-  for (const auto& off : OffsetsR6()) {
-    int nx = x + off.dx;
-    int ny = y + off.dy;
-    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
-        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
-      continue;
-    }
-    uint16_t base = BaseFireAt(nx, ny);
-    uint16_t val = DecayLut(base, off.dist);
-    if (val > best) best = val;
+  if (!InBounds(x, y)) {
+    return SampleScentLocal(width_, height_, x, y, OffsetsR6(),
+                            [&](int sx, int sy) -> uint16_t { return BaseFireAt(sx, sy); });
   }
-  return best;
+  EnsureFireRiskCache();
+  return fireRisk_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
 }
 
 void World::EnsureHomeSourceGrid() {
@@ -368,11 +579,15 @@ void World::EnsureHomeSourceGrid() {
   if (needed <= 0) {
     homeSourceStampByTile_.clear();
     homeSourceGeneration_ = 1;
+    homeScent_.clear();
+    MarkScentDirtyAll(homeScentDirty_);
     return;
   }
   if (homeSourceStampByTile_.size() != static_cast<size_t>(needed)) {
     homeSourceStampByTile_.assign(static_cast<size_t>(needed), 0u);
     homeSourceGeneration_ = 1;
+    homeScent_.clear();
+    MarkScentDirtyAll(homeScentDirty_);
   }
 }
 
@@ -384,19 +599,8 @@ bool World::IsHomeSourceAt(int x, int y) const {
 
 uint16_t World::HomeScentAt(int x, int y) const {
   if (!InBounds(x, y)) return 0;
-  uint16_t best = IsHomeSourceAt(x, y) ? 60000u : 0u;
-  for (const auto& off : OffsetsR6()) {
-    int nx = x + off.dx;
-    int ny = y + off.dy;
-    if (static_cast<unsigned>(nx) >= static_cast<unsigned>(width_) ||
-        static_cast<unsigned>(ny) >= static_cast<unsigned>(height_)) {
-      continue;
-    }
-    if (!IsHomeSourceAt(nx, ny)) continue;
-    uint16_t val = DecayLut(60000u, off.dist);
-    if (val > best) best = val;
-  }
-  return best;
+  EnsureHomeScentCache();
+  return homeScent_[static_cast<size_t>(y) * static_cast<size_t>(width_) + static_cast<size_t>(x)];
 }
 
 uint8_t World::WellRadiusAt(int x, int y) const {
@@ -649,12 +853,22 @@ void World::UpdateDaily(Random& rng, int dayDelta) {
 }
 
 void World::RecomputeScentFields() {
-  // Intentionally a no-op: scent values are computed on-demand locally (bounded by kScentIters).
+  MarkScentDirtyAll(foodScentDirty_);
+  MarkScentDirtyAll(waterScentDirty_);
+  MarkScentDirtyAll(fireRiskDirty_);
+  MarkScentDirtyAll(homeScentDirty_);
+  EnsureFoodScentCache();
+  EnsureWaterScentCache();
+  EnsureFireRiskCache();
+  EnsureHomeScentCache();
 }
 
 void World::RecomputeHomeField(const SettlementManager& settlements) {
   EnsureHomeSourceGrid();
-  if (homeSourceStampByTile_.empty()) return;
+  if (homeSourceStampByTile_.empty()) {
+    MarkScentDirtyAll(homeScentDirty_);
+    return;
+  }
 
   homeSourceGeneration_++;
   if (homeSourceGeneration_ == 0) {
@@ -667,6 +881,7 @@ void World::RecomputeHomeField(const SettlementManager& settlements) {
     const int idx = settlement.centerY * width_ + settlement.centerX;
     homeSourceStampByTile_[static_cast<size_t>(idx)] = homeSourceGeneration_;
   }
+  MarkScentDirtyAll(homeScentDirty_);
 }
 
 bool World::SaveMap(const std::string& path) const {

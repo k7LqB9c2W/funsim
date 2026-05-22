@@ -81,6 +81,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::Separator();
   ImGui::Text("Debug");
   ImGui::Checkbox("War Debug Window", &state.warDebugOpen);
+  ImGui::Checkbox("Crash Context: Track Last Human", &state.crashContextHumanEnabled);
   ImGui::Checkbox("Spawn Food When Placing Grass", &state.spawnFoodOnLandPlacement);
   ImGui::Separator();
   for (ToolType tool : kToolOrder) {
@@ -101,6 +102,14 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
   ImGui::RadioButton("10", &state.brushSize, 10);
   ImGui::SameLine();
   ImGui::RadioButton("15", &state.brushSize, 15);
+  ImGui::SameLine();
+  ImGui::RadioButton("30", &state.brushSize, 30);
+  ImGui::SameLine();
+  ImGui::RadioButton("50", &state.brushSize, 50);
+  ImGui::SameLine();
+  ImGui::RadioButton("75", &state.brushSize, 75);
+  ImGui::SameLine();
+  ImGui::RadioButton("100", &state.brushSize, 100);
 
   ImGui::Separator();
   ImGui::Text("View");

@@ -42,6 +42,7 @@ struct CrashContextData {
   char note[128] = "-";
 };
 
+std::atomic<bool> g_crash_context_human_enabled{false};
 CrashContextData g_crash_context;
 
 const char* SafeStr(const char* value) {
@@ -319,7 +320,16 @@ void CrashContextSetDay(int dayCount) { g_crash_context.dayCount.store(dayCount)
 
 void CrashContextSetPopulation(int population) { g_crash_context.population.store(population); }
 
+void CrashContextSetHumanEnabled(bool enabled) {
+  g_crash_context_human_enabled.store(enabled, std::memory_order_relaxed);
+}
+
+bool CrashContextHumanEnabled() {
+  return g_crash_context_human_enabled.load(std::memory_order_relaxed);
+}
+
 void CrashContextSetHuman(int id, int x, int y) {
+  if (!g_crash_context_human_enabled.load(std::memory_order_relaxed)) return;
   g_crash_context.lastHumanId.store(id);
   g_crash_context.lastHumanX.store(x);
   g_crash_context.lastHumanY.store(y);
