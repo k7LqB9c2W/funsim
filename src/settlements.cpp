@@ -32,7 +32,7 @@ constexpr int kTownPopThreshold = 40;
 constexpr int kCityPopThreshold = 120;
 constexpr int kTownAgeDays = 60;
 constexpr int kCityAgeDays = 180;
-constexpr int kTechMaxTier = 3;
+constexpr int kTechMaxTier = 7;
 constexpr int kRebellionMinPop = 20;
 constexpr int kRebellionStabilityThreshold = 25;
 constexpr int kRebellionUnrestDays = 7;
@@ -43,6 +43,10 @@ constexpr int kFoundingMaxGroup = 18;
 constexpr int kFoundingParentReservePop = 8;
 constexpr int kFoundingFoodPerPerson = 18;
 constexpr int kFoundingWoodPerPerson = 4;
+constexpr int kFoundingCooldownDays = 120;
+constexpr int kFoundingParentMinPop = 80;
+constexpr int kFoundingMinSiteDist = 48;
+constexpr int kFoundingMaxSiteDist = 92;
 
 constexpr int kGatherRadius = 12;
 constexpr int kWoodRadius = 12;
@@ -106,14 +110,43 @@ void TransferFoundingResources(Settlement& source, Settlement& founded, int foun
   founded.stockWood += woodTransfer;
 }
 
-int AssignFoundingHumans(HumanManager& humans, const Settlement& source, const Settlement& founded,
-                         int desiredFounders) {
+bool IsEligibleHumanFounder(const Human& human, int sourceSettlementId) {
+  if (!human.alive) return false;
+  if (sourceSettlementId > 0) {
+    if (human.settlementId != sourceSettlementId) return false;
+  } else if (human.settlementId != -1) {
+    return false;
+  }
+  if (human.role == Role::Soldier || human.role == Role::Guard) return false;
+  if (human.armyState != ArmyState::Idle || human.warId > 0) return false;
+  if (human.hasTask || human.carrying) return false;
+  if (human.goal == Goal::FleeFire || human.goal == Goal::GoToTask) return false;
+  return true;
+}
+
+int CountEligibleFoundingHumans(const HumanManager& humans, int sourceSettlementId, int centerX,
+                                int centerY, int maxDistSq) {
+  int count = 0;
+  const auto& list = humans.Humans();
+  for (const Human& human : list) {
+    if (!IsEligibleHumanFounder(human, sourceSettlementId)) continue;
+    if (maxDistSq >= 0) {
+      int dx = human.x - centerX;
+      int dy = human.y - centerY;
+      if (dx * dx + dy * dy > maxDistSq) continue;
+    }
+    count++;
+  }
+  return count;
+}
+
+int AssignFoundingHumans(HumanManager& humans, int sourceSettlementId, const Settlement& founded,
+                         int desiredFounders, int maxDistSq) {
   if (desiredFounders <= 0) return 0;
 
   struct Candidate {
     int distanceSq = 0;
     int index = -1;
-    bool soldier = false;
   };
 
   std::vector<Candidate> candidates;
@@ -121,14 +154,15 @@ int AssignFoundingHumans(HumanManager& humans, const Settlement& source, const S
   candidates.reserve(static_cast<size_t>(desiredFounders) * 2u);
   for (int i = 0; i < static_cast<int>(list.size()); ++i) {
     const Human& human = list[i];
-    if (!human.alive || human.settlementId != source.id) continue;
+    if (!IsEligibleHumanFounder(human, sourceSettlementId)) continue;
     int dx = human.x - founded.centerX;
     int dy = human.y - founded.centerY;
-    candidates.push_back(Candidate{dx * dx + dy * dy, i, human.role == Role::Soldier});
+    int distSq = dx * dx + dy * dy;
+    if (maxDistSq >= 0 && distSq > maxDistSq) continue;
+    candidates.push_back(Candidate{distSq, i});
   }
 
   std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
-    if (a.soldier != b.soldier) return !a.soldier;
     return a.distanceSq < b.distanceSq;
   });
 
@@ -137,7 +171,7 @@ int AssignFoundingHumans(HumanManager& humans, const Settlement& source, const S
     if (moved >= desiredFounders) break;
     if (candidate.index < 0 || candidate.index >= static_cast<int>(list.size())) continue;
     Human& human = list[candidate.index];
-    if (!human.alive || human.settlementId != source.id) continue;
+    if (!IsEligibleHumanFounder(human, sourceSettlementId)) continue;
 
     human.settlementId = founded.id;
     human.homeX = founded.centerX;
@@ -317,6 +351,22 @@ void UpdateEconomyMood(Settlement& settlement) {
   prosperity += settlement.archives * TechSystem::ProsperityYieldForBuilding(BuildingType::Archive);
   prosperity += settlement.mints * TechSystem::ProsperityYieldForBuilding(BuildingType::Mint);
   prosperity += settlement.schools * TechSystem::ProsperityYieldForBuilding(BuildingType::School);
+  prosperity += settlement.workshops * TechSystem::ProsperityYieldForBuilding(BuildingType::Workshop);
+  prosperity += settlement.banks * TechSystem::ProsperityYieldForBuilding(BuildingType::Bank);
+  prosperity += settlement.universities * TechSystem::ProsperityYieldForBuilding(BuildingType::University);
+  prosperity += settlement.factories * TechSystem::ProsperityYieldForBuilding(BuildingType::Factory);
+  prosperity += settlement.powerPlants * TechSystem::ProsperityYieldForBuilding(BuildingType::PowerPlant);
+  prosperity += settlement.airfields * TechSystem::ProsperityYieldForBuilding(BuildingType::Airfield);
+  prosperity += settlement.reactors * TechSystem::ProsperityYieldForBuilding(BuildingType::Reactor);
+  prosperity += settlement.satelliteArrays *
+                TechSystem::ProsperityYieldForBuilding(BuildingType::SatelliteArray);
+  prosperity += settlement.roboticsLabs *
+                TechSystem::ProsperityYieldForBuilding(BuildingType::RoboticsLab);
+  prosperity += settlement.harbors * TechSystem::ProsperityYieldForBuilding(BuildingType::Harbor);
+  prosperity += settlement.railDepots * TechSystem::ProsperityYieldForBuilding(BuildingType::RailDepot);
+  prosperity += settlement.hospitals * TechSystem::ProsperityYieldForBuilding(BuildingType::Hospital);
+  prosperity += settlement.dataCenters * TechSystem::ProsperityYieldForBuilding(BuildingType::DataCenter);
+  prosperity += settlement.militaryHQs * TechSystem::ProsperityYieldForBuilding(BuildingType::MilitaryHQ);
   prosperity += std::min(22, settlement.stockGold / std::max(1, pop / 3 + 1));
   prosperity += std::min(10, settlement.techTier * 3);
   prosperity += settlement.isCapital ? 8 : 0;
@@ -420,9 +470,72 @@ int BuildingCount(const Settlement& settlement, BuildingType building) {
       return settlement.mints;
     case BuildingType::School:
       return settlement.schools;
+    case BuildingType::Workshop:
+      return settlement.workshops;
+    case BuildingType::Bank:
+      return settlement.banks;
+    case BuildingType::University:
+      return settlement.universities;
+    case BuildingType::Factory:
+      return settlement.factories;
+    case BuildingType::PowerPlant:
+      return settlement.powerPlants;
+    case BuildingType::Airfield:
+      return settlement.airfields;
+    case BuildingType::Reactor:
+      return settlement.reactors;
+    case BuildingType::SatelliteArray:
+      return settlement.satelliteArrays;
+    case BuildingType::RoboticsLab:
+      return settlement.roboticsLabs;
+    case BuildingType::Harbor:
+      return settlement.harbors;
+    case BuildingType::RailDepot:
+      return settlement.railDepots;
+    case BuildingType::Hospital:
+      return settlement.hospitals;
+    case BuildingType::DataCenter:
+      return settlement.dataCenters;
+    case BuildingType::MilitaryHQ:
+      return settlement.militaryHQs;
     default:
       return 0;
   }
+}
+
+bool IsWaterTile(TileType type) {
+  return type == TileType::Ocean || type == TileType::FreshWater;
+}
+
+int WaterAdjacencyScore(const World& world, int cx, int cy, int radius) {
+  int best = 0;
+  for (int dy = -radius; dy <= radius; ++dy) {
+    int y = cy + dy;
+    if (y < 0 || y >= world.height()) continue;
+    for (int dx = -radius; dx <= radius; ++dx) {
+      int x = cx + dx;
+      if (x < 0 || x >= world.width()) continue;
+      int dist = std::abs(dx) + std::abs(dy);
+      if (dist > radius) continue;
+      if (IsWaterTile(world.At(x, y).type)) {
+        best = std::max(best, radius - dist + 1);
+      }
+    }
+  }
+  return best;
+}
+
+bool SettlementNearWater(const World& world, const Settlement& settlement, int radius) {
+  for (int dy = -radius; dy <= radius; ++dy) {
+    int y = settlement.centerY + dy;
+    if (y < 0 || y >= world.height()) continue;
+    for (int dx = -radius; dx <= radius; ++dx) {
+      int x = settlement.centerX + dx;
+      if (x < 0 || x >= world.width()) continue;
+      if (IsWaterTile(world.At(x, y).type)) return true;
+    }
+  }
+  return false;
 }
 
 bool CanAffordBuilding(const Settlement& settlement, BuildingType building) {
@@ -439,7 +552,7 @@ void PayBuildingCost(Settlement& settlement, BuildingType building) {
   settlement.stockMetal = std::max(0, settlement.stockMetal - cost.metal);
 }
 
-bool ShouldBuildTechBuilding(const Settlement& settlement, const Faction* faction,
+bool ShouldBuildTechBuilding(const World& world, const Settlement& settlement, const Faction* faction,
                              BuildingType building) {
   if (!faction || !TechSystem::IsUnlocked(faction->unlockedTechs, building)) return false;
   if (BuildingCount(settlement, building) > 0) return false;
@@ -462,6 +575,48 @@ bool ShouldBuildTechBuilding(const Settlement& settlement, const Faction* factio
              (settlement.isCapital || settlement.stockGold >= 8 || settlement.lastGoldProduced > 0);
     case BuildingType::School:
       return settlement.population >= 55 || settlement.isCapital;
+    case BuildingType::Workshop:
+      return settlement.population >= 55 &&
+             (settlement.isCapital || settlement.forges > 0 || settlement.stockMetal >= 12);
+    case BuildingType::Bank:
+      return settlement.population >= 70 &&
+             (settlement.isCapital || settlement.markets > 0 || settlement.mints > 0 ||
+              settlement.stockGold >= 18);
+    case BuildingType::University:
+      return settlement.population >= 80 &&
+             (settlement.isCapital || settlement.schools > 0 || settlement.archives > 0);
+    case BuildingType::Factory:
+      return settlement.population >= 95 &&
+             (settlement.isCapital || settlement.workshops > 0 || settlement.forges > 0);
+    case BuildingType::PowerPlant:
+      return settlement.population >= 110 &&
+             (settlement.isCapital || settlement.factories > 0 || settlement.stockMetal >= 30);
+    case BuildingType::Airfield:
+      return settlement.population >= 90 &&
+             (settlement.isCapital || settlement.soldiers >= 8 || settlement.borderPressure > 2);
+    case BuildingType::Reactor:
+      return settlement.population >= 125 &&
+             (settlement.isCapital || settlement.powerPlants > 0);
+    case BuildingType::SatelliteArray:
+      return settlement.population >= 115 &&
+             (settlement.isCapital || settlement.universities > 0 || settlement.airfields > 0);
+    case BuildingType::RoboticsLab:
+      return settlement.population >= 130 &&
+             (settlement.isCapital || settlement.factories > 0 || settlement.universities > 0);
+    case BuildingType::Harbor:
+      return settlement.population >= 75 && SettlementNearWater(world, settlement, 22);
+    case BuildingType::RailDepot:
+      return settlement.population >= 105 &&
+             (settlement.isCapital || settlement.factories > 0 || settlement.markets > 0);
+    case BuildingType::Hospital:
+      return settlement.population >= 100 &&
+             (settlement.isCapital || settlement.schools > 0 || settlement.universities > 0);
+    case BuildingType::DataCenter:
+      return settlement.population >= 135 &&
+             (settlement.isCapital || settlement.satelliteArrays > 0 || settlement.universities > 0);
+    case BuildingType::MilitaryHQ:
+      return settlement.population >= 100 &&
+             (settlement.isCapital || settlement.airfields > 0 || settlement.soldiers >= 12);
     default:
       return false;
   }
@@ -693,7 +848,7 @@ void SettlementManager::RecomputeZonePop(const World& world, const HumanManager&
     int pop = zoneFoundingPopByIndex_[static_cast<size_t>(idx)];
     if (pop < kZonePopThreshold) continue;
     zoneDenseStampByIndex_[static_cast<size_t>(idx)] = zoneDenseGeneration_;
-    zoneDenseDaysByIndex_[static_cast<size_t>(idx)] += dayDelta;
+    zoneDenseDaysByIndex_[static_cast<size_t>(idx)]++;
     denseZoneIndices_.push_back(idx);
   }
 
@@ -704,6 +859,7 @@ void SettlementManager::RecomputeZonePop(const World& world, const HumanManager&
     }
   }
 
+  (void)dayDelta;
   (void)world;
 }
 
@@ -764,6 +920,194 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
                                                FactionManager& factions) {
   const int minDistSq = kMinVillageDistTiles * kMinVillageDistTiles;
 
+  auto tooCloseToExistingSettlement = [&](int x, int y, int minDist) {
+    const int minDistSqLocal = minDist * minDist;
+    for (const auto& settlement : settlements_) {
+      int dx = settlement.centerX - x;
+      int dy = settlement.centerY - y;
+      if (dx * dx + dy * dy < minDistSqLocal) return true;
+    }
+    return false;
+  };
+
+  auto removeFailedSettlement = [&](int settlementId, int x, int y) {
+    world.ClearBuilding(x, y);
+    settlements_.erase(std::remove_if(settlements_.begin(), settlements_.end(),
+                                      [&](const Settlement& settlement) {
+                                        return settlement.id == settlementId;
+                                      }),
+                       settlements_.end());
+    idToIndex_.assign(nextId_, -1);
+    for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+      if (settlements_[i].id >= 0 && settlements_[i].id < static_cast<int>(idToIndex_.size())) {
+        idToIndex_[settlements_[i].id] = i;
+      }
+    }
+    homeFieldDirty_ = true;
+  };
+
+  auto findExpansionSite = [&](const Settlement& parent, int& outX, int& outY) {
+    outX = -1;
+    outY = -1;
+    int bestScore = std::numeric_limits<int>::min();
+
+    for (int attempt = 0; attempt < 72; ++attempt) {
+      int dx = rng.RangeInt(-kFoundingMaxSiteDist, kFoundingMaxSiteDist);
+      int dy = rng.RangeInt(-kFoundingMaxSiteDist, kFoundingMaxSiteDist);
+      int distSq = dx * dx + dy * dy;
+      if (distSq < kFoundingMinSiteDist * kFoundingMinSiteDist ||
+          distSq > kFoundingMaxSiteDist * kFoundingMaxSiteDist) {
+        continue;
+      }
+
+      int x = parent.centerX + dx;
+      int y = parent.centerY + dy;
+      if (!world.TownHallFootprintAllLand(x, y)) continue;
+      if (tooCloseToExistingSettlement(x, y, kFoundingMinSiteDist)) continue;
+
+      int ownerId = ZoneOwnerForTile(x, y);
+      if (ownerId != -1 && ownerId != parent.id) {
+        const Settlement* ownerSettlement = Get(ownerId);
+        if (ownerSettlement && ownerSettlement->factionId != parent.factionId) continue;
+      }
+
+      const Tile& tile = world.At(x, y);
+      int dist = static_cast<int>(std::round(std::sqrt(static_cast<float>(distSq))));
+      int score = static_cast<int>(world.WaterScentAt(x, y)) * 2 +
+                  static_cast<int>(world.FoodScentAt(x, y)) + tile.trees * 35 -
+                  static_cast<int>(world.FireRiskAt(x, y)) * 3;
+      score -= std::abs(dist - 68) * 120;
+      if (ownerId == parent.id) score += 4000;
+      if (score > bestScore) {
+        bestScore = score;
+        outX = x;
+        outY = y;
+      }
+    }
+
+    return outX != -1 && outY != -1;
+  };
+
+  auto foundSettlement = [&](Settlement& parent, int x, int y, int desiredFounders,
+                             int founderMaxDistSq) {
+    const int parentId = parent.id;
+    const int parentFactionId = parent.factionId;
+    const int parentTechTier = parent.techTier;
+    int movedFounders = 0;
+    int starterFood = static_cast<int>(world.At(x, y).food);
+    int settlementId = nextId_++;
+    world.PlaceBuilding(x, y, BuildingType::TownHall, settlementId, 0);
+    if (world.At(x, y).building != BuildingType::TownHall ||
+        world.At(x, y).buildingOwnerId != settlementId) {
+      return false;
+    }
+
+    Settlement settlement;
+    settlement.id = settlementId;
+    settlement.centerX = x;
+    settlement.centerY = y;
+    settlement.factionId = parentFactionId;
+    settlement.stockFood = 50 + starterFood;
+    settlement.stockWood = 0;
+    settlement.stockStone = 0;
+    settlement.stockMetal = 0;
+    settlement.stockGold = 0;
+    settlement.population = 0;
+    settlement.lastFoundedSettlementDay = dayCount;
+    settlement.ageDays = 0;
+    settlement.tier = SettlementTier::Village;
+    settlement.techTier = parentTechTier;
+    settlement.techProgress = 0.0f;
+    settlement.stability = 75;
+    settlement.unrest = 0;
+    settlement.borderPressure = 0;
+    settlement.warPressure = 0;
+    settlement.influenceRadius = kClaimRadiusTownHall;
+    settlement.isCapital = false;
+    InitializeSettlementDeposits(settlement);
+    settlements_.push_back(settlement);
+
+    Settlement* founded = GetMutable(settlementId);
+    Settlement* source = GetMutable(parentId);
+    if (!founded || !source) return false;
+    if (humans) {
+      movedFounders =
+          AssignFoundingHumans(*humans, source->id, *founded, desiredFounders, founderMaxDistSq);
+      source->population = std::max(0, source->population - movedFounders);
+      founded->population = movedFounders;
+    } else {
+      movedFounders = TransferFoundingMacroPopulation(*source, *founded, desiredFounders);
+    }
+    if (movedFounders < kFoundingMinGroup) {
+      if (humans) {
+        int restored = 0;
+        for (Human& human : humans->HumansMutable()) {
+          if (human.settlementId != settlementId) continue;
+          human.settlementId = source->id;
+          human.homeX = source->centerX;
+          human.homeY = source->centerY;
+          human.targetX = source->centerX;
+          human.targetY = source->centerY;
+          human.forceReplan = true;
+          restored++;
+        }
+        source->population += restored;
+      } else {
+        for (int bin = 0; bin < 6; ++bin) {
+          source->macroPopF[bin] += founded->macroPopF[bin];
+          source->macroPopM[bin] += founded->macroPopM[bin];
+        }
+        source->population = source->MacroTotal();
+      }
+      removeFailedSettlement(settlementId, x, y);
+      return false;
+    }
+
+    TransferFoundingResources(*source, *founded, movedFounders);
+    source->lastFoundedSettlementDay = dayCount;
+    homeFieldDirty_ = true;
+    markers.push_back(VillageMarker{x, y, 25});
+    return true;
+  };
+
+  if (!settlements_.empty()) {
+    for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+      Settlement& parent = settlements_[i];
+      if (parent.population < kFoundingParentMinPop) continue;
+      if (parent.factionId <= 0) continue;
+      if (dayCount - parent.lastFoundedSettlementDay < kFoundingCooldownDays) continue;
+      if (factions.ActiveWarIdForFaction(parent.factionId) > 0) continue;
+
+      const int desiredFounders = DesiredFoundingGroupSize(parent.population);
+      if (desiredFounders < kFoundingMinGroup) continue;
+      int requiredFood = desiredFounders * kFoundingFoodPerPerson + 80;
+      int requiredWood = desiredFounders * kFoundingWoodPerPerson + Settlement::kTownHallWoodCost;
+      if (parent.stockFood < requiredFood || parent.stockWood < requiredWood) continue;
+
+      bool expansionPressure = parent.population > parent.housingCap + kHousingBuffer ||
+                               parent.population >= 160 ||
+                               (parent.stockFood > parent.population * 5 &&
+                                parent.stockWood > parent.population);
+      if (!expansionPressure) continue;
+
+      if (humans) {
+        int eligibleFounders = CountEligibleFoundingHumans(*humans, parent.id, parent.centerX,
+                                                           parent.centerY, -1);
+        if (eligibleFounders < kFoundingMinGroup) continue;
+      } else if (parent.MacroTotal() < kFoundingParentReservePop + kFoundingMinGroup) {
+        continue;
+      }
+
+      int bestX = -1;
+      int bestY = -1;
+      if (!findExpansionSite(parent, bestX, bestY)) continue;
+
+      if (foundSettlement(parent, bestX, bestY, desiredFounders, -1)) {
+        return;
+      }
+    }
+  }
+
   for (size_t denseIndex = 0; denseIndex < denseZoneIndices_.size();) {
     int zoneIndex = denseZoneIndices_[denseIndex];
     if (zoneIndex < 0 || zoneIndex >= zonesX_ * zonesY_) {
@@ -799,11 +1143,21 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
       continue;
     }
 
+    const Settlement* nearestSettlement = Get(nearestId);
+    int ownerId = ZoneOwnerAt(zx, zy);
+    const bool seedSettlement = settlements_.empty();
+    const bool independentSettlement =
+        !seedSettlement && humans && ownerId == -1 &&
+        nearestDistSq >= kFactionLinkRadiusTiles * kFactionLinkRadiusTiles;
+    if (!seedSettlement && !independentSettlement) {
+      denseIndex++;
+      continue;
+    }
+
     int zonePop = ZoneFoundingPopAt(zx, zy);
     int sourceFactionId = 0;
-    const Settlement* nearestSettlement = Get(nearestId);
     int sourceSettlementId = nearestSettlement ? nearestSettlement->id : -1;
-    if (nearestSettlement) {
+    if (!independentSettlement && nearestSettlement) {
       sourceFactionId = nearestSettlement->factionId;
     }
     const Faction* sourceFaction = factions.Get(sourceFactionId);
@@ -821,7 +1175,16 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
       continue;
     }
 
-    int ownerId = ZoneOwnerAt(zx, zy);
+    int desiredFounders = 0;
+    int foundingSourceId = -1;
+    if (seedSettlement || independentSettlement) {
+      if (!humans) {
+        denseIndex++;
+        continue;
+      }
+      desiredFounders = std::min(kFoundingMaxGroup, std::max(kFoundingMinGroup, zonePop));
+    }
+
     if (ownerId != -1 && sourceFactionId > 0) {
       const Settlement* ownerSettlement = Get(ownerId);
       if (ownerSettlement && ownerSettlement->factionId > 0 &&
@@ -843,15 +1206,19 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
     int bestX = -1;
     int bestY = -1;
 
-	    for (int y = startY; y < endY; ++y) {
-	      for (int x = startX; x < endX; ++x) {
-	        if (!world.TownHallFootprintAllLand(x, y)) continue;
-	        const Tile& tile = world.At(x, y);
-	
-	        int score = static_cast<int>(world.WaterScentAt(x, y)) * 2 +
-	                    static_cast<int>(world.FoodScentAt(x, y)) + tile.trees * 50 -
-	                    static_cast<int>(world.FireRiskAt(x, y)) * 3;
-	        if (score > bestScore) {
+    for (int y = startY; y < endY; ++y) {
+      for (int x = startX; x < endX; ++x) {
+        if (!world.TownHallFootprintAllLand(x, y)) continue;
+        if (independentSettlement && ZoneOwnerForTile(x, y) != -1) continue;
+        if (independentSettlement && tooCloseToExistingSettlement(x, y, kFactionLinkRadiusTiles)) {
+          continue;
+        }
+        const Tile& tile = world.At(x, y);
+
+        int score = static_cast<int>(world.WaterScentAt(x, y)) * 2 +
+                    static_cast<int>(world.FoodScentAt(x, y)) + tile.trees * 50 -
+                    static_cast<int>(world.FireRiskAt(x, y)) * 3;
+        if (score > bestScore) {
           bestScore = score;
           bestX = x;
           bestY = y;
@@ -868,9 +1235,30 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
       continue;
     }
 
+    const int maxFounderDist = std::max(zoneSize_ * 2, kMinVillageDistTiles);
+    const int maxFounderDistSq = maxFounderDist * maxFounderDist;
+    if (humans) {
+      int eligibleFounders =
+          CountEligibleFoundingHumans(*humans, foundingSourceId, bestX, bestY, maxFounderDistSq);
+      if (eligibleFounders < kFoundingMinGroup) {
+        denseIndex++;
+        continue;
+      }
+      desiredFounders = std::min(desiredFounders, eligibleFounders);
+      if (desiredFounders < kFoundingMinGroup) {
+        denseIndex++;
+        continue;
+      }
+    }
+
     int starterFood = static_cast<int>(world.At(bestX, bestY).food);
     int settlementId = nextId_++;
     world.PlaceBuilding(bestX, bestY, BuildingType::TownHall, settlementId, 0);
+    if (world.At(bestX, bestY).building != BuildingType::TownHall ||
+        world.At(bestX, bestY).buildingOwnerId != settlementId) {
+      denseIndex++;
+      continue;
+    }
 
     Settlement settlement;
     settlement.id = settlementId;
@@ -883,6 +1271,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
     settlement.stockMetal = 0;
     settlement.stockGold = 0;
     settlement.population = 0;
+    settlement.lastFoundedSettlementDay = dayCount;
     settlement.ageDays = 0;
     settlement.tier = SettlementTier::Village;
     settlement.techTier = 0;
@@ -896,7 +1285,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
     InitializeSettlementDeposits(settlement);
 
     int factionId = 0;
-    if (nearestSettlement && sourceFactionId > 0) {
+    if (!independentSettlement && nearestSettlement && sourceFactionId > 0) {
       int linkRadius = kFactionLinkRadiusTiles;
       if (sourceFaction && sourceFaction->traits.outlook == FactionOutlook::Isolationist) {
         linkRadius = kFactionLinkRadiusTiles / 2;
@@ -912,11 +1301,32 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
     settlements_.push_back(settlement);
     Settlement* founded = GetMutable(settlementId);
     Settlement* source = GetMutable(sourceSettlementId);
-    if (founded && source && source->id != founded->id) {
-      int desiredFounders = DesiredFoundingGroupSize(source->population);
+    if (founded && (seedSettlement || independentSettlement)) {
+      int movedFounders = AssignFoundingHumans(*humans, -1, *founded, desiredFounders, maxFounderDistSq);
+      founded->population = movedFounders;
+      if (movedFounders < kFoundingMinGroup) {
+        for (Human& human : humans->HumansMutable()) {
+          if (human.settlementId != settlementId) continue;
+          human.settlementId = -1;
+          human.homeX = human.x;
+          human.homeY = human.y;
+          human.targetX = human.x;
+          human.targetY = human.y;
+          human.goal = Goal::Wander;
+          human.forceReplan = true;
+        }
+        removeFailedSettlement(settlementId, bestX, bestY);
+        denseIndex++;
+        continue;
+      }
+      if (movedFounders > 0) {
+        founded->stability = std::max(founded->stability, 75);
+      }
+    } else if (founded && source && source->id != founded->id) {
       int movedFounders = 0;
       if (humans) {
-        movedFounders = AssignFoundingHumans(*humans, *source, *founded, desiredFounders);
+        movedFounders = AssignFoundingHumans(*humans, source->id, *founded, desiredFounders,
+                                             maxFounderDistSq);
         source->population = std::max(0, source->population - movedFounders);
         founded->population = movedFounders;
       } else {
@@ -926,6 +1336,7 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
       if (movedFounders > 0) {
         founded->stability = std::max(founded->stability, 75);
       }
+      source->lastFoundedSettlementDay = dayCount;
     }
     homeFieldDirty_ = true;
 
@@ -1162,6 +1573,20 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
     settlement.barracks = 0;
     settlement.mints = 0;
     settlement.schools = 0;
+    settlement.workshops = 0;
+    settlement.banks = 0;
+    settlement.universities = 0;
+    settlement.factories = 0;
+    settlement.powerPlants = 0;
+    settlement.airfields = 0;
+    settlement.reactors = 0;
+    settlement.satelliteArrays = 0;
+    settlement.roboticsLabs = 0;
+    settlement.harbors = 0;
+    settlement.railDepots = 0;
+    settlement.hospitals = 0;
+    settlement.dataCenters = 0;
+    settlement.militaryHQs = 0;
     settlement.farmsPlanted = 0;
     settlement.farmsReady = 0;
     settlement.townHalls = 0;
@@ -1222,6 +1647,48 @@ void SettlementManager::RecomputeSettlementBuildings(const World& world) {
       case BuildingType::School:
         settlement.schools++;
         break;
+      case BuildingType::Workshop:
+        settlement.workshops++;
+        break;
+      case BuildingType::Bank:
+        settlement.banks++;
+        break;
+      case BuildingType::University:
+        settlement.universities++;
+        break;
+      case BuildingType::Factory:
+        settlement.factories++;
+        break;
+      case BuildingType::PowerPlant:
+        settlement.powerPlants++;
+        break;
+      case BuildingType::Airfield:
+        settlement.airfields++;
+        break;
+      case BuildingType::Reactor:
+        settlement.reactors++;
+        break;
+      case BuildingType::SatelliteArray:
+        settlement.satelliteArrays++;
+        break;
+      case BuildingType::RoboticsLab:
+        settlement.roboticsLabs++;
+        break;
+      case BuildingType::Harbor:
+        settlement.harbors++;
+        break;
+      case BuildingType::RailDepot:
+        settlement.railDepots++;
+        break;
+      case BuildingType::Hospital:
+        settlement.hospitals++;
+        break;
+      case BuildingType::DataCenter:
+        settlement.dataCenters++;
+        break;
+      case BuildingType::MilitaryHQ:
+        settlement.militaryHQs++;
+        break;
       case BuildingType::TownHall:
         settlement.townHalls++;
         break;
@@ -1242,7 +1709,8 @@ void SettlementManager::UpdateSettlementCaps() {
   for (auto& settlement : settlements_) {
     int houseCap = settlement.houses * HouseCapacityForTier(settlement.techTier);
     int hallCap = settlement.townHalls * TownHallCapacityForTier(settlement.techTier);
-    settlement.housingCap = houseCap + hallCap;
+    int hospitalCap = settlement.hospitals * std::max(12, 10 + settlement.techTier * 3);
+    settlement.housingCap = houseCap + hallCap + hospitalCap;
   }
 }
 
@@ -1388,6 +1856,12 @@ void SettlementManager::RecomputeSettlementPopAndRoles(World& world, Random& rng
     }
     if (settlement.barracks > 0) {
       soldiers = std::max(soldiers, std::max(1, pop / 10));
+    }
+    if (settlement.airfields > 0) {
+      soldiers = std::max(soldiers, std::max(2, pop / 8));
+    }
+    if (settlement.militaryHQs > 0) {
+      soldiers = std::max(soldiers, std::max(3, pop / 6));
     }
     if (settlement.walls > 0 && (settlement.warPressure > 0 || settlement.borderPressure > 2)) {
       soldiers = std::max(soldiers, std::max(1, pop / 12));
@@ -1710,6 +2184,26 @@ void SettlementManager::UpdateSettlementStability(const FactionManager& factions
                                  TechSystem::StabilityYieldForBuilding(BuildingType::Walls));
     target += static_cast<float>(settlement.schools *
                                  TechSystem::StabilityYieldForBuilding(BuildingType::School));
+    target += static_cast<float>(settlement.banks *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Bank));
+    target += static_cast<float>(settlement.universities *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::University));
+    target += static_cast<float>(settlement.powerPlants *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::PowerPlant));
+    target += static_cast<float>(settlement.reactors *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Reactor));
+    target += static_cast<float>(settlement.satelliteArrays *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::SatelliteArray));
+    target += static_cast<float>(settlement.roboticsLabs *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::RoboticsLab));
+    target += static_cast<float>(settlement.harbors *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Harbor));
+    target += static_cast<float>(settlement.hospitals *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::Hospital));
+    target += static_cast<float>(settlement.dataCenters *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::DataCenter));
+    target += static_cast<float>(settlement.militaryHQs *
+                                 TechSystem::StabilityYieldForBuilding(BuildingType::MilitaryHQ));
     if (settlement.isCapital) {
       target += 6.0f;
     } else if (settlement.borderPressure > 4) {
@@ -1811,6 +2305,12 @@ void SettlementManager::UpdateSettlementRoleStatsMacro(World& world, const Facti
     }
     if (settlement.barracks > 0) {
       soldiers = std::max(soldiers, std::max(1, pop / 10));
+    }
+    if (settlement.airfields > 0) {
+      soldiers = std::max(soldiers, std::max(2, pop / 8));
+    }
+    if (settlement.militaryHQs > 0) {
+      soldiers = std::max(soldiers, std::max(3, pop / 6));
     }
     if (settlement.walls > 0 && (settlement.warPressure > 0 || settlement.borderPressure > 2)) {
       soldiers = std::max(soldiers, std::max(1, pop / 12));
@@ -3206,6 +3706,11 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
           score += settlement.stockMetal;
         } else if (TechSystem::IsTechBuilding(type)) {
           score += settlement.isCapital ? 35 : 0;
+          if (type == BuildingType::Harbor) {
+            int waterScore = WaterAdjacencyScore(world, x, y, 5);
+            if (waterScore == 0) continue;
+            score += waterScore * 35;
+          }
           if (type == BuildingType::Walls || type == BuildingType::Barracks) {
             score += settlement.borderPressure * 12 + settlement.warPressure * 16;
           }
@@ -3253,13 +3758,19 @@ void SettlementManager::GenerateTasks(World& world, Random& rng, const FactionMa
     const Faction* faction = factions.Get(settlement.factionId);
     constexpr BuildingType kTechBuildings[] = {
         BuildingType::Monument, BuildingType::Archive, BuildingType::Walls,
-        BuildingType::Barracks, BuildingType::Mint, BuildingType::School};
+        BuildingType::Barracks, BuildingType::Mint, BuildingType::School,
+        BuildingType::Workshop, BuildingType::Bank, BuildingType::University,
+        BuildingType::Factory, BuildingType::PowerPlant, BuildingType::Airfield,
+        BuildingType::Reactor, BuildingType::SatelliteArray, BuildingType::RoboticsLab,
+        BuildingType::Harbor, BuildingType::RailDepot, BuildingType::Hospital,
+        BuildingType::DataCenter, BuildingType::MilitaryHQ};
     for (BuildingType building : kTechBuildings) {
       if (available <= 0 || foodEmergency) break;
       if (hasPlannedBuilding(building)) continue;
       if (!CanAffordBuilding(settlement, building)) continue;
-      if (!ShouldBuildTechBuilding(settlement, faction, building)) continue;
-      if (pushEconomyBuilding(building, kMarketBuildRadius)) {
+      if (!ShouldBuildTechBuilding(world, settlement, faction, building)) continue;
+      int buildRadius = (building == BuildingType::Harbor) ? 22 : kMarketBuildRadius;
+      if (pushEconomyBuilding(building, buildRadius)) {
         available--;
       }
     }
@@ -3358,7 +3869,10 @@ void SettlementManager::TryCreateTradeCaravans(int dayCount, const FactionManage
       }
 
       int dist = std::abs(source.centerX - target.centerX) + std::abs(source.centerY - target.centerY);
-      if (dist <= 0 || dist > kTradeMaxDistanceTiles) continue;
+      int maxTradeDistance = kTradeMaxDistanceTiles;
+      if (source.harbors > 0 || target.harbors > 0) maxTradeDistance += 70;
+      if (source.railDepots > 0 || target.railDepots > 0) maxTradeDistance += 110;
+      if (dist <= 0 || dist > maxTradeDistance) continue;
 
       for (TradeResource resource : kTradeResources) {
         const ResourcePressure& sourcePressure = source.resourcePressure[TradeResourceIndex(resource)];
@@ -3375,6 +3889,8 @@ void SettlementManager::TryCreateTradeCaravans(int dayCount, const FactionManage
 
         int maxShipment = kTradeMaxShipment;
         if (source.markets > 0 || target.markets > 0) maxShipment += 45;
+        if (source.harbors > 0 || target.harbors > 0) maxShipment += 55;
+        if (source.railDepots > 0 || target.railDepots > 0) maxShipment += 80;
         int amount = std::min(maxShipment, std::min(surplus / 2, shortage));
         if (amount < kTradeMinShipment) continue;
 
@@ -3404,6 +3920,8 @@ void SettlementManager::TryCreateTradeCaravans(int dayCount, const FactionManage
     int dist = std::abs(sourceNow->centerX - target->centerX) +
                std::abs(sourceNow->centerY - target->centerY);
     float speedTilesPerDay = (sourceNow->markets > 0 || target->markets > 0) ? 24.0f : 18.0f;
+    if (sourceNow->harbors > 0 || target->harbors > 0) speedTilesPerDay += 8.0f;
+    if (sourceNow->railDepots > 0 || target->railDepots > 0) speedTilesPerDay += 16.0f;
     float travelPerDay = speedTilesPerDay / static_cast<float>(std::max(18, dist));
     travelPerDay = std::max(0.035f, std::min(0.22f, travelPerDay));
 
@@ -3437,6 +3955,10 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng, int dayC
         settlement.goldDeposit == 0 && settlement.ageDays <= 2) {
       InitializeSettlementDeposits(settlement);
     }
+    if (settlement.harbors > 0 && settlement.stockFood >= pop * kEmergencyFoodPerPop) {
+      settlement.stockFood += std::max(4, std::min(18, pop / 8));
+      settlement.stockGold += settlement.harbors;
+    }
 
     int desiredWood = pop * kDesiredWoodPerPop;
     if (settlement.stockFood > pop * 4 && settlement.stockWood < desiredWood) {
@@ -3467,6 +3989,9 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng, int dayC
       miningLabor += settlement.population / 18;
     }
     miningLabor += settlement.techTier;
+    miningLabor += settlement.workshops * 3 + settlement.factories * 8 +
+                   settlement.powerPlants * 4 + settlement.reactors * 6 +
+                   settlement.roboticsLabs * 10;
     if (foodEmergency) {
       miningLabor /= 4;
     }
@@ -3508,10 +4033,12 @@ void SettlementManager::RunSettlementEconomy(World& world, Random& rng, int dayC
     }
 
     if (settlement.forges > 0 && settlement.stockMetal > 0) {
-      int toolOutput = std::min(settlement.stockMetal, std::max(1, settlement.builders / 8));
+      int toolOutput = std::min(settlement.stockMetal,
+                                std::max(1, settlement.builders / 8 + settlement.workshops +
+                                                settlement.factories * 2 + settlement.roboticsLabs * 2));
       settlement.stockMetal -= toolOutput;
       settlement.stockWood += toolOutput;
-      settlement.stockStone += toolOutput / 2;
+      settlement.stockStone += toolOutput / 2 + settlement.factories;
     }
 
     if (settlement.soldiers > 0 && settlement.stockMetal > 0 && settlement.warPressure > 0) {
@@ -3538,6 +4065,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
     UpdateSettlementCaps();
   }
   RecomputeZoneOwners(world);
+  AssignHumansToSettlements(humans);
   RecomputeZonePop(world, humans, dayDelta);
   TryFoundNewSettlements(world, &humans, rng, dayCount, markers, factions);
   if (world.ConsumeBuildingDirty()) {
@@ -3609,6 +4137,11 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
 	        score = static_cast<int>(world.WaterScentAt(x, y));
 	      } else {
         score = -(std::abs(dx) + std::abs(dy)) * 10;
+        if (type == BuildingType::Harbor) {
+          int waterScore = WaterAdjacencyScore(world, x, y, 5);
+          if (waterScore == 0) continue;
+          score += waterScore * 35;
+        }
       }
       if (score > bestScore) {
         bestScore = score;
@@ -3683,12 +4216,18 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
     const Faction* faction = factions.Get(settlement.factionId);
     constexpr BuildingType kTechBuildings[] = {
         BuildingType::Monument, BuildingType::Archive, BuildingType::Walls,
-        BuildingType::Barracks, BuildingType::Mint, BuildingType::School};
+        BuildingType::Barracks, BuildingType::Mint, BuildingType::School,
+        BuildingType::Workshop, BuildingType::Bank, BuildingType::University,
+        BuildingType::Factory, BuildingType::PowerPlant, BuildingType::Airfield,
+        BuildingType::Reactor, BuildingType::SatelliteArray, BuildingType::RoboticsLab,
+        BuildingType::Harbor, BuildingType::RailDepot, BuildingType::Hospital,
+        BuildingType::DataCenter, BuildingType::MilitaryHQ};
     for (BuildingType building : kTechBuildings) {
       if (settlement.debugFoodEmergency) break;
       if (!CanAffordBuilding(settlement, building)) continue;
-      if (!ShouldBuildTechBuilding(settlement, faction, building)) continue;
-      if (placeBuilding(settlement, building, kMarketBuildRadius)) {
+      if (!ShouldBuildTechBuilding(world, settlement, faction, building)) continue;
+      int buildRadius = (building == BuildingType::Harbor) ? 22 : kMarketBuildRadius;
+      if (placeBuilding(settlement, building, buildRadius)) {
         PayBuildingCost(settlement, building);
         switch (building) {
           case BuildingType::Monument:
@@ -3708,6 +4247,48 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
             break;
           case BuildingType::School:
             settlement.schools++;
+            break;
+          case BuildingType::Workshop:
+            settlement.workshops++;
+            break;
+          case BuildingType::Bank:
+            settlement.banks++;
+            break;
+          case BuildingType::University:
+            settlement.universities++;
+            break;
+          case BuildingType::Factory:
+            settlement.factories++;
+            break;
+          case BuildingType::PowerPlant:
+            settlement.powerPlants++;
+            break;
+          case BuildingType::Airfield:
+            settlement.airfields++;
+            break;
+          case BuildingType::Reactor:
+            settlement.reactors++;
+            break;
+          case BuildingType::SatelliteArray:
+            settlement.satelliteArrays++;
+            break;
+          case BuildingType::RoboticsLab:
+            settlement.roboticsLabs++;
+            break;
+          case BuildingType::Harbor:
+            settlement.harbors++;
+            break;
+          case BuildingType::RailDepot:
+            settlement.railDepots++;
+            break;
+          case BuildingType::Hospital:
+            settlement.hospitals++;
+            break;
+          case BuildingType::DataCenter:
+            settlement.dataCenters++;
+            break;
+          case BuildingType::MilitaryHQ:
+            settlement.militaryHQs++;
             break;
           default:
             break;

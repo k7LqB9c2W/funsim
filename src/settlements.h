@@ -83,6 +83,7 @@ struct Settlement {
   int economyStress = 0;
   std::array<ResourcePressure, kTradeResourceCount> resourcePressure{};
   int population = 0;
+  int lastFoundedSettlementDay = -1000000;
   int gatherers = 0;
   int farmers = 0;
   int builders = 0;
@@ -103,6 +104,20 @@ struct Settlement {
   int barracks = 0;
   int mints = 0;
   int schools = 0;
+  int workshops = 0;
+  int banks = 0;
+  int universities = 0;
+  int factories = 0;
+  int powerPlants = 0;
+  int airfields = 0;
+  int reactors = 0;
+  int satelliteArrays = 0;
+  int roboticsLabs = 0;
+  int harbors = 0;
+  int railDepots = 0;
+  int hospitals = 0;
+  int dataCenters = 0;
+  int militaryHQs = 0;
   int farmsPlanted = 0;
   int farmsReady = 0;
   int townHalls = 0;

@@ -304,6 +304,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::Text("Era: %s | Stability: %d | War Exhaustion: %.2f",
                   TechSystem::EraNameForLevel(faction.techTier), faction.stability,
                   faction.warExhaustion);
+      ImGui::TextDisabled("Era boost: %s", TechSystem::EraBoostSummaryForLevel(faction.techTier));
       if (currentTech) {
         float progress = currentTech->cost > 0.0f
                              ? std::max(0.0f, std::min(1.0f,
@@ -373,6 +374,11 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
             ImGui::SameLine();
             ImGui::TextDisabled("unlocks %s", TechSystem::BuildingName(tech.unlockBuilding));
           }
+          if (tech.unlockBuildingB != BuildingType::None) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("+ %s", TechSystem::BuildingName(tech.unlockBuildingB));
+          }
+          ImGui::TextDisabled("boost: %s", TechSystem::EraBoostSummaryForLevel(tech.eraLevel));
         }
         ImGui::TreePop();
       }
@@ -443,6 +449,7 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
       ImGui::SliderFloat("Diplomacy Bias", &faction->traits.diplomacyBias, 0.0f, 1.5f, "%.2f");
 
       ImGui::Text("Era: %s", TechSystem::EraNameForLevel(faction->techTier));
+      ImGui::TextDisabled("Era boost: %s", TechSystem::EraBoostSummaryForLevel(faction->techTier));
       const TechSystem::TechDefinition* editorTech =
           TechSystem::DefinitionByIndex(faction->currentTechId);
       if (editorTech) {
@@ -761,6 +768,16 @@ void DrawUI(UIState& state, const SimStats& stats, FactionManager& factions,
                 settlement.archives, settlement.walls);
     ImGui::Text("Barracks: %d | Mints: %d | Schools: %d", settlement.barracks,
                 settlement.mints, settlement.schools);
+    ImGui::Text("Workshop: %d | Bank: %d | University: %d", settlement.workshops,
+                settlement.banks, settlement.universities);
+    ImGui::Text("Factory: %d | Power Plant: %d | Airfield: %d", settlement.factories,
+                settlement.powerPlants, settlement.airfields);
+    ImGui::Text("Reactor: %d | Satellite Array: %d | Robotics Lab: %d", settlement.reactors,
+                settlement.satelliteArrays, settlement.roboticsLabs);
+    ImGui::Text("Harbor: %d | Rail Depot: %d | Hospital: %d", settlement.harbors,
+                settlement.railDepots, settlement.hospitals);
+    ImGui::Text("Data Center: %d | Military HQ: %d", settlement.dataCenters,
+                settlement.militaryHQs);
     ImGui::Text("Farmers: %d | Gatherers: %d", settlement.farmers, settlement.gatherers);
 
     int harvestTasks = 0;

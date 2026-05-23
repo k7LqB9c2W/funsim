@@ -395,6 +395,16 @@ void FactionManager::AdvanceResearch(const SettlementManager& settlements, Rando
     local += TechSystem::ResearchYieldForBuilding(BuildingType::Archive) * settlement.archives;
     local += TechSystem::ResearchYieldForBuilding(BuildingType::Mint) * settlement.mints;
     local += TechSystem::ResearchYieldForBuilding(BuildingType::School) * settlement.schools;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::University) * settlement.universities;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::PowerPlant) * settlement.powerPlants;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::Reactor) * settlement.reactors;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::SatelliteArray) *
+             settlement.satelliteArrays;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::RoboticsLab) *
+             settlement.roboticsLabs;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::Hospital) * settlement.hospitals;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::DataCenter) * settlement.dataCenters;
+    local += TechSystem::ResearchYieldForBuilding(BuildingType::MilitaryHQ) * settlement.militaryHQs;
     local += settlement.economyProsperity / 35;
     if (settlement.economyStress >= 60) local = std::max(0, local - 2);
     research[static_cast<size_t>(index)] += local;

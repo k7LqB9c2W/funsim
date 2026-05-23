@@ -14,10 +14,30 @@ enum class TechId : uint8_t {
   Writing,
   Currency,
   Education,
+  Engineering,
+  HorsebackRiding,
+  Apprenticeship,
+  Machinery,
+  Banking,
+  Gunpowder,
+  Cartography,
+  Industrialization,
+  ScientificTheory,
+  SteamPower,
+  Sanitation,
+  Flight,
+  Electricity,
+  ReplaceableParts,
+  Rocketry,
+  NuclearFission,
+  Satellites,
+  Robotics,
+  Telecommunications,
   Count,
 };
 
 static constexpr int kTechCount = static_cast<int>(TechId::Count);
+static_assert(kTechCount <= 64, "Tech unlocks are stored in a 64-bit mask.");
 static constexpr int kNoTech = -1;
 
 struct BuildingCost {
@@ -36,6 +56,7 @@ struct TechDefinition {
   int prereqA = kNoTech;
   int prereqB = kNoTech;
   BuildingType unlockBuilding = BuildingType::None;
+  BuildingType unlockBuildingB = BuildingType::None;
 };
 
 const std::array<TechDefinition, kTechCount>& Definitions();
@@ -48,6 +69,7 @@ bool PrerequisitesMet(uint64_t mask, const TechDefinition& tech);
 int FirstAvailableTech(uint64_t mask);
 int EraLevelForMask(uint64_t mask);
 const char* EraNameForLevel(int eraLevel);
+const char* EraBoostSummaryForLevel(int eraLevel);
 const char* BuildingName(BuildingType building);
 
 bool IsTechBuilding(BuildingType building);

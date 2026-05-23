@@ -700,6 +700,26 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
       }
     }
   }
+  {
+    CrashContextSetStage("Renderer::Load IMG classical townhall");
+    const std::string townHallPath = "assets/sprites/TH_Classical.png";
+    townHallClassicalTexture_ = IMG_LoadTexture(renderer, townHallPath.c_str());
+    if (!townHallClassicalTexture_) {
+      SDL_Log("Failed to load classical town hall texture (%s): %s", townHallPath.c_str(),
+              IMG_GetError());
+      townHallClassicalTexW_ = 0;
+      townHallClassicalTexH_ = 0;
+    } else {
+      SDL_SetTextureScaleMode(townHallClassicalTexture_, SDL_ScaleModeNearest);
+      SDL_SetTextureBlendMode(townHallClassicalTexture_, SDL_BLENDMODE_BLEND);
+      if (SDL_QueryTexture(townHallClassicalTexture_, nullptr, nullptr, &townHallClassicalTexW_,
+                           &townHallClassicalTexH_) != 0) {
+        SDL_Log("Failed to query classical town hall texture: %s", SDL_GetError());
+        townHallClassicalTexW_ = 0;
+        townHallClassicalTexH_ = 0;
+      }
+    }
+  }
 
   // Optional capital sprite (used for the first settlement of a faction).
   {
@@ -780,16 +800,59 @@ bool Renderer::Load(SDL_Renderer* renderer, const std::string& humanSpritesPath,
 
   loadOptionalLargeSprite("Renderer::Load IMG monument", "assets/sprites/monument.png",
                           monumentTexture_, monumentTexW_, monumentTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG classical monument",
+                          "assets/sprites/monument_classical.png",
+                          monumentClassicalTexture_, monumentClassicalTexW_,
+                          monumentClassicalTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG archive", "assets/sprites/archive.png",
                           archiveTexture_, archiveTexW_, archiveTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG classical archive",
+                          "assets/sprites/archive_classical.png",
+                          archiveClassicalTexture_, archiveClassicalTexW_,
+                          archiveClassicalTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG walls", "assets/sprites/walls.png",
                           wallsTexture_, wallsTexW_, wallsTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG classical walls",
+                          "assets/sprites/walls_classical.png",
+                          wallsClassicalTexture_, wallsClassicalTexW_, wallsClassicalTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG barracks", "assets/sprites/barracks.png",
                           barracksTexture_, barracksTexW_, barracksTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG classical barracks",
+                          "assets/sprites/barracks_classical.png",
+                          barracksClassicalTexture_, barracksClassicalTexW_,
+                          barracksClassicalTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG mint", "assets/sprites/mint.png",
                           mintTexture_, mintTexW_, mintTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG school", "assets/sprites/school.png",
                           schoolTexture_, schoolTexW_, schoolTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG workshop", "assets/sprites/workshop.png",
+                          workshopTexture_, workshopTexW_, workshopTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG bank", "assets/sprites/bank.png",
+                          bankTexture_, bankTexW_, bankTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG university", "assets/sprites/university.png",
+                          universityTexture_, universityTexW_, universityTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG factory", "assets/sprites/factory.png",
+                          factoryTexture_, factoryTexW_, factoryTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG power plant", "assets/sprites/powerplant.png",
+                          powerPlantTexture_, powerPlantTexW_, powerPlantTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG airfield", "assets/sprites/airstrip.png",
+                          airfieldTexture_, airfieldTexW_, airfieldTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG reactor", "assets/sprites/reactor.png",
+                          reactorTexture_, reactorTexW_, reactorTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG satellite array", "assets/sprites/satellite.png",
+                          satelliteArrayTexture_, satelliteArrayTexW_, satelliteArrayTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG robotics lab", "assets/sprites/robot_lab.png",
+                          roboticsLabTexture_, roboticsLabTexW_, roboticsLabTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG harbor", "assets/sprites/harbor.png",
+                          harborTexture_, harborTexW_, harborTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG rail depot", "assets/sprites/raildepot.png",
+                          railDepotTexture_, railDepotTexW_, railDepotTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG hospital", "assets/sprites/hospital.png",
+                          hospitalTexture_, hospitalTexW_, hospitalTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG data center", "assets/sprites/datacenter.png",
+                          dataCenterTexture_, dataCenterTexW_, dataCenterTexH_);
+  loadOptionalLargeSprite("Renderer::Load IMG military HQ", "assets/sprites/militaryhq.png",
+                          militaryHQTexture_, militaryHQTexW_, militaryHQTexH_);
   loadOptionalLargeSprite("Renderer::Load IMG research spark", "assets/sprites/research_spark.png",
                           researchSparkTexture_, researchSparkTexW_, researchSparkTexH_);
 
@@ -1033,6 +1096,10 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(townHallTexture_);
     townHallTexture_ = nullptr;
   }
+  if (townHallClassicalTexture_) {
+    SDL_DestroyTexture(townHallClassicalTexture_);
+    townHallClassicalTexture_ = nullptr;
+  }
   if (capitalTexture_) {
     SDL_DestroyTexture(capitalTexture_);
     capitalTexture_ = nullptr;
@@ -1049,17 +1116,33 @@ void Renderer::Shutdown() {
     SDL_DestroyTexture(monumentTexture_);
     monumentTexture_ = nullptr;
   }
+  if (monumentClassicalTexture_) {
+    SDL_DestroyTexture(monumentClassicalTexture_);
+    monumentClassicalTexture_ = nullptr;
+  }
   if (archiveTexture_) {
     SDL_DestroyTexture(archiveTexture_);
     archiveTexture_ = nullptr;
+  }
+  if (archiveClassicalTexture_) {
+    SDL_DestroyTexture(archiveClassicalTexture_);
+    archiveClassicalTexture_ = nullptr;
   }
   if (wallsTexture_) {
     SDL_DestroyTexture(wallsTexture_);
     wallsTexture_ = nullptr;
   }
+  if (wallsClassicalTexture_) {
+    SDL_DestroyTexture(wallsClassicalTexture_);
+    wallsClassicalTexture_ = nullptr;
+  }
   if (barracksTexture_) {
     SDL_DestroyTexture(barracksTexture_);
     barracksTexture_ = nullptr;
+  }
+  if (barracksClassicalTexture_) {
+    SDL_DestroyTexture(barracksClassicalTexture_);
+    barracksClassicalTexture_ = nullptr;
   }
   if (mintTexture_) {
     SDL_DestroyTexture(mintTexture_);
@@ -1068,6 +1151,62 @@ void Renderer::Shutdown() {
   if (schoolTexture_) {
     SDL_DestroyTexture(schoolTexture_);
     schoolTexture_ = nullptr;
+  }
+  if (workshopTexture_) {
+    SDL_DestroyTexture(workshopTexture_);
+    workshopTexture_ = nullptr;
+  }
+  if (bankTexture_) {
+    SDL_DestroyTexture(bankTexture_);
+    bankTexture_ = nullptr;
+  }
+  if (universityTexture_) {
+    SDL_DestroyTexture(universityTexture_);
+    universityTexture_ = nullptr;
+  }
+  if (factoryTexture_) {
+    SDL_DestroyTexture(factoryTexture_);
+    factoryTexture_ = nullptr;
+  }
+  if (powerPlantTexture_) {
+    SDL_DestroyTexture(powerPlantTexture_);
+    powerPlantTexture_ = nullptr;
+  }
+  if (airfieldTexture_) {
+    SDL_DestroyTexture(airfieldTexture_);
+    airfieldTexture_ = nullptr;
+  }
+  if (reactorTexture_) {
+    SDL_DestroyTexture(reactorTexture_);
+    reactorTexture_ = nullptr;
+  }
+  if (satelliteArrayTexture_) {
+    SDL_DestroyTexture(satelliteArrayTexture_);
+    satelliteArrayTexture_ = nullptr;
+  }
+  if (roboticsLabTexture_) {
+    SDL_DestroyTexture(roboticsLabTexture_);
+    roboticsLabTexture_ = nullptr;
+  }
+  if (harborTexture_) {
+    SDL_DestroyTexture(harborTexture_);
+    harborTexture_ = nullptr;
+  }
+  if (railDepotTexture_) {
+    SDL_DestroyTexture(railDepotTexture_);
+    railDepotTexture_ = nullptr;
+  }
+  if (hospitalTexture_) {
+    SDL_DestroyTexture(hospitalTexture_);
+    hospitalTexture_ = nullptr;
+  }
+  if (dataCenterTexture_) {
+    SDL_DestroyTexture(dataCenterTexture_);
+    dataCenterTexture_ = nullptr;
+  }
+  if (militaryHQTexture_) {
+    SDL_DestroyTexture(militaryHQTexture_);
+    militaryHQTexture_ = nullptr;
   }
   if (researchSparkTexture_) {
     SDL_DestroyTexture(researchSparkTexture_);
@@ -1105,6 +1244,8 @@ void Renderer::Shutdown() {
   vignetteTexH_ = 0;
   townHallTexW_ = 0;
   townHallTexH_ = 0;
+  townHallClassicalTexW_ = 0;
+  townHallClassicalTexH_ = 0;
   capitalTexW_ = 0;
   capitalTexH_ = 0;
   marketTexW_ = 0;
@@ -1113,16 +1254,52 @@ void Renderer::Shutdown() {
   forgeTexH_ = 0;
   monumentTexW_ = 0;
   monumentTexH_ = 0;
+  monumentClassicalTexW_ = 0;
+  monumentClassicalTexH_ = 0;
   archiveTexW_ = 0;
   archiveTexH_ = 0;
+  archiveClassicalTexW_ = 0;
+  archiveClassicalTexH_ = 0;
   wallsTexW_ = 0;
   wallsTexH_ = 0;
+  wallsClassicalTexW_ = 0;
+  wallsClassicalTexH_ = 0;
   barracksTexW_ = 0;
   barracksTexH_ = 0;
+  barracksClassicalTexW_ = 0;
+  barracksClassicalTexH_ = 0;
   mintTexW_ = 0;
   mintTexH_ = 0;
   schoolTexW_ = 0;
   schoolTexH_ = 0;
+  workshopTexW_ = 0;
+  workshopTexH_ = 0;
+  bankTexW_ = 0;
+  bankTexH_ = 0;
+  universityTexW_ = 0;
+  universityTexH_ = 0;
+  factoryTexW_ = 0;
+  factoryTexH_ = 0;
+  powerPlantTexW_ = 0;
+  powerPlantTexH_ = 0;
+  airfieldTexW_ = 0;
+  airfieldTexH_ = 0;
+  reactorTexW_ = 0;
+  reactorTexH_ = 0;
+  satelliteArrayTexW_ = 0;
+  satelliteArrayTexH_ = 0;
+  roboticsLabTexW_ = 0;
+  roboticsLabTexH_ = 0;
+  harborTexW_ = 0;
+  harborTexH_ = 0;
+  railDepotTexW_ = 0;
+  railDepotTexH_ = 0;
+  hospitalTexW_ = 0;
+  hospitalTexH_ = 0;
+  dataCenterTexW_ = 0;
+  dataCenterTexH_ = 0;
+  militaryHQTexW_ = 0;
+  militaryHQTexH_ = 0;
   researchSparkTexW_ = 0;
   researchSparkTexH_ = 0;
   treeTexW_ = 0;
@@ -1779,7 +1956,8 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
         if (tile.type != TileType::Land && tile.type != TileType::Sand) continue;
 
         if (buildingsTexture_ && tile.building != BuildingType::None) {
-          if (!((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
+          if (!((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_ ||
+                                                             townHallClassicalTexture_)) ||
                 (tile.building == BuildingType::Market && marketTexture_) ||
                 (tile.building == BuildingType::Forge && forgeTexture_) ||
                 (tile.building == BuildingType::Monument && monumentTexture_) ||
@@ -1787,7 +1965,21 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
                 (tile.building == BuildingType::Walls && wallsTexture_) ||
                 (tile.building == BuildingType::Barracks && barracksTexture_) ||
                 (tile.building == BuildingType::Mint && mintTexture_) ||
-                (tile.building == BuildingType::School && schoolTexture_))) {
+                (tile.building == BuildingType::School && schoolTexture_) ||
+                (tile.building == BuildingType::Workshop && workshopTexture_) ||
+                (tile.building == BuildingType::Bank && bankTexture_) ||
+                (tile.building == BuildingType::University && universityTexture_) ||
+                (tile.building == BuildingType::Factory && factoryTexture_) ||
+                (tile.building == BuildingType::PowerPlant && powerPlantTexture_) ||
+                (tile.building == BuildingType::Airfield && airfieldTexture_) ||
+                (tile.building == BuildingType::Reactor && reactorTexture_) ||
+                (tile.building == BuildingType::SatelliteArray && satelliteArrayTexture_) ||
+                (tile.building == BuildingType::RoboticsLab && roboticsLabTexture_) ||
+                (tile.building == BuildingType::Harbor && harborTexture_) ||
+                (tile.building == BuildingType::RailDepot && railDepotTexture_) ||
+                (tile.building == BuildingType::Hospital && hospitalTexture_) ||
+                (tile.building == BuildingType::DataCenter && dataCenterTexture_) ||
+                (tile.building == BuildingType::MilitaryHQ && militaryHQTexture_))) {
             AtlasCoord coord{0, 0};
             switch (tile.building) {
               case BuildingType::House:
@@ -1811,6 +2003,20 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
               case BuildingType::Barracks:
               case BuildingType::Mint:
               case BuildingType::School:
+              case BuildingType::Workshop:
+              case BuildingType::Bank:
+              case BuildingType::University:
+              case BuildingType::Factory:
+              case BuildingType::PowerPlant:
+              case BuildingType::Airfield:
+              case BuildingType::Reactor:
+              case BuildingType::SatelliteArray:
+              case BuildingType::RoboticsLab:
+              case BuildingType::Harbor:
+              case BuildingType::RailDepot:
+              case BuildingType::Hospital:
+              case BuildingType::DataCenter:
+              case BuildingType::MilitaryHQ:
                 coord = AtlasCoord{0, 0};
                 break;
               default:
@@ -1987,6 +2193,36 @@ void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& 
         drawLargeBuilding(x, y, mintTexture_, mintTexW_, mintTexH_, 0.58f, 0.42f);
       } else if (tile.building == BuildingType::School) {
         drawLargeBuilding(x, y, schoolTexture_, schoolTexW_, schoolTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Workshop) {
+        drawLargeBuilding(x, y, workshopTexture_, workshopTexW_, workshopTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Bank) {
+        drawLargeBuilding(x, y, bankTexture_, bankTexW_, bankTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::University) {
+        drawLargeBuilding(x, y, universityTexture_, universityTexW_, universityTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Factory) {
+        drawLargeBuilding(x, y, factoryTexture_, factoryTexW_, factoryTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::PowerPlant) {
+        drawLargeBuilding(x, y, powerPlantTexture_, powerPlantTexW_, powerPlantTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Airfield) {
+        drawLargeBuilding(x, y, airfieldTexture_, airfieldTexW_, airfieldTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Reactor) {
+        drawLargeBuilding(x, y, reactorTexture_, reactorTexW_, reactorTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::SatelliteArray) {
+        drawLargeBuilding(x, y, satelliteArrayTexture_, satelliteArrayTexW_, satelliteArrayTexH_,
+                          0.58f, 0.42f);
+      } else if (tile.building == BuildingType::RoboticsLab) {
+        drawLargeBuilding(x, y, roboticsLabTexture_, roboticsLabTexW_, roboticsLabTexH_,
+                          0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Harbor) {
+        drawLargeBuilding(x, y, harborTexture_, harborTexW_, harborTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::RailDepot) {
+        drawLargeBuilding(x, y, railDepotTexture_, railDepotTexW_, railDepotTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::Hospital) {
+        drawLargeBuilding(x, y, hospitalTexture_, hospitalTexW_, hospitalTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::DataCenter) {
+        drawLargeBuilding(x, y, dataCenterTexture_, dataCenterTexW_, dataCenterTexH_, 0.58f, 0.42f);
+      } else if (tile.building == BuildingType::MilitaryHQ) {
+        drawLargeBuilding(x, y, militaryHQTexture_, militaryHQTexW_, militaryHQTexH_, 0.58f, 0.42f);
       }
     }
   }
@@ -2215,7 +2451,8 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	        const Tile& tile = world.At(x, y);
 	        if (tile.building == BuildingType::None) continue;
 	
-        if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_)) ||
+        if ((tile.building == BuildingType::TownHall && (townHallTexture_ || capitalTexture_ ||
+                                                         townHallClassicalTexture_)) ||
             (tile.building == BuildingType::Market && marketTexture_) ||
             (tile.building == BuildingType::Forge && forgeTexture_) ||
             (tile.building == BuildingType::Monument && monumentTexture_) ||
@@ -2223,7 +2460,21 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
             (tile.building == BuildingType::Walls && wallsTexture_) ||
             (tile.building == BuildingType::Barracks && barracksTexture_) ||
             (tile.building == BuildingType::Mint && mintTexture_) ||
-            (tile.building == BuildingType::School && schoolTexture_)) {
+            (tile.building == BuildingType::School && schoolTexture_) ||
+            (tile.building == BuildingType::Workshop && workshopTexture_) ||
+            (tile.building == BuildingType::Bank && bankTexture_) ||
+            (tile.building == BuildingType::University && universityTexture_) ||
+            (tile.building == BuildingType::Factory && factoryTexture_) ||
+            (tile.building == BuildingType::PowerPlant && powerPlantTexture_) ||
+            (tile.building == BuildingType::Airfield && airfieldTexture_) ||
+            (tile.building == BuildingType::Reactor && reactorTexture_) ||
+            (tile.building == BuildingType::SatelliteArray && satelliteArrayTexture_) ||
+            (tile.building == BuildingType::RoboticsLab && roboticsLabTexture_) ||
+            (tile.building == BuildingType::Harbor && harborTexture_) ||
+            (tile.building == BuildingType::RailDepot && railDepotTexture_) ||
+            (tile.building == BuildingType::Hospital && hospitalTexture_) ||
+            (tile.building == BuildingType::DataCenter && dataCenterTexture_) ||
+            (tile.building == BuildingType::MilitaryHQ && militaryHQTexture_)) {
           // Draw in a later pass (so it sits above trees/objects but below fire/humans).
           continue;
         }
@@ -2257,6 +2508,20 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 	          case BuildingType::Barracks:
 	          case BuildingType::Mint:
 	          case BuildingType::School:
+	          case BuildingType::Workshop:
+	          case BuildingType::Bank:
+	          case BuildingType::University:
+	          case BuildingType::Factory:
+	          case BuildingType::PowerPlant:
+	          case BuildingType::Airfield:
+	          case BuildingType::Reactor:
+	          case BuildingType::SatelliteArray:
+	          case BuildingType::RoboticsLab:
+	          case BuildingType::Harbor:
+	          case BuildingType::RailDepot:
+	          case BuildingType::Hospital:
+	          case BuildingType::DataCenter:
+	          case BuildingType::MilitaryHQ:
 	            coord = AtlasCoord{0, 0};
 	            break;
 	          default:
@@ -2559,9 +2824,11 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   }
 
   // Large town hall sprite pass: render above objects and below fire/humans.
-  // Uses Capital.png for the founding settlement's original town hall tile; all other town halls use TH.png.
+  // Classical kingdoms use TH_Classical.png; Ancient capitals keep Capital.png on the center tile.
   CrashContextSetStage("Render::TownHall");
   if (!useStaticMapCache && ((townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) ||
+                             (townHallClassicalTexture_ && townHallClassicalTexW_ > 0 &&
+                              townHallClassicalTexH_ > 0) ||
                              (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0))) {
 		    float scale = tileSize / static_cast<float>(kTilePx);
 
@@ -2570,6 +2837,11 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 		    if (townHallTexture_ && townHallTexW_ > 0 && townHallTexH_ > 0) {
 		      maxW = std::max(maxW, townHallTexW_);
 		      maxH = std::max(maxH, townHallTexH_);
+		    }
+		    if (townHallClassicalTexture_ && townHallClassicalTexW_ > 0 &&
+            townHallClassicalTexH_ > 0) {
+		      maxW = std::max(maxW, townHallClassicalTexW_);
+		      maxH = std::max(maxH, townHallClassicalTexH_);
 		    }
 		    if (capitalTexture_ && capitalTexW_ > 0 && capitalTexH_ > 0) {
 		      maxW = std::max(maxW, capitalTexW_);
@@ -2592,8 +2864,15 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
 		      outW = townHallTexture_ ? townHallTexW_ : capitalTexW_;
 		      outH = townHallTexture_ ? townHallTexH_ : capitalTexH_;
 
-		      if (!capitalTexture_ || capitalTexW_ <= 0 || capitalTexH_ <= 0) return base;
 		      const Settlement* owner = settlements.Get(tile.buildingOwnerId);
+		      if (owner && owner->techTier >= 1 && townHallClassicalTexture_ &&
+              townHallClassicalTexW_ > 0 && townHallClassicalTexH_ > 0) {
+		        outW = townHallClassicalTexW_;
+		        outH = townHallClassicalTexH_;
+		        return townHallClassicalTexture_;
+		      }
+
+		      if (!capitalTexture_ || capitalTexW_ <= 0 || capitalTexH_ <= 0) return base;
 		      if (!owner) return base;
 		      if (!owner->isCapital) return base;
 		      if (tileX != owner->centerX || tileY != owner->centerY) return base;
@@ -2665,16 +2944,50 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
   if (!useStaticMapCache && ((marketTexture_ && marketTexW_ > 0 && marketTexH_ > 0) ||
                              (forgeTexture_ && forgeTexW_ > 0 && forgeTexH_ > 0) ||
                              (monumentTexture_ && monumentTexW_ > 0 && monumentTexH_ > 0) ||
+                             (monumentClassicalTexture_ && monumentClassicalTexW_ > 0 &&
+                              monumentClassicalTexH_ > 0) ||
                              (archiveTexture_ && archiveTexW_ > 0 && archiveTexH_ > 0) ||
+                             (archiveClassicalTexture_ && archiveClassicalTexW_ > 0 &&
+                              archiveClassicalTexH_ > 0) ||
                              (wallsTexture_ && wallsTexW_ > 0 && wallsTexH_ > 0) ||
+                             (wallsClassicalTexture_ && wallsClassicalTexW_ > 0 &&
+                              wallsClassicalTexH_ > 0) ||
                              (barracksTexture_ && barracksTexW_ > 0 && barracksTexH_ > 0) ||
+                             (barracksClassicalTexture_ && barracksClassicalTexW_ > 0 &&
+                              barracksClassicalTexH_ > 0) ||
                              (mintTexture_ && mintTexW_ > 0 && mintTexH_ > 0) ||
-                             (schoolTexture_ && schoolTexW_ > 0 && schoolTexH_ > 0))) {
+                             (schoolTexture_ && schoolTexW_ > 0 && schoolTexH_ > 0) ||
+                             (workshopTexture_ && workshopTexW_ > 0 && workshopTexH_ > 0) ||
+                             (bankTexture_ && bankTexW_ > 0 && bankTexH_ > 0) ||
+                             (universityTexture_ && universityTexW_ > 0 && universityTexH_ > 0) ||
+                             (factoryTexture_ && factoryTexW_ > 0 && factoryTexH_ > 0) ||
+                             (powerPlantTexture_ && powerPlantTexW_ > 0 && powerPlantTexH_ > 0) ||
+                             (airfieldTexture_ && airfieldTexW_ > 0 && airfieldTexH_ > 0) ||
+                             (reactorTexture_ && reactorTexW_ > 0 && reactorTexH_ > 0) ||
+                             (satelliteArrayTexture_ && satelliteArrayTexW_ > 0 &&
+                              satelliteArrayTexH_ > 0) ||
+                             (roboticsLabTexture_ && roboticsLabTexW_ > 0 &&
+                              roboticsLabTexH_ > 0) ||
+                             (harborTexture_ && harborTexW_ > 0 && harborTexH_ > 0) ||
+                             (railDepotTexture_ && railDepotTexW_ > 0 && railDepotTexH_ > 0) ||
+                             (hospitalTexture_ && hospitalTexW_ > 0 && hospitalTexH_ > 0) ||
+                             (dataCenterTexture_ && dataCenterTexW_ > 0 && dataCenterTexH_ > 0) ||
+                             (militaryHQTexture_ && militaryHQTexW_ > 0 && militaryHQTexH_ > 0))) {
     float scale = tileSize / static_cast<float>(kTilePx);
-    int maxW = std::max({marketTexW_, forgeTexW_, monumentTexW_, archiveTexW_, wallsTexW_,
-                         barracksTexW_, mintTexW_, schoolTexW_});
-    int maxH = std::max({marketTexH_, forgeTexH_, monumentTexH_, archiveTexH_, wallsTexH_,
-                         barracksTexH_, mintTexH_, schoolTexH_});
+    int maxW = std::max({marketTexW_, forgeTexW_, monumentTexW_, monumentClassicalTexW_,
+                         archiveTexW_, archiveClassicalTexW_, wallsTexW_, wallsClassicalTexW_,
+                         barracksTexW_, barracksClassicalTexW_, mintTexW_, schoolTexW_,
+                         workshopTexW_, bankTexW_, universityTexW_, factoryTexW_, powerPlantTexW_,
+                         airfieldTexW_, reactorTexW_, satelliteArrayTexW_, roboticsLabTexW_,
+                         harborTexW_, railDepotTexW_, hospitalTexW_, dataCenterTexW_,
+                         militaryHQTexW_});
+    int maxH = std::max({marketTexH_, forgeTexH_, monumentTexH_, monumentClassicalTexH_,
+                         archiveTexH_, archiveClassicalTexH_, wallsTexH_, wallsClassicalTexH_,
+                         barracksTexH_, barracksClassicalTexH_, mintTexH_, schoolTexH_,
+                         workshopTexH_, bankTexH_, universityTexH_, factoryTexH_, powerPlantTexH_,
+                         airfieldTexH_, reactorTexH_, satelliteArrayTexH_, roboticsLabTexH_,
+                         harborTexH_, railDepotTexH_, hospitalTexH_, dataCenterTexH_,
+                         militaryHQTexH_});
     int pad = 6;
     pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxW) * scale) / tileSize)) + 2);
     pad = std::max(pad, static_cast<int>(std::ceil((static_cast<float>(maxH) * scale) / tileSize)) + 2);
@@ -2691,6 +3004,8 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
         SDL_Texture* tex = nullptr;
         int texW = 0;
         int texH = 0;
+        const Settlement* owner = tile.buildingOwnerId > 0 ? settlements.Get(tile.buildingOwnerId) : nullptr;
+        bool useClassical = owner && owner->techTier >= 1;
         if (tile.building == BuildingType::Market && marketTexture_) {
           tex = marketTexture_;
           texW = marketTexW_;
@@ -2699,22 +3014,46 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           tex = forgeTexture_;
           texW = forgeTexW_;
           texH = forgeTexH_;
-        } else if (tile.building == BuildingType::Monument && monumentTexture_) {
-          tex = monumentTexture_;
-          texW = monumentTexW_;
-          texH = monumentTexH_;
-        } else if (tile.building == BuildingType::Archive && archiveTexture_) {
-          tex = archiveTexture_;
-          texW = archiveTexW_;
-          texH = archiveTexH_;
-        } else if (tile.building == BuildingType::Walls && wallsTexture_) {
-          tex = wallsTexture_;
-          texW = wallsTexW_;
-          texH = wallsTexH_;
-        } else if (tile.building == BuildingType::Barracks && barracksTexture_) {
-          tex = barracksTexture_;
-          texW = barracksTexW_;
-          texH = barracksTexH_;
+        } else if (tile.building == BuildingType::Monument) {
+          if (useClassical && monumentClassicalTexture_) {
+            tex = monumentClassicalTexture_;
+            texW = monumentClassicalTexW_;
+            texH = monumentClassicalTexH_;
+          } else if (monumentTexture_) {
+            tex = monumentTexture_;
+            texW = monumentTexW_;
+            texH = monumentTexH_;
+          }
+        } else if (tile.building == BuildingType::Archive) {
+          if (useClassical && archiveClassicalTexture_) {
+            tex = archiveClassicalTexture_;
+            texW = archiveClassicalTexW_;
+            texH = archiveClassicalTexH_;
+          } else if (archiveTexture_) {
+            tex = archiveTexture_;
+            texW = archiveTexW_;
+            texH = archiveTexH_;
+          }
+        } else if (tile.building == BuildingType::Walls) {
+          if (useClassical && wallsClassicalTexture_) {
+            tex = wallsClassicalTexture_;
+            texW = wallsClassicalTexW_;
+            texH = wallsClassicalTexH_;
+          } else if (wallsTexture_) {
+            tex = wallsTexture_;
+            texW = wallsTexW_;
+            texH = wallsTexH_;
+          }
+        } else if (tile.building == BuildingType::Barracks) {
+          if (useClassical && barracksClassicalTexture_) {
+            tex = barracksClassicalTexture_;
+            texW = barracksClassicalTexW_;
+            texH = barracksClassicalTexH_;
+          } else if (barracksTexture_) {
+            tex = barracksTexture_;
+            texW = barracksTexW_;
+            texH = barracksTexH_;
+          }
         } else if (tile.building == BuildingType::Mint && mintTexture_) {
           tex = mintTexture_;
           texW = mintTexW_;
@@ -2723,6 +3062,62 @@ void Renderer::Render(SDL_Renderer* renderer, World& world, const HumanManager& 
           tex = schoolTexture_;
           texW = schoolTexW_;
           texH = schoolTexH_;
+        } else if (tile.building == BuildingType::Workshop && workshopTexture_) {
+          tex = workshopTexture_;
+          texW = workshopTexW_;
+          texH = workshopTexH_;
+        } else if (tile.building == BuildingType::Bank && bankTexture_) {
+          tex = bankTexture_;
+          texW = bankTexW_;
+          texH = bankTexH_;
+        } else if (tile.building == BuildingType::University && universityTexture_) {
+          tex = universityTexture_;
+          texW = universityTexW_;
+          texH = universityTexH_;
+        } else if (tile.building == BuildingType::Factory && factoryTexture_) {
+          tex = factoryTexture_;
+          texW = factoryTexW_;
+          texH = factoryTexH_;
+        } else if (tile.building == BuildingType::PowerPlant && powerPlantTexture_) {
+          tex = powerPlantTexture_;
+          texW = powerPlantTexW_;
+          texH = powerPlantTexH_;
+        } else if (tile.building == BuildingType::Airfield && airfieldTexture_) {
+          tex = airfieldTexture_;
+          texW = airfieldTexW_;
+          texH = airfieldTexH_;
+        } else if (tile.building == BuildingType::Reactor && reactorTexture_) {
+          tex = reactorTexture_;
+          texW = reactorTexW_;
+          texH = reactorTexH_;
+        } else if (tile.building == BuildingType::SatelliteArray && satelliteArrayTexture_) {
+          tex = satelliteArrayTexture_;
+          texW = satelliteArrayTexW_;
+          texH = satelliteArrayTexH_;
+        } else if (tile.building == BuildingType::RoboticsLab && roboticsLabTexture_) {
+          tex = roboticsLabTexture_;
+          texW = roboticsLabTexW_;
+          texH = roboticsLabTexH_;
+        } else if (tile.building == BuildingType::Harbor && harborTexture_) {
+          tex = harborTexture_;
+          texW = harborTexW_;
+          texH = harborTexH_;
+        } else if (tile.building == BuildingType::RailDepot && railDepotTexture_) {
+          tex = railDepotTexture_;
+          texW = railDepotTexW_;
+          texH = railDepotTexH_;
+        } else if (tile.building == BuildingType::Hospital && hospitalTexture_) {
+          tex = hospitalTexture_;
+          texW = hospitalTexW_;
+          texH = hospitalTexH_;
+        } else if (tile.building == BuildingType::DataCenter && dataCenterTexture_) {
+          tex = dataCenterTexture_;
+          texW = dataCenterTexW_;
+          texH = dataCenterTexH_;
+        } else if (tile.building == BuildingType::MilitaryHQ && militaryHQTexture_) {
+          tex = militaryHQTexture_;
+          texW = militaryHQTexW_;
+          texH = militaryHQTexH_;
         }
         if (!tex || texW <= 0 || texH <= 0) continue;
 

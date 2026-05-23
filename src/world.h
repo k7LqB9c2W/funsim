@@ -34,6 +34,20 @@ enum class BuildingType : uint8_t {
   Barracks,
   Mint,
   School,
+  Workshop,
+  Bank,
+  University,
+  Factory,
+  PowerPlant,
+  Airfield,
+  Reactor,
+  SatelliteArray,
+  RoboticsLab,
+  Harbor,
+  RailDepot,
+  Hospital,
+  DataCenter,
+  MilitaryHQ,
 };
 
 struct Tile {
@@ -160,7 +174,14 @@ class World {
     } else if (type == BuildingType::Market || type == BuildingType::Forge ||
                type == BuildingType::Monument || type == BuildingType::Archive ||
                type == BuildingType::Walls || type == BuildingType::Barracks ||
-               type == BuildingType::Mint || type == BuildingType::School) {
+               type == BuildingType::Mint || type == BuildingType::School ||
+               type == BuildingType::Workshop || type == BuildingType::Bank ||
+               type == BuildingType::University || type == BuildingType::Factory ||
+               type == BuildingType::PowerPlant || type == BuildingType::Airfield ||
+               type == BuildingType::Reactor || type == BuildingType::SatelliteArray ||
+               type == BuildingType::RoboticsLab || type == BuildingType::Harbor ||
+               type == BuildingType::RailDepot || type == BuildingType::Hospital ||
+               type == BuildingType::DataCenter || type == BuildingType::MilitaryHQ) {
       for (int dy = -2; dy <= 1; ++dy) {
         for (int dx = -2; dx <= 2; ++dx) {
           EditTile(x + dx, y + dy, [&](Tile& tile) {
