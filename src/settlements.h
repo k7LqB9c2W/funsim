@@ -285,6 +285,9 @@ class SettlementManager {
   void EnsureZoneBuffers(const World& world);
   void RecomputeZonePop(const World& world, const HumanManager& humans, int dayDelta);
   void RecomputeZonePopMacro();
+  void RunMigration(HumanManager* humans, Random& rng, int dayCount);
+  int FindMigrationDestinationIndex(int sourceIndex) const;
+  bool HasMigrationReliefOption(int sourceIndex) const;
   void TryFoundNewSettlements(World& world, HumanManager* humans, Random& rng, int dayCount,
                               std::vector<VillageMarker>& markers, FactionManager& factions);
   void RecomputeZoneOwners(const World& world);

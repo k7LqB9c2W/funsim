@@ -69,17 +69,55 @@ class Renderer {
     int originY = 0;
     int tilesWide = 0;
     int tilesHigh = 0;
+    int textureW = 0;
+    int textureH = 0;
+    int lodScale = 1;
     bool dirty = true;
+    bool includesStaticDetails = false;
     uint64_t lastUsedFrame = 0;
+    size_t textureBytes = 0;
+  };
+  struct TerrainLodLevel {
+    int scale = 1;
+    int pageTiles = 16;
+    int chunksX = 0;
+    int chunksY = 0;
+    std::vector<TerrainChunk> chunks;
+  };
+  struct TerrainTextureRef {
+    int lodIndex = -1;
+    int chunkIndex = -1;
+  };
+  struct FarTerrainComposite {
+    SDL_Texture* texture = nullptr;
+    int width = 0;
+    int height = 0;
+    float cameraX = 0.0f;
+    float cameraY = 0.0f;
+    float zoom = 0.0f;
+    int worldWidth = 0;
+    int worldHeight = 0;
+    bool includesStaticDetails = false;
+    bool dirty = true;
   };
 
   void DestroyTerrainCache();
   void EnsureTerrainCache(SDL_Renderer* renderer, World& world, bool includeStaticDetails);
-  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int minX, int minY, int maxX,
-                           int maxY, bool includeStaticDetails, const SettlementManager& settlements);
+  int SelectTerrainLod(float zoom) const;
+  bool UseFarTerrainComposite(const Camera& camera, int windowWidth, int windowHeight, bool includeStaticDetails) const;
+  void RebuildTerrainCache(SDL_Renderer* renderer, const World& world, int lodIndex, int minX,
+                           int minY, int maxX, int maxY, bool includeStaticDetails,
+                           const SettlementManager& settlements);
+  void RenderFarTerrainComposite(SDL_Renderer* renderer, const World& world,
+                                 const SettlementManager& settlements, const Camera& camera,
+                                 int windowWidth, int windowHeight, bool includeStaticDetails);
   void DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& world,
                                    const SettlementManager& settlements, const TerrainChunk& chunk);
-  void BuildChunks(SDL_Renderer* renderer, int worldWidth, int worldHeight);
+  void BuildTerrainLods(SDL_Renderer* renderer, int worldWidth, int worldHeight);
+  void MarkTerrainPagesDirty(int minX, int minY, int maxX, int maxY, int padding);
+  void EvictTerrainTextures(size_t bytesNeeded = 0);
+  void DestroyFarTerrainComposite();
+  void MarkFarTerrainCompositeDirty();
   void ClearLabelCache();
   void UpdateLabelCache(SDL_Renderer* renderer, const SettlementManager& settlements,
                         const FactionManager& factions);
@@ -217,15 +255,14 @@ class Renderer {
 
   int worldWidth_ = 0;
   int worldHeight_ = 0;
-  int chunkTiles_ = 32;
-  int chunksX_ = 0;
-  int chunksY_ = 0;
   bool terrainDirty_ = true;
   bool terrainCacheIncludesStaticDetails_ = false;
-  std::vector<TerrainChunk> chunks_;
-  std::vector<int> terrainTextureIndices_;
+  std::vector<TerrainLodLevel> terrainLods_;
+  std::vector<TerrainTextureRef> terrainTextureRefs_;
+  FarTerrainComposite farTerrainComposite_;
   uint64_t frameCounter_ = 0;
-  int maxTerrainTextures_ = 256;
+  size_t terrainTextureBytes_ = 0;
+  size_t terrainTextureBudgetBytes_ = 256ull * 1024ull * 1024ull;
 
   struct LabelCacheEntry {
     int settlementId = -1;

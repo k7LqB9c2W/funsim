@@ -44,9 +44,18 @@ constexpr int kFoundingParentReservePop = 8;
 constexpr int kFoundingFoodPerPerson = 18;
 constexpr int kFoundingWoodPerPerson = 4;
 constexpr int kFoundingCooldownDays = 120;
-constexpr int kFoundingParentMinPop = 80;
+constexpr int kFoundingParentMinPop = 60;
 constexpr int kFoundingMinSiteDist = 48;
 constexpr int kFoundingMaxSiteDist = 92;
+constexpr int kMigrationIntervalDays = 7;
+constexpr int kMigrationMinSourcePop = 18;
+constexpr int kMigrationTargetHousingReserve = 4;
+constexpr int kMigrationCrowdingEarlyMargin = 6;
+constexpr int kFoundingCrowdingEarlyMargin = 4;
+constexpr int kMigrationPressureThreshold = 22;
+constexpr int kMigrationOpportunityGap = 42;
+constexpr int kMigrationMaxPerInterval = 8;
+constexpr int kMigrationFoundingDeferralPressure = 30;
 
 constexpr int kGatherRadius = 12;
 constexpr int kWoodRadius = 12;
@@ -212,6 +221,145 @@ int TransferFoundingMacroPopulation(Settlement& source, Settlement& founded, int
 
   source.population = source.MacroTotal();
   founded.population = founded.MacroTotal();
+  return moved;
+}
+
+int TierOpportunityBonus(SettlementTier tier) {
+  switch (tier) {
+    case SettlementTier::Town:
+      return 15;
+    case SettlementTier::City:
+      return 35;
+    default:
+      return 0;
+  }
+}
+
+int SettlementOpportunityScore(const Settlement& settlement) {
+  int pop = std::max(1, settlement.population);
+  int spareHousing = settlement.housingCap - settlement.population;
+  int foodSurplus = settlement.stockFood - pop * kEmergencyFoodPerPop;
+  int idleRatio = (settlement.idle * 100) / pop;
+  int diseasePressure = settlement.diseaseInfected / std::max(1, pop / 20 + 1);
+
+  int score = settlement.stability + settlement.economyProsperity -
+              settlement.economyStress + TierOpportunityBonus(settlement.tier);
+  score += std::max(-50, std::min(80, spareHousing * 3));
+  score += std::max(-40, std::min(50, foodSurplus / std::max(1, pop)));
+  score -= settlement.warPressure * 16;
+  score -= settlement.borderPressure * 4;
+  score -= diseasePressure * 3;
+  if (idleRatio > 20) {
+    score -= std::min(35, idleRatio - 20);
+  }
+  if (settlement.isCapital) {
+    score += 8;
+  }
+  return score;
+}
+
+int SettlementMigrationPressure(const Settlement& settlement) {
+  int pop = settlement.population;
+  if (pop < kMigrationMinSourcePop) return 0;
+
+  int crowdedAt = std::max(0, settlement.housingCap - kMigrationCrowdingEarlyMargin);
+  int overcrowded = (settlement.housingCap > 0) ? std::max(0, pop - crowdedAt)
+                                                : std::max(0, pop - kMigrationMinSourcePop);
+  int foodDeficit = std::max(0, pop * kEmergencyFoodPerPop - settlement.stockFood);
+  int idlePressure = std::max(0, settlement.idle - std::max(2, pop / 5));
+  int lowStability = std::max(0, 62 - settlement.stability);
+  int diseasePressure = settlement.diseaseInfected / std::max(1, pop / 18 + 1);
+
+  int pressure = overcrowded * 5 + foodDeficit / std::max(1, pop / 10 + 1) +
+                 idlePressure * 2 + lowStability + settlement.economyStress / 2 +
+                 settlement.warPressure * 12 + settlement.borderPressure * 3 +
+                 diseasePressure * 4;
+  if (pop >= 160) {
+    pressure += (pop - 150) / 2;
+  }
+  return std::max(0, pressure);
+}
+
+bool IsEligibleHumanMigrant(const Human& human, int sourceSettlementId) {
+  if (!IsEligibleHumanFounder(human, sourceSettlementId)) return false;
+  if (human.ageDays < Human::kAdultAgeDays) return false;
+  if (human.pregnant) return false;
+  return true;
+}
+
+int AssignMigratingHumans(HumanManager& humans, int sourceSettlementId, const Settlement& target,
+                          int desiredMigrants, Random& rng) {
+  if (desiredMigrants <= 0) return 0;
+
+  struct Candidate {
+    int score = 0;
+    int index = -1;
+  };
+
+  std::vector<Candidate> candidates;
+  auto& list = humans.HumansMutable();
+  candidates.reserve(static_cast<size_t>(desiredMigrants) * 3u);
+  for (int i = 0; i < static_cast<int>(list.size()); ++i) {
+    const Human& human = list[i];
+    if (!IsEligibleHumanMigrant(human, sourceSettlementId)) continue;
+    int score = static_cast<int>(human.wanderlust) + rng.RangeInt(0, 40);
+    if (HumanHasTrait(human.traits, HumanTrait::Curious)) score += 35;
+    if (HumanHasTrait(human.traits, HumanTrait::Ambitious)) score += 25;
+    if (HumanHasTrait(human.traits, HumanTrait::Lazy)) score -= 30;
+    candidates.push_back(Candidate{score, i});
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+    return a.score > b.score;
+  });
+
+  int moved = 0;
+  for (const Candidate& candidate : candidates) {
+    if (moved >= desiredMigrants) break;
+    if (candidate.index < 0 || candidate.index >= static_cast<int>(list.size())) continue;
+    Human& human = list[candidate.index];
+    if (!IsEligibleHumanMigrant(human, sourceSettlementId)) continue;
+
+    human.settlementId = target.id;
+    human.homeX = target.centerX;
+    human.homeY = target.centerY;
+    human.targetX = target.centerX;
+    human.targetY = target.centerY;
+    human.goal = Goal::StayHome;
+    human.role = Role::Idle;
+    human.hasTask = false;
+    human.taskSettlementId = -1;
+    human.mateTargetId = -1;
+    human.forceReplan = true;
+    moved++;
+  }
+
+  return moved;
+}
+
+int TransferMigratingMacroPopulation(Settlement& source, Settlement& target, int desiredMigrants) {
+  if (desiredMigrants <= 0) return 0;
+
+  int moved = 0;
+  constexpr int kPreferredBins[] = {3, 2, 4, 1, 5, 0};
+  for (int bin : kPreferredBins) {
+    while (moved < desiredMigrants && (source.macroPopF[bin] > 0 || source.macroPopM[bin] > 0)) {
+      if (source.macroPopM[bin] > 0) {
+        source.macroPopM[bin]--;
+        target.macroPopM[bin]++;
+        moved++;
+      }
+      if (moved >= desiredMigrants) break;
+      if (source.macroPopF[bin] > 0) {
+        source.macroPopF[bin]--;
+        target.macroPopF[bin]++;
+        moved++;
+      }
+    }
+  }
+
+  source.population = source.MacroTotal();
+  target.population = target.MacroTotal();
   return moved;
 }
 
@@ -759,8 +907,110 @@ int SettlementManager::ZoneConflictAt(int zx, int zy) const {
   int idx = zy * zonesX_ + zx;
   if (idx < 0 || idx >= static_cast<int>(zoneConflictStampByIndex_.size())) return 0;
   return (zoneConflictStampByIndex_[static_cast<size_t>(idx)] == zoneConflictGeneration_)
-             ? zoneConflictByIndex_[static_cast<size_t>(idx)]
-             : 0;
+	             ? zoneConflictByIndex_[static_cast<size_t>(idx)]
+	             : 0;
+}
+
+int SettlementManager::FindMigrationDestinationIndex(int sourceIndex) const {
+  if (sourceIndex < 0 || sourceIndex >= static_cast<int>(settlements_.size())) return -1;
+  const Settlement& source = settlements_[sourceIndex];
+  if (source.population < kMigrationMinSourcePop || source.factionId <= 0) return -1;
+
+  int sourceOpportunity = SettlementOpportunityScore(source);
+  int pressure = SettlementMigrationPressure(source);
+  int bestIndex = -1;
+  int bestScore = std::numeric_limits<int>::min();
+
+  for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+    if (i == sourceIndex) continue;
+    const Settlement& target = settlements_[i];
+    if (target.factionId != source.factionId || target.population <= 0) continue;
+    int spareHousing = target.housingCap - target.population - kMigrationTargetHousingReserve;
+    if (spareHousing <= 0) continue;
+    if (target.stockFood < target.population * kEmergencyFoodPerPop) continue;
+    if (target.stability < 38) continue;
+    if (target.warPressure > source.warPressure && source.warPressure == 0) continue;
+
+    int opportunity = SettlementOpportunityScore(target);
+    int opportunityGap = opportunity - sourceOpportunity;
+    if (pressure < kMigrationPressureThreshold && opportunityGap < kMigrationOpportunityGap) {
+      continue;
+    }
+
+    int score = opportunityGap + pressure / 3 + std::min(50, spareHousing * 2) -
+                target.warPressure * 8;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+}
+
+bool SettlementManager::HasMigrationReliefOption(int sourceIndex) const {
+  if (sourceIndex < 0 || sourceIndex >= static_cast<int>(settlements_.size())) return false;
+  const Settlement& source = settlements_[sourceIndex];
+  if (SettlementMigrationPressure(source) < kMigrationFoundingDeferralPressure) return false;
+  return FindMigrationDestinationIndex(sourceIndex) >= 0;
+}
+
+void SettlementManager::RunMigration(HumanManager* humans, Random& rng, int dayCount) {
+  if (dayCount % kMigrationIntervalDays != 0) return;
+  if (settlements_.size() < 2) return;
+
+  if (idToIndex_.size() != static_cast<size_t>(nextId_)) {
+    idToIndex_.assign(nextId_, -1);
+    for (int i = 0; i < static_cast<int>(settlements_.size()); ++i) {
+      if (settlements_[i].id >= 0 && settlements_[i].id < static_cast<int>(idToIndex_.size())) {
+        idToIndex_[settlements_[i].id] = i;
+      }
+    }
+  }
+
+  for (int sourceIndex = 0; sourceIndex < static_cast<int>(settlements_.size()); ++sourceIndex) {
+    int targetIndex = FindMigrationDestinationIndex(sourceIndex);
+    if (targetIndex < 0 || targetIndex == sourceIndex) continue;
+    if (targetIndex >= static_cast<int>(settlements_.size())) continue;
+
+    Settlement& source = settlements_[sourceIndex];
+    Settlement& target = settlements_[targetIndex];
+    int pressure = SettlementMigrationPressure(source);
+    int opportunityGap = SettlementOpportunityScore(target) - SettlementOpportunityScore(source);
+    if (pressure < kMigrationPressureThreshold && opportunityGap < kMigrationOpportunityGap) {
+      continue;
+    }
+
+    int targetCapacity = target.housingCap - target.population - kMigrationTargetHousingReserve;
+    int sourceReserve = std::max(kMigrationMinSourcePop / 2, kFoundingParentReservePop);
+    int sourceAvailable = source.population - sourceReserve;
+    if (targetCapacity <= 0 || sourceAvailable <= 0) continue;
+
+    int desired = 1;
+    if (pressure >= kMigrationPressureThreshold) {
+      desired += pressure / 28;
+    }
+    if (opportunityGap >= kMigrationOpportunityGap) {
+      desired += 1;
+    }
+    desired = std::min(desired, kMigrationMaxPerInterval);
+    desired = std::min(desired, targetCapacity);
+    desired = std::min(desired, sourceAvailable);
+    if (desired <= 0) continue;
+
+    int moved = 0;
+    if (humans) {
+      moved = AssignMigratingHumans(*humans, source.id, target, desired, rng);
+    } else {
+      moved = TransferMigratingMacroPopulation(source, target, desired);
+    }
+    if (moved <= 0) continue;
+
+    if (humans) {
+      source.population = std::max(0, source.population - moved);
+      target.population += moved;
+    }
+  }
 }
 
 int SettlementManager::ConsumeWarDeaths() {
@@ -1084,11 +1334,13 @@ void SettlementManager::TryFoundNewSettlements(World& world, HumanManager* human
       int requiredWood = desiredFounders * kFoundingWoodPerPerson + Settlement::kTownHallWoodCost;
       if (parent.stockFood < requiredFood || parent.stockWood < requiredWood) continue;
 
-      bool expansionPressure = parent.population > parent.housingCap + kHousingBuffer ||
-                               parent.population >= 160 ||
-                               (parent.stockFood > parent.population * 5 &&
-                                parent.stockWood > parent.population);
+      bool expansionPressure =
+          (parent.housingCap > 0 &&
+           parent.population >= parent.housingCap - kFoundingCrowdingEarlyMargin) ||
+          parent.population >= 160 ||
+          (parent.stockFood > parent.population * 5 && parent.stockWood > parent.population);
       if (!expansionPressure) continue;
+      if (HasMigrationReliefOption(i)) continue;
 
       if (humans) {
         int eligibleFounders = CountEligibleFoundingHumans(*humans, parent.id, parent.centerX,
@@ -4067,6 +4319,7 @@ void SettlementManager::UpdateDaily(World& world, HumanManager& humans, Random& 
   RecomputeZoneOwners(world);
   AssignHumansToSettlements(humans);
   RecomputeZonePop(world, humans, dayDelta);
+  RunMigration(&humans, rng, dayCount);
   TryFoundNewSettlements(world, &humans, rng, dayCount, markers, factions);
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);
@@ -4102,6 +4355,7 @@ void SettlementManager::UpdateMacro(World& world, Random& rng, int dayCount,
   }
   RecomputeZoneOwners(world);
   RecomputeZonePopMacro();
+  RunMigration(nullptr, rng, dayCount);
   TryFoundNewSettlements(world, nullptr, rng, dayCount, markers, factions);
   if (world.ConsumeBuildingDirty()) {
     RecomputeSettlementBuildings(world);
