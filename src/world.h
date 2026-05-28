@@ -201,6 +201,8 @@ class World {
   void RecomputeHomeField(const SettlementManager& settlements);
 
   void EraseAt(int x, int y);
+  void BeginBulkEdit();
+  void EndBulkEdit();
 
   int TotalTrees() const;
   int TotalFood() const;
@@ -255,6 +257,7 @@ class World {
 	  void MarkVisualDirtyForTileChange(int x, int y, const Tile& before, const Tile& after);
 	  void MarkVisualDirty(int x, int y);
 	  void MarkVisualDirtyAll();
+	  void MarkTerrainVersionDirty();
 	  void MarkScentDirtyLocal(ScentDirtyBounds& bounds, int x, int y, int radius) const;
   void MarkScentDirtyAll(ScentDirtyBounds& bounds) const;
   void EnsureFoodScentCache() const;
@@ -307,4 +310,6 @@ class World {
 	  int visualMinY_ = 0;
 	  int visualMaxX_ = 0;
 	  int visualMaxY_ = 0;
-	};
+	  int bulkEditDepth_ = 0;
+	  bool bulkTerrainVersionDirty_ = false;
+		};

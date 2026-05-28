@@ -299,6 +299,15 @@ void World::MarkVisualDirtyForTileChange(int x, int y, const Tile& before, const
   }
 }
 
+void World::MarkTerrainVersionDirty() {
+  if (bulkEditDepth_ > 0) {
+    bulkTerrainVersionDirty_ = true;
+    return;
+  }
+  terrainVersion_++;
+  if (terrainVersion_ == 0) terrainVersion_ = 1;
+}
+
 void World::UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& after) {
   uint64_t key = PackCoord(x, y);
 
@@ -351,8 +360,7 @@ void World::UpdateIndicesForTile(int x, int y, const Tile& before, const Tile& a
     bool beforeWalkable = before.type != TileType::Ocean;
     bool afterWalkable = after.type != TileType::Ocean;
     if (beforeWalkable != afterWalkable) {
-      terrainVersion_++;
-      if (terrainVersion_ == 0) terrainVersion_ = 1;
+      MarkTerrainVersionDirty();
     }
     if (before.type == TileType::FreshWater || after.type == TileType::FreshWater) {
       wellRadiusDirty_ = true;
@@ -417,6 +425,20 @@ void World::EraseAt(int x, int y) {
   });
   MarkBuildingDirty();
   MarkTerrainDirty(x, y);
+}
+
+void World::BeginBulkEdit() {
+  bulkEditDepth_++;
+}
+
+void World::EndBulkEdit() {
+  if (bulkEditDepth_ <= 0) return;
+  bulkEditDepth_--;
+  if (bulkEditDepth_ == 0 && bulkTerrainVersionDirty_) {
+    bulkTerrainVersionDirty_ = false;
+    terrainVersion_++;
+    if (terrainVersion_ == 0) terrainVersion_ = 1;
+  }
 }
 
 int World::TotalTrees() const { return static_cast<int>(std::max<int64_t>(0, totalTrees_)); }

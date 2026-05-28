@@ -1323,6 +1323,10 @@ void Renderer::OnRenderTargetsReset() {
       }
       chunk.textureBytes = 0;
       chunk.dirty = true;
+      chunk.dirtyMinX = chunk.originX;
+      chunk.dirtyMinY = chunk.originY;
+      chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+      chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
       chunk.lastUsedFrame = 0;
     }
   }
@@ -1509,6 +1513,10 @@ void Renderer::BuildTerrainLods(SDL_Renderer* renderer, int worldWidth, int worl
         chunk.texture = nullptr;
         chunk.textureBytes = 0;
         chunk.lastUsedFrame = 0;
+        chunk.dirtyMinX = chunk.originX;
+        chunk.dirtyMinY = chunk.originY;
+        chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+        chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
       }
     }
     terrainLods_.push_back(std::move(level));
@@ -1532,6 +1540,10 @@ void Renderer::EnsureTerrainCache(SDL_Renderer* renderer, World& world, bool inc
     for (auto& level : terrainLods_) {
       for (auto& chunk : level.chunks) {
         chunk.dirty = true;
+        chunk.dirtyMinX = chunk.originX;
+        chunk.dirtyMinY = chunk.originY;
+        chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+        chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
       }
     }
     MarkFarTerrainCompositeDirty();
@@ -1616,7 +1628,28 @@ void Renderer::MarkTerrainPagesDirty(int minX, int minY, int maxX, int maxY, int
       for (int cx = minChunkX; cx <= maxChunkX; ++cx) {
         int idx = cy * level.chunksX + cx;
         if (idx >= 0 && idx < static_cast<int>(level.chunks.size())) {
-          level.chunks[static_cast<size_t>(idx)].dirty = true;
+          TerrainChunk& chunk = level.chunks[static_cast<size_t>(idx)];
+          const int chunkMinX = chunk.originX;
+          const int chunkMinY = chunk.originY;
+          const int chunkMaxX = chunk.originX + chunk.tilesWide - 1;
+          const int chunkMaxY = chunk.originY + chunk.tilesHigh - 1;
+          const int dirtyMinX = std::max(paddedMinX, chunkMinX);
+          const int dirtyMinY = std::max(paddedMinY, chunkMinY);
+          const int dirtyMaxX = std::min(paddedMaxX, chunkMaxX);
+          const int dirtyMaxY = std::min(paddedMaxY, chunkMaxY);
+          if (dirtyMinX > dirtyMaxX || dirtyMinY > dirtyMaxY) continue;
+          if (!chunk.dirty) {
+            chunk.dirty = true;
+            chunk.dirtyMinX = dirtyMinX;
+            chunk.dirtyMinY = dirtyMinY;
+            chunk.dirtyMaxX = dirtyMaxX;
+            chunk.dirtyMaxY = dirtyMaxY;
+          } else {
+            chunk.dirtyMinX = std::min(chunk.dirtyMinX, dirtyMinX);
+            chunk.dirtyMinY = std::min(chunk.dirtyMinY, dirtyMinY);
+            chunk.dirtyMaxX = std::max(chunk.dirtyMaxX, dirtyMaxX);
+            chunk.dirtyMaxY = std::max(chunk.dirtyMaxY, dirtyMaxY);
+          }
         }
       }
     }
@@ -1708,6 +1741,10 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
     SDL_SetTextureBlendMode(chunk.texture, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(chunk.texture, SDL_ScaleModeNearest);
     chunk.dirty = true;
+    chunk.dirtyMinX = chunk.originX;
+    chunk.dirtyMinY = chunk.originY;
+    chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+    chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
     chunk.textureBytes = needed;
     terrainTextureBytes_ += needed;
     terrainTextureRefs_.push_back(TerrainTextureRef{lodIndex, chunkIndex});
@@ -1726,15 +1763,33 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
         if (!ensureChunkTexture(chunkIndex, chunk)) continue;
         if (chunk.includesStaticDetails != includeStaticDetails) {
           chunk.dirty = true;
+          chunk.dirtyMinX = chunk.originX;
+          chunk.dirtyMinY = chunk.originY;
+          chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+          chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
         }
         if (!chunk.dirty) continue;
+        const int rebuildMinX = std::max(chunk.originX, chunk.dirtyMinX);
+        const int rebuildMinY = std::max(chunk.originY, chunk.dirtyMinY);
+        const int rebuildMaxX = std::min(chunk.originX + chunk.tilesWide - 1, chunk.dirtyMaxX);
+        const int rebuildMaxY = std::min(chunk.originY + chunk.tilesHigh - 1, chunk.dirtyMaxY);
+        if (rebuildMinX > rebuildMaxX || rebuildMinY > rebuildMaxY) {
+          chunk.dirty = false;
+          continue;
+        }
         chunk.dirty = false;
         chunk.includesStaticDetails = includeStaticDetails;
 
         SDL_SetRenderTarget(renderer, chunk.texture);
+        SDL_Rect clearMin = pageDstRect(chunk, rebuildMinX, rebuildMinY);
+        SDL_Rect clearMax = pageDstRect(chunk, rebuildMaxX, rebuildMaxY);
+        SDL_Rect clearRect{clearMin.x, clearMin.y,
+                           std::min(chunk.textureW, clearMax.x + clearMax.w) - clearMin.x,
+                           std::min(chunk.textureH, clearMax.y + clearMax.h) - clearMin.y};
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_RenderFillRect(renderer, &clearRect);
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_RenderClear(renderer);
 
 	        auto applyAdd = [&](const SDL_Rect& dst, const TintMod& tint) {
 	          if (tint.addA == 0u) return;
@@ -1744,8 +1799,8 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 	        };
 	
-	        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-	          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+		        for (int y = rebuildMinY; y <= rebuildMaxY; ++y) {
+		          for (int x = rebuildMinX; x <= rebuildMaxX; ++x) {
 	            if (isLand(x, y)) continue;
 	
 	            int distToLand = coastDistance(x, y);
@@ -1868,8 +1923,8 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	          }
 	        };
 
-	        for (int y = chunk.originY; y < chunk.originY + chunk.tilesHigh; ++y) {
-	          for (int x = chunk.originX; x < chunk.originX + chunk.tilesWide; ++x) {
+		        for (int y = rebuildMinY; y <= rebuildMaxY; ++y) {
+		          for (int x = rebuildMinX; x <= rebuildMaxX; ++x) {
 	            if (!isLand(x, y)) continue;
 
             const bool paintedSand = world.At(x, y).type == TileType::Sand;
@@ -1939,10 +1994,13 @@ void Renderer::RebuildTerrainCache(SDL_Renderer* renderer, const World& world, i
 	          }
 	        }
 
-        SDL_SetTextureColorMod(tilesTexture_, 255, 255, 255);
-        if (includeStaticDetails) {
-          DrawStaticMapDetailsToChunk(renderer, world, settlements, chunk);
-        }
+	        SDL_SetTextureColorMod(tilesTexture_, 255, 255, 255);
+	        if (includeStaticDetails) {
+	          SDL_RenderSetClipRect(renderer, &clearRect);
+	          DrawStaticMapDetailsToChunk(renderer, world, settlements, chunk, rebuildMinX, rebuildMinY,
+	                                      rebuildMaxX, rebuildMaxY);
+	          SDL_RenderSetClipRect(renderer, nullptr);
+	        }
       }
     }
   }
@@ -2003,6 +2061,10 @@ void Renderer::EvictTerrainTextures(size_t bytesNeeded) {
         terrainTextureBytes_ -= std::min(terrainTextureBytes_, chunk.textureBytes);
         chunk.textureBytes = 0;
         chunk.dirty = true;
+        chunk.dirtyMinX = chunk.originX;
+        chunk.dirtyMinY = chunk.originY;
+        chunk.dirtyMaxX = chunk.originX + chunk.tilesWide - 1;
+        chunk.dirtyMaxY = chunk.originY + chunk.tilesHigh - 1;
         chunk.lastUsedFrame = 0;
       }
     }
@@ -2183,16 +2245,17 @@ void Renderer::RenderFarTerrainComposite(SDL_Renderer* renderer, const World& wo
 
 void Renderer::DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& world,
                                            const SettlementManager& settlements,
-                                           const TerrainChunk& chunk) {
+                                           const TerrainChunk& chunk, int dirtyMinX, int dirtyMinY,
+                                           int dirtyMaxX, int dirtyMaxY) {
   const float tileSize = static_cast<float>(kTilePx);
   const Camera chunkCamera{static_cast<float>(chunk.originX * kTilePx),
                            static_cast<float>(chunk.originY * kTilePx),
                            1.0f / static_cast<float>(std::max(1, chunk.lodScale))};
   SDL_Rect shadowSrc = ShadowSrc();
-  const int minX = std::max(0, chunk.originX - 14);
-  const int minY = std::max(0, chunk.originY - 14);
-  const int maxX = std::min(world.width() - 1, chunk.originX + chunk.tilesWide + 13);
-  const int maxY = std::min(world.height() - 1, chunk.originY + chunk.tilesHigh + 13);
+  const int minX = std::max(0, dirtyMinX - 14);
+  const int minY = std::max(0, dirtyMinY - 14);
+  const int maxX = std::min(world.width() - 1, dirtyMaxX + 14);
+  const int maxY = std::min(world.height() - 1, dirtyMaxY + 14);
 
   auto drawOutlinedCopy = [&](SDL_Texture* tex, const SDL_Rect* src, const SDL_Rect& dst,
                               SDL_RendererFlip flip = SDL_FLIP_NONE, Uint8 outlineAlpha = 55,

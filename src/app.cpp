@@ -726,8 +726,15 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
   int radius = ui_.brushSize / 2;
   bool spawned = false;
   bool diseaseSeeded = false;
+  bool buildingDirty = false;
   std::unordered_set<int> diseaseSettlementsSeeded;
+  auto isDefaultTile = [](const Tile& tile) {
+    return tile.type == TileType::Ocean && tile.trees == 0 && tile.food == 0 && !tile.burning &&
+           tile.burnDaysRemaining == 0 && tile.building == BuildingType::None && tile.farmStage == 0 &&
+           tile.buildingOwnerId == -1;
+  };
 
+  world_.BeginBulkEdit();
   for (int dy = -radius; dy <= radius; ++dy) {
     for (int dx = -radius; dx <= radius; ++dx) {
       int x = tileX + dx;
@@ -735,11 +742,16 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
       if (!world_.InBounds(x, y)) continue;
 
       if (erase) {
-        world_.EraseAt(x, y);
+        if (isDefaultTile(world_.At(x, y))) continue;
+        world_.EditTile(x, y, [&](Tile& tile) {
+          tile = Tile{};
+        });
+        buildingDirty = true;
       } else {
         switch (ui_.tool) {
           case ToolType::PlaceGrass: {
             const TileType beforeType = world_.At(x, y).type;
+            if (beforeType == TileType::Land) break;
             world_.SetTileType(x, y, TileType::Land);
             if (ui_.spawnFoodOnLandPlacement && beforeType != TileType::Land &&
                 rng_.Chance(kLandFoodSpawnChance)) {
@@ -761,22 +773,35 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
               tile.farmStage = 0;
               tile.buildingOwnerId = -1;
             });
-            world_.MarkBuildingDirty();
+            buildingDirty = true;
             break;
           case ToolType::PlaceFreshWater:
-            world_.EditTile(x, y, [&](Tile& tile) {
-              tile.type = TileType::FreshWater;
-              tile.trees = 0;
-              tile.food = 0;
-              tile.burning = false;
-              tile.burnDaysRemaining = 0;
-              tile.building = BuildingType::None;
-              tile.farmStage = 0;
-              tile.buildingOwnerId = -1;
-            });
-            world_.MarkBuildingDirty();
+            {
+              const Tile& before = world_.At(x, y);
+              if (before.type == TileType::FreshWater && before.trees == 0 && before.food == 0 &&
+                  !before.burning && before.burnDaysRemaining == 0 &&
+                  before.building == BuildingType::None && before.farmStage == 0 &&
+                  before.buildingOwnerId == -1) {
+                break;
+              }
+              world_.EditTile(x, y, [&](Tile& tile) {
+                tile.type = TileType::FreshWater;
+                tile.trees = 0;
+                tile.food = 0;
+                tile.burning = false;
+                tile.burnDaysRemaining = 0;
+                tile.building = BuildingType::None;
+                tile.farmStage = 0;
+                tile.buildingOwnerId = -1;
+              });
+              buildingDirty = true;
+            }
             break;
           case ToolType::AddTrees:
+            {
+              const Tile& before = world_.At(x, y);
+              if (before.type != TileType::Land || before.trees >= 20) break;
+            }
             world_.EditTile(x, y, [&](Tile& tile) {
               if (tile.type != TileType::Land) return;
               int trees = static_cast<int>(tile.trees);
@@ -785,6 +810,10 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
             });
             break;
           case ToolType::AddFood:
+            {
+              const Tile& before = world_.At(x, y);
+              if (before.type != TileType::Land || before.food >= 50) break;
+            }
             world_.EditTile(x, y, [&](Tile& tile) {
               if (tile.type != TileType::Land) return;
               int food = static_cast<int>(tile.food);
@@ -812,6 +841,7 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
             }
             break;
           case ToolType::Meteor:
+            if (isDefaultTile(world_.At(x, y))) break;
             world_.EditTile(x, y, [&](Tile& tile) {
               tile.type = TileType::Ocean;
               tile.trees = 0;
@@ -822,9 +852,10 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
               tile.farmStage = 0;
               tile.buildingOwnerId = -1;
             });
-            world_.MarkBuildingDirty();
+            buildingDirty = true;
             break;
           case ToolType::GiftFood:
+            if (world_.At(x, y).type != TileType::Land || world_.At(x, y).food == 50) break;
             world_.EditTile(x, y, [&](Tile& tile) {
               if (tile.type != TileType::Land) return;
               tile.food = 50;
@@ -851,6 +882,10 @@ void App::ApplyToolAt(int tileX, int tileY, bool erase) {
         }
       }
     }
+  }
+  world_.EndBulkEdit();
+  if (buildingDirty) {
+    world_.MarkBuildingDirty();
   }
 
   stats_.totalFood = world_.TotalFood();

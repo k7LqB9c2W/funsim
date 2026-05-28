@@ -74,6 +74,10 @@ class Renderer {
     int lodScale = 1;
     bool dirty = true;
     bool includesStaticDetails = false;
+    int dirtyMinX = 0;
+    int dirtyMinY = 0;
+    int dirtyMaxX = 0;
+    int dirtyMaxY = 0;
     uint64_t lastUsedFrame = 0;
     size_t textureBytes = 0;
   };
@@ -112,7 +116,8 @@ class Renderer {
                                  const SettlementManager& settlements, const Camera& camera,
                                  int windowWidth, int windowHeight, bool includeStaticDetails);
   void DrawStaticMapDetailsToChunk(SDL_Renderer* renderer, const World& world,
-                                   const SettlementManager& settlements, const TerrainChunk& chunk);
+                                   const SettlementManager& settlements, const TerrainChunk& chunk,
+                                   int minX, int minY, int maxX, int maxY);
   void BuildTerrainLods(SDL_Renderer* renderer, int worldWidth, int worldHeight);
   void MarkTerrainPagesDirty(int minX, int minY, int maxX, int maxY, int padding);
   void EvictTerrainTextures(size_t bytesNeeded = 0);
